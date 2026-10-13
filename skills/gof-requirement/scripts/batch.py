@@ -34,8 +34,7 @@ FIELD_HEADERS = {
 }
 REQUIRED_HEADERS = {"number", "keyword", "name", "primary_tag", "secondary_tag",
                     "creative_form", "client", "supplier", "creator"}
-REQUIRED_TEXT = {"topic", "primary_tag", "secondary_tag", "creative_form",
-                 "supplier", "creator", "script_url", "brief"}
+REQUIRED_TEXT = {"material_name", "keyword", "creative_form", "supplier", "reviewer", "script_url"}
 OPTIONAL_FIELDS = {"creative_expression", "creative_batch", "head_reference", "creative_reference"}
 CLS_REQUIRED = {"direction", "task_type", "requirement_name"}
 CLS_OPTIONAL = {"subject", "department", "market_contact", "currency", "quotation",
@@ -96,34 +95,45 @@ def normalize_request(request):
     groups = request.get("groups")
     require(isinstance(groups, list) and groups, "需要至少一个供应商/题材组")
     normalized = []
-    allowed = REQUIRED_TEXT | OPTIONAL_FIELDS | {"quantity", "keyword", "client", "cls"}
+    allowed = REQUIRED_TEXT | OPTIONAL_FIELDS | {"quantity", "topic", "primary_tag", "secondary_tag",
+                                                "creator", "client", "brief", "cls"}
     for index, raw in enumerate(groups, 1):
         require(isinstance(raw, dict) and set(raw) <= allowed, f"第 {index} 组有未知字段")
         q = raw.get("quantity")
         require(type(q) is int and q > 0, "quantity 必须是正整数")
-        require(REQUIRED_TEXT <= raw.keys() and "client" in raw, f"第 {index} 组缺少需求字段")
+        require(REQUIRED_TEXT <= raw.keys(), f"第 {index} 组缺少需求字段：提炼词、素材名称、创意形式、供应商、审核人、脚本内容链接")
         g = {"quantity": q}
         for key in REQUIRED_TEXT:
             require(isinstance(raw[key], str) and raw[key].strip(), f"缺少 {key}")
-            g[key] = raw[key]
-        for key in (REQUIRED_TEXT - {"brief", "script_url"}) | {"client", "keyword"} | OPTIONAL_FIELDS:
-            value = raw.get(key, "关键词" if key == "keyword" else "")
-            if key in {"head_reference", "creative_reference"} and type(value) is int:
-                require(value >= 0, "引用编号不能为负数")
-                g[key] = value
-            else:
-                g[key] = cell_text(value, key)
-        require(g["keyword"].strip(), "提炼词不能留空")
+            g[key] = cell_text(raw[key], key)
+        # A user-supplied historical number is a naming example, never a new ID.
+        g["material_name"] = re.sub(r"^GOFCN\d+_", "", g["material_name"])
+        suffix = f"_{g['creative_form']}_{g['keyword']}"
+        require(g["material_name"].endswith(suffix), "素材名称与创意形式/提炼词不一致，请澄清")
+        topic = g["material_name"][:-len(suffix)]
+        g["topic"] = cell_text(raw.get("topic", topic), "topic")
+        require(g["topic"] == topic, "题材与素材名称不一致")
+        inferred = topic.split("_", 1)
+        for index_tag, key in enumerate(("primary_tag", "secondary_tag")):
+            value = raw.get(key, inferred[index_tag] if len(inferred) == 2 else "")
+            g[key] = cell_text(value, key)
+            require(g[key].strip(), "无法从素材名称确定一二级标签，需先根据名称推理")
+        g["creator"] = g["reviewer"]  # Same person for progress reviewer, CLS creator and message.
+        require(raw.get("creator", g["reviewer"]) == g["reviewer"], "审核人与进度表创意者字段不一致")
+        for key in {"client"} | OPTIONAL_FIELDS:
+            require(raw.get(key, "") == "", f"进度表阶段 {key} 应留空")
+            g[key] = ""
+        g["brief"] = raw.get("brief", "")
+        require(isinstance(g["brief"], str), "brief 必须是文本")
         p = urlsplit(g["script_url"])
         require(p.scheme == "https" and p.hostname == "centurygames.feishu.cn"
                 and not p.username and not p.password and p.port in (None, 443)
                 and re.fullmatch(r"/(wiki|docx)/[A-Za-z0-9]+/?", p.path), "脚本链接必须是当前确认的飞书文档")
-        require(not any(x in g["script_url"] for x in "\r\n\t"), "脚本链接包含控制字符")
-        cls = raw.get("cls")
-        require(isinstance(cls, dict) and CLS_REQUIRED <= cls.keys()
-                and set(cls) <= CLS_REQUIRED | CLS_OPTIONAL, "缺少 CLS 必填字段或字段未知")
-        for key in CLS_REQUIRED:
-            require(isinstance(cls[key], str) and cls[key].strip(), f"缺少 CLS {key}")
+        cls = raw.get("cls", {})
+        require(isinstance(cls, dict) and set(cls) <= CLS_REQUIRED | CLS_OPTIONAL, "CLS 字段未知")
+        if cls:
+            for key in CLS_REQUIRED:
+                require(isinstance(cls.get(key), str) and cls[key].strip(), f"缺少 CLS {key}")
         for value in cls.values():
             require(isinstance(value, (str, int, float)) and not isinstance(value, bool), "CLS 字段必须是明确的文本/数值")
         g["cls"] = dict(cls)
@@ -141,6 +151,8 @@ def columns(ws):
         text = re.sub(r"\s+", "", str(cell.value or ""))
         for field, stem in FIELD_HEADERS.items():
             matched = stem in text if field == "supplier" else text.startswith(stem)
+            if field == "creator":
+                matched = any(text.startswith(header) for header in (stem, "审核人", "脚本审核人"))
             if matched:
                 require(field not in result, f"{ws.title} 的 {stem} 表头不唯一")
                 result[field] = cell.column
@@ -393,6 +405,7 @@ def make_plan(snapshot, request, current=None):
             formula = Translator(formula_cell.value, origin=formula_cell.coordinate).translate_formula(name_coord)
             name = concatenate(formula, values)
             require(name.startswith(f"GOFCN{number}_"), "命名公式未产生正确 GOFCN 编号")
+            require(name == f"GOFCN{number}_{g['material_name']}", "命名公式/推理标签与用户素材名称不一致，请澄清")
             values[name_coord] = formula
             rows.append({"row": r, "number": number, "name": name, "values": values, "group": f"{index:02d}"})
             names.append(name)
@@ -457,7 +470,8 @@ def prepare(plan, snapshot, workspace):
             writer = csv.writer(handle, lineterminator="\r\n")
             writer.writerow(CSV_HEADERS)
             for index, name in enumerate(group["names"]):
-                writer.writerow([name, group["request"]["script_url"] if index == 0 else "同上", FIXED_TAG])
+                link = group["request"]["script_url"]
+                writer.writerow([name, link if index == 0 else "同上", FIXED_TAG])
     files = ["append.tsv"] + [g["csv"] for g in plan["groups"]]
     manifest = {"plan": plan, "baseline_sha256": hashlib.sha256((path / "baseline.xlsx").read_bytes()).hexdigest(),
                 "artifacts": {name: hashlib.sha256((path / name).read_bytes()).hexdigest() for name in files}}

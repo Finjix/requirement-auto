@@ -4,35 +4,34 @@
 
 ## 请求
 
-自然语言由 Codex 解释，程序不猜业务信息。以下为完整信息示例，供应商、创意人、链接和 CLS 字段必须来自当次澄清：
+用户发起任务默认完成进度表、CSV、CLS 未发布草稿、允许的脚本导入及可复制群消息，不询问处理范围。自然语言由 Codex 解释，一二级标签根据素材名称推理；供应商、审核人、提炼词和创意形式来自用户。以下为用户主动明确限定“仅进度表和 CSV”时的最小请求示例，不是默认全流程的完整请求（数量来自当次需求）：
 
 ```json
 {
   "worksheet": "26年1月-GOFCN",
   "groups": [{
     "quantity": 60,
-    "topic": "多明星04_2min",
-    "primary_tag": "多明星04",
-    "secondary_tag": "2min",
+    "material_name": "多明星04_2min_混剪_关键词",
     "creative_form": "混剪",
     "keyword": "关键词",
-    "client": "",
     "supplier": "丁杰",
-    "creator": "张天伟",
-    "script_url": "https://centurygames.feishu.cn/wiki/用户确认的实际节点",
-    "brief": "许君聪、吴樾、曹云金、林子聪，2min，总计60条。",
-    "cls": {
-      "direction": "2D剪辑",
-      "task_type": "视频",
-      "requirement_name": "多明星04_2min_混剪_60条"
-    }
+    "reviewer": "张天伟",
+    "script_url": "https://centurygames.feishu.cn/wiki/CurrentScript123"
   }]
 }
 ```
 
 `worksheet` 可省略，`--current-sheet` 传本次检查前实际表名；两者均无时按年月选择结构正确的最新 GOFCN 表，歧义则失败。每组是一个 CSV/CLS 子批次，至少按供应商、题材分组。
 
-quantity 为正整数。topic、标签、形式、供应商、创意人、脚本链接、brief、cls 三个字段必填；client 必须显式提供，可留空。keyword 默认“关键词”。可选进度字段：`creative_expression`、`creative_batch`、`head_reference`、`creative_reference`，缺省为空。可选 CLS：`subject`、`department`、`market_contact`、`currency`、`quotation`、`expected_completion`、`storyboard_time`、`first_draft_time`、`final_cut_time`；未给出不猜测。
+quantity 为正整数。此阶段必填六项为 `keyword`（提炼词）、`material_name`（素材名称主体或带 GOFCN 编号的样例）、`creative_form`（创意形式）、`supplier`（供应商）、`reviewer`（审核人）、`script_url`（脚本内容，即 CSV 中的链接）。脚本链接须为用户本次确认的飞书文档 HTTPS 链接，不能缺省或留空；只用于 CSV，不增加进度表填写字段。没有提炼词默认值。示例中的“关键词”只是用户值示例，链接也只是格式示例，不能作为实际需求链接。
+
+名称主体按现有公式组织，例如 `多明星04_2min_混剪_关键词`；用户给出自然语言名称时，由 Codex 根据已有命名公式整理并在计划展示。样例中的历史编号会去掉，程序统一分配连续新编号；素材编号与名称脚本编号一致。`primary_tag`、`secondary_tag` 可由 Codex 推理后传入；缺省时程序从名称中形式和提炼词之前的主体按首个下划线拆成两级标签（此例为“多明星04”和“2min”）。语义不明确时由 Codex 针对歧义澄清，不硬猜。程序校验最终公式名称与确认的名称主体一致。
+
+`topic` 缺省从名称推导，用于 CSV 分组；传入时须与名称一致。审核人与创意人是同一人，`reviewer` 为统一人员字段，`creator` 缺省取 `reviewer`，不能传不同人员。进度表“创意者／脚本审核人”、CLS 导入创意人和群消息创意人均使用此值；用户只需提供一次审核人或创意人，由 Codex 统一映射为 reviewer，不另外澄清两者关系。`client`、`creative_expression`、`creative_batch`、`head_reference`、`creative_reference` 均留空，非空输入拒绝；其他进度字段不填写。
+
+默认全流程必须在执行计划前一次收齐 `cls.direction`、`cls.task_type`、`cls.requirement_name`、实际页面其他必填项及需求说明，并把建单字段传入请求，沿用已确认的脚本内容链接。只有用户主动明确排除建单时 `brief`、`cls` 才可省略。导入创意人使用本组 `creator`（即 `reviewer`），直接列入完整计划，不另行澄清。可选 CLS：`subject`、`department`、`market_contact`、`currency`、`quotation`、`expected_completion`、`storyboard_time`、`first_draft_time`、`final_cut_time`；按用户需求或已给信息确定填值，未要求且非必填的明确留空，不猜测、不在执行中补问。请求包含非空 cls 时必须提供三个必填字段。程序允许用于用户明确限定的部分流程，只校验静态字段；Codex 须按默认全流程只读检查实际页面并确保完整计划覆盖全部后续输入，不能因程序允许省略 cls 就询问范围或自行省略建单。
+
+用户回复“执行计划”后，连续执行完整计划，不再按进度表、草稿、导入等阶段索要确认。执行阶段只核对获批值与当前页面是否相符；遇到实际阻碍才停下来请求处理。若用户在原计划完成后新增建单需求，作为新增任务先澄清全部所需信息并确认单独建单计划，沿用原批 CSV，不重新运行 prepare 或重贴原批。
 
 仅支持测试节点，不能以 request 的 target_url 临时绕过目标保护。
 
@@ -58,7 +57,7 @@ python batch.py record --batch <批次目录> --step append_verified --snapshot 
 
 prepare 重算并比较获批计划，变化则拒绝。输出 `<workspace>/outputs/gof-requirement/<plan_id>`，已有目录拒绝；含 baseline.xlsx、manifest.json、append.tsv、分组 CSV、追加式 events/*.json。脚本不存储“用户授权”标志，也不能代替真实对话授权。
 
-CSV 为 UTF-8 BOM、CRLF，严格三列表头：脚本名称、脚本内容、创意标签；每组首行当前链接，其余“同上”；标签固定为 `玩法卖点（单选，必选）/展示向/展示向`。`assets/original-template.csv` 仅参考，**禁止直接上传**；模板当前本地名称为 `D:/创意脚本9.21潘越.csv`，与之前 60 条模板结构和内容一致。
+CSV 为 UTF-8 BOM、CRLF，严格三列表头：脚本名称、脚本内容、创意标签；每组首行脚本内容填本次确认的链接，其余“同上”。缺少链接时停止计划及 CSV 生成，先澄清，不借用历史链接。标签固定为 `玩法卖点（单选，必选）/展示向/展示向`，不随进度表一二级标签变化。`assets/original-template.csv` 仅参考，**禁止直接上传**；模板当前本地名称为 `D:/创意脚本9.21潘越.csv`，与之前 60 条模板结构和内容一致。
 
 preflight 只在无写入尝试时允许通过。verify 返回 complete（本批完整、历史未变且下拉有效）、not_applied（未出现本批内容，不代表可自动重试）、partial（部分出现，停止）、conflict（历史变化、字段错误或计划外新增，停止）。XLSX 无法表达飞书协同锁/所有下拉颜色，必须另做 UI 检查。
 

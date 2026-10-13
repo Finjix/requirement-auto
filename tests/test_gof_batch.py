@@ -51,9 +51,10 @@ def fixture(path):
 
 
 def request(quantity=60):
-    return {"groups": [{"quantity": quantity, "topic": "多明星04_2min", "primary_tag": "多明星04",
+    return {"groups": [{"quantity": quantity, "material_name": "多明星04_2min_混剪_关键词",
+                         "topic": "多明星04_2min", "primary_tag": "多明星04",
                          "secondary_tag": "2min", "creative_form": "混剪", "keyword": "关键词",
-                         "client": "", "supplier": "丁杰", "creator": "张天伟",
+                         "supplier": "丁杰", "reviewer": "张天伟",
                          "script_url": "https://centurygames.feishu.cn/wiki/CurrentScript123",
                          "brief": "许君聪、吴樾、曹云金、林子聪，2min，总计60条。",
                          "cls": {"direction": "2D剪辑", "task_type": "视频", "requirement_name": "多明星混剪"}}]}
@@ -136,6 +137,7 @@ class BatchTests(unittest.TestCase):
     def test_csv_quotes_and_comma(self):
         req = request(2)
         req["groups"][0]["keyword"] = '关键词,含"引号"'
+        req["groups"][0]["material_name"] = '多明星04_2min_混剪_关键词,含"引号"'
         plan = batch.make_plan(self.snapshot, req)
         path = self.prepared(plan)
         with (path / plan["groups"][0]["csv"]).open(encoding="utf-8-sig", newline="") as f:
@@ -144,7 +146,8 @@ class BatchTests(unittest.TestCase):
     def test_multiple_supplier_and_topic_files(self):
         req = request(2)
         other = copy.deepcopy(req["groups"][0])
-        other.update({"quantity": 3, "supplier": "潘越", "topic": "另一题材", "primary_tag": "玩法"})
+        other.update({"quantity": 3, "supplier": "潘越", "topic": "玩法_2min", "primary_tag": "玩法",
+                      "material_name": "玩法_2min_混剪_关键词"})
         req["groups"].append(other)
         plan = batch.make_plan(self.snapshot, req)
         path = self.prepared(plan)
@@ -153,6 +156,77 @@ class BatchTests(unittest.TestCase):
         for group in plan["groups"]:
             with (path / group["csv"]).open(encoding="utf-8-sig", newline="") as f:
                 self.assertEqual(len(list(csv.reader(f))) - 1, group["request"]["quantity"])
+
+    def test_progress_only_six_fields_inferred_tags_and_blank_other_cells(self):
+        group = {key: value for key, value in request(2)["groups"][0].items()
+                 if key in batch.REQUIRED_TEXT | {"quantity"}}
+        plan = batch.make_plan(self.snapshot, {"groups": [group]})
+        normalized = plan["groups"][0]["request"]
+        self.assertEqual(normalized["primary_tag"], "多明星04")
+        self.assertEqual(normalized["secondary_tag"], "2min")
+        self.assertEqual(normalized["creator"], "张天伟")
+        self.assertEqual(normalized["cls"], {})
+        self.assertEqual(plan["groups"][0]["names"], [
+            "GOFCN1002_多明星04_2min_混剪_关键词", "GOFCN1003_多明星04_2min_混剪_关键词"])
+        for row in plan["rows"]:
+            for col in ("E", "F", "J", "L"):
+                self.assertIsNone(row["values"][f"{col}{row['row']}"])
+        path = self.prepared(plan)
+        with (path / plan["groups"][0]["csv"]).open(encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.reader(f))[1:]
+        self.assertEqual(rows[0][1], group["script_url"])
+        self.assertTrue(all(row[1] == "同上" for row in rows[1:]))
+        self.assertTrue(all(row[2] == batch.FIXED_TAG for row in rows))
+        fresh = self.applied(plan)
+        try:
+            self.assertEqual(batch.verify(path, fresh)["status"], "complete")
+        finally:
+            fresh.close()
+
+    def test_name_sample_number_is_replaced_by_existing_sequence(self):
+        req = request(2)
+        req["groups"][0]["material_name"] = "GOFCN66988_多明星04_2min_混剪_关键词"
+        plan = batch.make_plan(self.snapshot, req)
+        self.assertEqual(plan["first_number"], 1002)
+        for row in plan["rows"]:
+            self.assertTrue(row["name"].startswith(f"GOFCN{row['number']}_"))
+
+    def test_script_content_link_cannot_be_empty_or_invalid(self):
+        for link in ("", "   ", None, "同上", "https://example.com/script",
+                     "http://centurygames.feishu.cn/wiki/CurrentScript123"):
+            req = request(1)
+            req["groups"][0]["script_url"] = link
+            with self.assertRaises(batch.Blocked):
+                batch.make_plan(self.snapshot, req)
+
+    def test_each_clarification_field_required_and_other_progress_fields_blank(self):
+        for field in batch.REQUIRED_TEXT:
+            req = request(1)
+            req["groups"][0].pop(field)
+            with self.assertRaises(batch.Blocked):
+                batch.make_plan(self.snapshot, req)
+        for field in batch.OPTIONAL_FIELDS | {"client"}:
+            req = request(1)
+            req["groups"][0][field] = "旧行值"
+            with self.assertRaises(batch.Blocked):
+                batch.make_plan(self.snapshot, req)
+
+    def test_name_and_inferred_tags_must_match_confirmed_fields(self):
+        for updates in ({"keyword": "不同提炼词"}, {"primary_tag": "无关标签"},
+                        {"material_name": "题材_混剪_关键词", "topic": "题材",
+                         "primary_tag": "", "secondary_tag": ""}):
+            req = request(1)
+            req["groups"][0].update(updates)
+            with self.assertRaises(batch.Blocked):
+                batch.make_plan(self.snapshot, req)
+
+    def test_reviewer_header_maps_to_progress_reviewer(self):
+        fresh = self.edit(lambda w: setattr(w.active["N1"], "value", "审核人"))
+        try:
+            plan = batch.make_plan(fresh, request(1))
+            self.assertEqual(plan["rows"][0]["values"]["N5"], "张天伟")
+        finally:
+            fresh.close()
 
     def test_refuse_batch_overwrite_and_artifact_tamper(self):
         path = self.prepared()
@@ -345,6 +419,7 @@ class BatchTests(unittest.TestCase):
             batch.record(path, "scripts_imported", "01", good)
         message = batch.message(path)["message"]
         self.assertIn("【发布后补填需求编号】", message)
+        self.assertIn(f"创意人：{request()['groups'][0]['reviewer']}", message)
         self.assertNotIn("已发布", message)
         batch.record(path, "requirement_number", "01", {"confirmed": True, "requirement_number": "GOFCN20261013001"})
         self.assertIn("GOFCN20261013001", batch.message(path)["message"])
