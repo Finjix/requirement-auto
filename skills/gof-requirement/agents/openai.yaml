@@ -1,0 +1,6 @@
+interface:
+  display_name: "GOFCN 需求自动化"
+  short_description: "先澄清并确认计划，再安全追加进度表、生成 CSV 和保存未发布草稿"
+  default_prompt: "使用 $gof-requirement 梳理我的素材需求，先检查登录和进度表、澄清缺失信息并给出计划，等待我确认执行。"
+policy:
+  allow_implicit_invocation: true
