@@ -1,6 +1,3 @@
+.*/
+dev/
 __pycache__/
-*.pyc
-outputs/
-.test-artifacts/
-.state/
-skills/gof-requirement/runtime/

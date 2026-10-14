@@ -1,0 +1,2 @@
+# Runtime hashes must survive Git checkout without line-ending conversion.
+skill/assets/dependencies/** -text
