@@ -717,15 +717,17 @@ def cls_check(path, group_id, action, ui):
     return {"status": "allowed", "action": action, "group": group_id}
 
 
-def screenshot_evidence(evidence):
+def cls_evidence(evidence):
     require(evidence.get("confirmed") is True and evidence.get("unpublished") is True,
             "没有确认成功及未发布状态")
     check_cls_url(evidence.get("url", ""))
-    file = Path(evidence.get("screenshot", ""))
-    require(file.is_absolute() and file.is_file(), "需已存在的截图绝对路径")
     if evidence.get("transport") == "cls_api":
         from cls_api import validate_receipt
         validate_receipt(evidence)
+    else:
+        # Historical UI receipts retain their original evidence requirements.
+        file = Path(evidence.get("screenshot", ""))
+        require(file.is_absolute() and file.is_file(), "需已存在的截图绝对路径")
 
 
 def record(path, step, group_id=None, evidence=None, fresh=None):
@@ -744,6 +746,7 @@ def record(path, step, group_id=None, evidence=None, fresh=None):
         never_attempted = not any(e["step"] == "append_started" for e in records)
         retry_append = evidence.get("retry_append") is True
         if retry_append:
+            require("api-plan.json" not in manifest["artifacts"], "CLI 批次已尝试写入后只能回读，不授权重发")
             require(evidence.get("sync_confirmed") is True and not state["append_verified"]
                     and all(e["step"] in {"append_started", "blocked", "resumed"} for e in records),
                     "重试需确认同步完成，且不能已验证追加或开始 CLS")
@@ -779,13 +782,13 @@ def record(path, step, group_id=None, evidence=None, fresh=None):
             cls_check(path, group_id, action, evidence.get("observations", {}))
         elif step == "draft_saved":
             require([s for s in stages if s != "cls_api_attempt"] == ["cls_started"], "已有草稿或记录顺序错误")
-            screenshot_evidence(evidence)
+            cls_evidence(evidence)
             if evidence.get("transport") == "cls_api":
                 from cls_api import validate_batch_receipt
                 validate_batch_receipt(path, group_id, evidence, "draft_saved")
         elif step == "scripts_imported":
             require("draft_saved" in stages and "scripts_imported" not in stages, "导入顺序不正确或重复")
-            screenshot_evidence(evidence)
+            cls_evidence(evidence)
             if evidence.get("transport") == "cls_api":
                 from cls_api import validate_batch_receipt
                 validate_batch_receipt(path, group_id, evidence, "scripts_imported")
@@ -809,6 +812,46 @@ def record(path, step, group_id=None, evidence=None, fresh=None):
     event["event_id"] = digest(event)
     write_json_new(path / "events" / f"{len(records) + 1:06d}.json", event)
     return {"status": "recorded", "step": step, "group": group_id}
+
+
+def report(path):
+    """Local audit report, derived from immutable events and validated receipts; no network."""
+    path, manifest = load_batch(path)
+    records, plan = events(path), manifest["plan"]
+    state = status(path)
+    groups = []
+    for group in plan["groups"]:
+        result = {"group": group["id"], "quantity": group["request"]["quantity"],
+                  "csv": str(path / group["csv"]), "steps": state["groups"][group["id"]]}
+        for event in records:
+            if event.get("group") == group["id"] and event["step"] in {"draft_saved", "scripts_imported"}:
+                evidence = event["evidence"]
+                if evidence.get("transport") == "cls_api":
+                    from cls_api import validate_batch_receipt
+                    validate_batch_receipt(path, group["id"], evidence, event["step"])
+                    result[event["step"]] = {"receipt": evidence["receipt"], "verified_at": event["time"],
+                                              "draft_id": evidence["draft_id"], "url": evidence["url"]}
+        groups.append(result)
+    context = read_json(path / "api-plan.json") if "api-plan.json" in manifest["artifacts"] else {}
+    verified = next((e for e in reversed(records) if e["step"] == "append_verified"), None)
+    result = {"schema": 1, "status": "report_ready", "plan_id": plan["plan_id"], "target": TARGET,
+              "worksheet": plan["worksheet"], "sheet_id": context.get("sheet_id"), "range": plan["range"],
+              "state": state, "groups": groups, "message": message(path)["message"],
+              "evidence_time": "各阶段保存的回读时间；本报告不重新查询线上当前状态"}
+    if verified:
+        evidence = verified["evidence"]
+        if evidence.get("transport") == "feishu_api" and evidence.get("snapshot"):
+            snapshot_path = Path(evidence["snapshot"]).resolve()
+            require(path in snapshot_path.parents, "报告快照必须位于本批目录")
+            snapshot = Snapshot(snapshot_path)
+            try:
+                require(snapshot.fingerprint == evidence.get("snapshot_digest")
+                        and verify(path, snapshot, evidence.get("validations"))["status"] == "complete",
+                        "报告对应的本地快照/规则证明已变化")
+            finally:
+                snapshot.close()
+        result["append_verified"] = {"verified_at": verified["time"], "evidence": verified["evidence"]}
+    return result
 
 
 def message(path):
@@ -844,9 +887,11 @@ def main(argv=None):
             cmd.add_argument("--batch", required=True)
             if name == "verify":
                 cmd.add_argument("--validation-evidence")
-    for name in ("record", "status", "cls-check", "message"):
+    for name in ("record", "status", "cls-check", "message", "report"):
         cmd = commands.add_parser(name)
         cmd.add_argument("--batch", required=True)
+        if name == "report":
+            cmd.add_argument("--output", help="可选，独占创建本批目录内的新 JSON 报告")
         if name == "record":
             cmd.add_argument("--step", required=True)
             cmd.add_argument("--group")
@@ -881,6 +926,13 @@ def main(argv=None):
             result = status(args.batch)
         elif args.command == "cls-check":
             result = cls_check(args.batch, args.group, args.action, read_json(args.ui or args.observations))
+        elif args.command == "report":
+            result = report(args.batch)
+            if args.output:
+                output = Path(args.output).resolve()
+                require(Path(args.batch).resolve() in output.parents, "报告必须位于本批目录")
+                write_json_new(output, result)
+                result = {"status": "report_saved", "report": str(output)}
         else:
             result = message(args.batch)
         print(canonical(result))

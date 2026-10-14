@@ -3,15 +3,14 @@
 
 No generic write command, v2 values write, implicit retry, or production target override.
 The isolated probe is deliberately separate from the progress-table writer.
-Online entry points are parked while the user chooses the Feishu browser route.
-Pure local hashing, plan construction and receipt validation remain available.
+Default executable comes only from the verified skill-local offline runtime.
+Pure local hashing, plan construction and receipt validation need no CLI.
 """
 from __future__ import annotations
 
 import argparse
 import copy
 import json
-import os
 import re
 import subprocess
 import sys
@@ -24,10 +23,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
 
 import batch
+import skill_runtime
 
-VERSION = "1.0.98"
-OFFICIAL_API_ENABLED = False
-DISABLED_REASON = "当前阶段已停用飞书官方 API；使用内置浏览器流程，不发起配置、授权或审批"
+VERSION = skill_runtime.CLI_VERSION
+OFFICIAL_API_ENABLED = True
+DISABLED_REASON = "飞书 CLI 入口已停用；检查技能包和授权，不切换浏览器操作"
 PROFILE = "gof-requirement"
 ORIGIN = "https://open.feishu.cn"
 SCOPES = ("wiki:wiki:readonly", "sheets:spreadsheet:readonly",
@@ -73,17 +73,29 @@ def check_seal(value, key):
 
 class Cli:
     def __init__(self, executable=None, runner=None):
-        default = Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".codex/tools/lark-cli" / VERSION / "lark-cli.exe"
-        self.executable = str(executable or default)
+        # Explicit injection is for local transport tests; the CLI entrypoint has no system fallback.
+        self.executable = str(executable) if executable else None
+        self.root = Path(__file__).resolve().parents[1]
+        self.runtime = None
         self.runner = runner or subprocess.run
         self.calls = []
+
+    def command(self):
+        if self.executable:
+            return self.executable
+        if self.runtime is None:
+            try:
+                self.runtime = skill_runtime.layout(self.root)
+            except (OSError, ValueError) as error:
+                raise batch.Blocked(str(error)) from None
+        return str(self.runtime["cli"])
 
     def run(self, args, stdin=None, write=False, timeout=60):
         require_online_enabled()
         started = time.monotonic()
-        env = dict(os.environ, LARKSUITE_CLI_NO_UPDATE_NOTIFIER="1", LARKSUITE_CLI_NO_SKILLS_NOTIFIER="1")
+        env = skill_runtime.runtime_environment(self.root)
         try:
-            reply = self.runner([self.executable, "--profile", PROFILE, *args], input=stdin, capture_output=True,
+            reply = self.runner([self.command(), "--profile", PROFILE, *args], input=stdin, capture_output=True,
                                 encoding="utf-8", timeout=timeout, env=env, shell=False)
         except subprocess.TimeoutExpired:
             raise batch.Blocked("接口写入结果未知，必须回读，不可重试" if write else "飞书读取超时") from None
@@ -96,9 +108,12 @@ class Cli:
         except (ValueError, TypeError):
             raise batch.Blocked("官方 CLI 返回不可解析数据；写操作须回读核对") from None
         # Never echo stderr, tokens, full auth status, or an untrusted error body.
+        batch.require(isinstance(result, dict), "官方 CLI 返回结构不匹配")
         if reply.returncode != 0 or result.get("ok", True) is False:
-            message = str(result.get("error", {}).get("message", ""))
-            if result.get("error", {}).get("type") == "config":
+            error = result.get("error", {})
+            error = error if isinstance(error, dict) else {}
+            message = str(error.get("message", ""))
+            if error.get("type") == "config":
                 raise batch.Blocked("飞书专用 gof-requirement profile 尚未配置或不可用；需用户完成应用配置及授权")
             if write and re.search(r"non[- ]?empty|occupied|cannot overwrite|非空|已有内容", message, re.I):
                 raise OccupiedRefusal("服务端明确拒绝写入非空目标")
@@ -129,7 +144,11 @@ class Cli:
 
     def doctor(self):
         require_online_enabled()
-        reply = self.runner([self.executable, "--version"], capture_output=True, encoding="utf-8", shell=False)
+        try:
+            reply = self.runner([self.command(), "--version"], capture_output=True, encoding="utf-8", shell=False,
+                                timeout=20, env=skill_runtime.runtime_environment(self.root))
+        except (OSError, subprocess.SubprocessError):
+            raise batch.Blocked("包内飞书 CLI 版本检查失败，不调用系统 CLI") from None
         batch.require(reply.returncode == 0 and re.search(r"(?<![\d.])1\.0\.98(?![\d.])", reply.stdout),
                       "必须使用已检查的 lark-cli 1.0.98")
         identity = self.run(["auth", "status", "--json", "--verify"])
@@ -137,8 +156,14 @@ class Cli:
         user = identity.get("identities", {}).get("user", {})
         batch.require(identity.get("identity") == "user" and identity.get("verified") is True,
                       "飞书 API 尚未以用户身份授权；浏览器登录不能替代 API 授权")
+        self.check_scopes(SCOPES)
         return {"version": VERSION, "logged_in": True, "identity": "user",
                 "user_name": user.get("userName", identity.get("userName")), "required_scopes": list(SCOPES)}
+
+    def check_scopes(self, required):
+        checked = self.run(["auth", "check", "--scope", " ".join(required), "--json"])
+        batch.require(checked.get("ok") is True and not checked.get("missing")
+                      and set(required) <= set(checked.get("granted", [])), "飞书用户身份缺少本流程必要权限")
 
     def api_read(self, path, params=None):
         batch.require(path.startswith("/open-apis/") and ".." not in path and "?" not in path, "非法 API 路径")
@@ -251,7 +276,7 @@ def export(cli, token, output):
     output = Path(output).resolve()
     batch.require(output.suffix.lower() == ".xlsx" and not output.exists(), "快照必须为新的 XLSX 文件")
     cli.sheet("+workbook-export", token, ["--file-extension", "xlsx", "--output-path", str(output)])
-    batch.require(output.is_file(), "导出任务未落盘，不能继续")
+    batch.require(output.is_file(), "导出任务未落盘，不能继续；按官方返回的任务引用只读查询，不重新提交导出")
     return batch.Snapshot(output)
 
 
@@ -401,6 +426,8 @@ def acceptance(receipt):
 
 def execute(cli, path, receipt):
     path, manifest = batch.load_batch(path)
+    batch.require(not any(event["step"] == "append_started" for event in batch.events(path)),
+                  "已有 CLI 写入尝试；只能回读验收，不再次发送")
     context = batch.read_json(path / "api-plan.json")
     check_seal(context, "api_plan_id")
     approved = acceptance(receipt)
@@ -435,8 +462,14 @@ def execute(cli, path, receipt):
         result = batch.verify(path, fresh, evidence)
         batch.require(result["status"] == "complete", "追加未完整通过验收；不自动补写或回滚")
         batch.record(path, "append_verified", fresh=fresh, evidence={"transport": "feishu_api", "validations": evidence,
-                                                                   "calls": cli.calls, "revision": post_revision})
-        return {"status": "append_verified", "batch": str(path), "range": manifest["plan"]["range"], "calls": cli.calls}
+                                                                   "calls": cli.calls, "revision": post_revision,
+                                                                   "snapshot": str(fresh.path.resolve()),
+                                                                   "snapshot_digest": fresh.fingerprint})
+        report_path = attempt / "verification-report.json"
+        batch.write_json_new(report_path, batch.report(path))
+        return {"status": "append_verified", "batch": str(path), "worksheet": manifest["plan"]["worksheet"],
+                "sheet_id": context["sheet_id"], "range": manifest["plan"]["range"],
+                "report": str(report_path), "calls": cli.calls}
     except (batch.Blocked, OSError, ValueError, KeyError):
         if started and not batch.status(path)["blocked"]:
             batch.record(path, "blocked", evidence={"reason": "飞书接口写入/验收失败或结果未知；先回读，不重试", "transport": "feishu_api"})
@@ -450,6 +483,7 @@ def probe(cli, receipt):
     """Only after a separately approved online test plan; creates a new isolated workbook."""
     batch.require(not Path(receipt).exists(), "隔离验证记录不能覆盖")
     cli.doctor()
+    cli.check_scopes(("sheets:spreadsheet:create",))
     production = target(cli)
     title = "GOFCN_API_SAFETY_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     created = cli.run(["sheets", "+workbook-create", "--title", title, "--as", "user", "--json"], write=True)
@@ -491,11 +525,38 @@ def probe(cli, receipt):
             "probe_url": f"https://centurygames.feishu.cn/sheets/{token}", "calls": cli.calls}
 
 
+def reconcile(cli, path):
+    """Re-read an existing batch without sending a write, even after an unknown result."""
+    path, manifest = batch.load_batch(path)
+    context = batch.read_json(path / "api-plan.json")
+    check_seal(context, "api_plan_id")
+    cli.doctor()
+    token = target(cli)
+    batch.require(token == context["spreadsheet_token"] and context["cli_version"] == VERSION, "回读目标或版本与原批次不符")
+    output = path / ("api-readback-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ"))
+    output.mkdir(exist_ok=False)
+    fresh = None
+    try:
+        before = revision(cli, token)
+        fresh = export(cli, token, output / "fresh.xlsx")
+        rules = read_rules(cli, token, sheets(cli, token))
+        batch.require(before == revision(cli, token), "回读期间表格变化，不能生成验收证据")
+        rule_proof(output / "rule-proof.json", fresh, rules, context, manifest["plan"])
+        evidence = {"transport": "feishu_api", "proof": str(output / "rule-proof.json")}
+        result = batch.verify(path, fresh, evidence)
+        batch.write_json_new(output / "readback-report.json", {"verification": result, "revision": before,
+                                                              "snapshot_digest": fresh.fingerprint, "calls": cli.calls})
+        return {**result, "snapshot": str(fresh.path), "validation_evidence": evidence,
+                "report": str(output / "readback-report.json")}
+    finally:
+        if fresh:
+            fresh.close()
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cli")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
     exp = sub.add_parser("snapshot")
@@ -503,7 +564,6 @@ def main(argv=None):
     plan_cmd = sub.add_parser("plan")
     plan_cmd.add_argument("--snapshot", required=True)
     plan_cmd.add_argument("--request", required=True)
-    plan_cmd.add_argument("--current-sheet")
     prep = sub.add_parser("prepare")
     prep.add_argument("--plan", required=True)
     prep.add_argument("--snapshot", required=True)
@@ -511,12 +571,14 @@ def main(argv=None):
     run = sub.add_parser("append")
     run.add_argument("--batch", required=True)
     run.add_argument("--receipt", required=True)
+    readback = sub.add_parser("reconcile", help="已有批次只读回读，绝不再次写入")
+    readback.add_argument("--batch", required=True)
     test = sub.add_parser("probe")
     test.add_argument("--receipt", required=True)
     doc = sub.add_parser("document")
     doc.add_argument("--url", required=True)
     args = parser.parse_args(argv)
-    cli = Cli(args.cli)
+    cli = Cli()
     snap = None
     try:
         require_online_enabled()
@@ -526,6 +588,8 @@ def main(argv=None):
             result = probe(cli, args.receipt)
         elif args.command == "append":
             result = execute(cli, args.batch, args.receipt)
+        elif args.command == "reconcile":
+            result = reconcile(cli, args.batch)
         else:
             cli.doctor()
             token = target(cli)
@@ -547,7 +611,7 @@ def main(argv=None):
             else:
                 snap = batch.Snapshot(args.snapshot)
                 if args.command == "plan":
-                    offline = batch.make_plan(snap, batch.read_json(args.request), args.current_sheet)
+                    offline = batch.make_plan(snap, batch.read_json(args.request))
                     result = {"batch_plan": offline, "api_plan": api_plan(cli, snap, offline)}
                 else:
                     approved = batch.read_json(args.plan)
@@ -555,7 +619,7 @@ def main(argv=None):
                     batch.require(recomputed == approved["api_plan"], "接口目标/版本/规则与获批计划变化")
                     result = batch.prepare(approved["batch_plan"], snap, args.workspace, api_plan=recomputed)
         print(batch.canonical(result))
-        return 0
+        return 0 if result.get("status") not in {"partial", "conflict", "blocked"} else 2
     except (batch.Blocked, OSError, ValueError, KeyError, TypeError) as exc:
         print(batch.canonical({"status": "blocked", "reason": str(exc)}))
         return 2

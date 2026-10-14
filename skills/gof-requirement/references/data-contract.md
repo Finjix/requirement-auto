@@ -2,9 +2,9 @@
 
 `scripts/batch.py` 无网络功能、不写在线表、不修改输入 XLSX；仅用标准 Python 和 `openpyxl`。通过 `load_workspace_dependencies` 定位 bundled Python。失败输出 JSON `status=blocked` 并非零退出。
 
-默认飞书路径是[浏览器操作参考](browser-workflow.md)：通过网页下载快照并粘贴 batch.py 生成的 TSV，不依赖 CLI 配置或官方 API 授权。CLS 见[接口操作参考](api-workflow.md)；`cls_api.py` 仅离线生成/检查请求，`cls_api.js` 在当前 CLS 同源会话执行限定 HTTP。`feishu_api.py` 的在线入口当前停用，但离线摘要和既有 API 批次校验仍保留。新 UI 批次不创建 api-plan.json；既有清单中的不可变 api-plan.json 不能移除来绕过保护。`cls-check --observations` 与原 --ui 二选一，表示同样的真实观察条件。
+默认飞书路径是[包内 CLI](feishu-cli-workflow.md)，通过 `feishu_api.py` 解析实际目标、导出完整快照、生成/匹配包含 api_plan 的计划及安全追加。新批次包含不可变 api-plan.json，不直接通过 batch.py prepare 创建 UI 批次。CLS 见[接口操作参考](api-workflow.md)；`cls_api.py` 离线生成/检查请求，`cls_api.js` 在当前 CLS 同源会话执行限定 HTTP。历史 API/UI 清单和事件仍可读取，不能移除不可变 api-plan.json 来绕过保护。`cls-check --observations` 与原 --ui 二选一，表示同样的真实观察条件。
 
-API 操作前追加 cls_api_attempt（action=save_draft/import_scripts、operation_id、observations），同组同动作已有尝试即拒绝再次请求。API draft_saved/scripts_imported 证据额外要求 transport=cls_api、draft_id、operation/receipt 的本批绝对路径；记录时重新核对完整回读及原批需求。截图仍必需。飞书 verify 的 API 证据为 `{ "transport": "feishu_api", "proof": "<本批规则证明绝对路径>" }`，并非自填成功布尔值；record append_verified/resumed 时置于 evidence.validations。
+API 操作前追加 cls_api_attempt（action=save_draft/import_scripts、operation_id、observations），同组同动作已有尝试即拒绝再次请求。API draft_saved/scripts_imported 证据要求 transport=cls_api、draft_id、operation/receipt 的本批绝对路径；记录时重新核对完整回读及原批需求，不要求截图。历史 UI 证据仍保留截图要求。飞书 verify 的 API 证据为 `{ "transport": "feishu_api", "proof": "<本批规则证明绝对路径>" }`，并非自填成功布尔值；record append_verified/resumed 时置于 evidence.validations。
 
 ## 请求
 
@@ -25,7 +25,7 @@ API 操作前追加 cls_api_attempt（action=save_draft/import_scripts、operati
 }
 ```
 
-`worksheet` 可省略，`--current-sheet` 传本次检查前实际表名；两者均无时按年月选择结构正确的最新 GOFCN 表，歧义则失败。每组是一个 CSV/CLS 子批次，至少按供应商、题材分组。
+`worksheet` 可省略，缺省按年月选择结构正确的最新 GOFCN 表，歧义则失败。CLI 计划不读取浏览器当前工作表，必须向用户写明表名及 api_plan.sheet_id。旧离线命令的 --current-sheet 仅保留历史兼容，不用于新 CLI 流程。每组是一个 CSV/CLS 子批次，至少按供应商、题材分组。
 
 quantity 为正整数。默认全流程的必要澄清清单为八项：`keyword`（提炼词）、`material_name`（素材名称主体或带 GOFCN 编号的样例）、`creative_form`（创意形式）、`supplier`（供应商）、`reviewer`（审核人）、`script_url`（脚本内容，即 CSV 中的链接）、`cls.direction`（CLS 创意方向）、`cls.task_type`（CLS 任务类型）。后两项缺少时必须在执行计划前提问，不能根据 creative_form 擅自默认；用户主动排除建单时才仅需前六项。脚本链接须为用户本次确认的飞书文档 HTTPS 链接，不能缺省或留空；只用于 CSV，不增加进度表填写字段。没有提炼词默认值。示例中的“关键词”只是用户值示例，链接也只是格式示例，不能作为实际需求链接。
 
@@ -35,13 +35,13 @@ quantity 为正整数。默认全流程的必要澄清清单为八项：`keyword
 
 默认全流程必须在执行计划前一次收齐 `cls.direction`、`cls.task_type`、`cls.requirement_name`、实际页面其他必填项及需求说明，并把建单字段传入请求，沿用已确认的脚本内容链接。只有用户主动明确排除建单时 `brief`、`cls` 才可省略。导入创意人使用本组 `creator`（即 `reviewer`），直接列入完整计划，不另行澄清。可选 CLS：`subject`、`department`、`market_contact`、`currency`、`quotation`、`expected_completion`、`storyboard_time`、`first_draft_time`、`final_cut_time`；按用户需求或已给信息确定填值，未要求且非必填的明确留空，不猜测、不在执行中补问。请求包含非空 cls 时必须提供三个必填字段。程序允许用于用户明确限定的部分流程，只校验静态字段；Codex 须按默认全流程只读检查实际页面并确保完整计划覆盖全部后续输入，不能因程序允许省略 cls 就询问范围或自行省略建单。
 
-用户回复“执行计划”后，连续执行完整计划，不再按进度表、草稿、导入等阶段索要确认。执行阶段只核对获批值与当前页面是否相符；遇到实际阻碍才停下来请求处理。若用户在原计划完成后新增建单需求，作为新增任务先澄清全部所需信息并确认单独建单计划，沿用原批 CSV，不重新运行 prepare 或重贴原批。
+用户回复“执行计划”后，连续执行完整计划，不再按进度表、草稿、导入等阶段索要确认。执行阶段核对获批值与真实接口状态；遇到实际阻碍才停下来请求处理。若用户在原计划完成后新增建单需求，作为新增任务先澄清全部所需信息并确认单独建单计划，沿用原批 CSV，不重新运行 prepare 或追加原批。
 
 仅支持测试节点，不能以 request 的 target_url 临时绕过目标保护。
 
 ## 命令与输出
 
-下述 python/batch.py 替换为实际绝对路径。observed-url 必须从当前浏览器页面读取，不能抄计划 URL。
+下述命令替换为实际绝对路径。新业务流程先用 feishu_api.py 的 snapshot/plan/prepare/append；下列 batch.py plan/prepare 仅为离线处理与历史兼容，不能替代真实 CLI api_plan。batch.py 的 observed-url 在 CLI 恢复/验收中使用刚经 Wiki 节点解析核对的测试目标；URL 字符串本身不能替代真实 token、sheet ID、版本及权限校验。
 
 ```text
 python batch.py plan --request request.json --snapshot downloaded.xlsx --observed-url <实际URL> [--current-sheet <表名>]
@@ -61,15 +61,15 @@ python batch.py record --batch <批次目录> --step append_verified --snapshot 
 
 prepare 重算并比较获批计划，变化则拒绝。输出 `<workspace>/outputs/gof-requirement/<plan_id>`，已有目录拒绝；含 baseline.xlsx、manifest.json、append.tsv、分组 CSV、追加式 events/*.json。脚本不存储“用户授权”标志，也不能代替真实对话授权。
 
-append.tsv 是面向浏览器剪贴板的原始制表符矩阵：单元格直接以 TAB 分隔、行以 CRLF 分隔，不采用 CSV 引号包裹或双写引号。公式中的双引号须原样保留。单元格内部含 TAB/CR/LF 时拒绝生成；CSV 文件仍使用标准 CSV 转义。旧批次的带引号 TSV 不能直接用于公式粘贴，也不能覆盖其完整性记录；根据原获批 plan 另生成原始矩阵，并只在仍符合本批保护条件时使用。
+append.tsv 保留为历史兼容的原始制表符矩阵，TAB 分列、CRLF 分行，不采用 CSV 引号包裹或双写引号；内部含 TAB/CR/LF 时拒绝生成。新 CLI 写入直接使用获批 plan 的值/公式构建类型化 JSON，不消费 TSV，不走剪贴板。CSV 仍使用标准 CSV 转义。不能覆盖旧批次的 TSV 或完整性记录。
 
-CSV 为 UTF-8 BOM、CRLF，严格三列表头：脚本名称、脚本内容、创意标签；每组首行脚本内容填本次确认的链接，其余“同上”。缺少链接时停止计划及 CSV 生成，先澄清，不借用历史链接。标签固定为 `玩法卖点（单选，必选）/展示向/展示向`，不随进度表一二级标签变化。`assets/original-template.csv` 仅参考，**禁止直接上传**；模板当前本地名称为 `D:/创意脚本9.21潘越.csv`，与之前 60 条模板结构和内容一致。
+CSV 为 UTF-8 BOM、CRLF，严格三列表头：脚本名称、脚本内容、创意标签；每组首行脚本内容填本次确认的链接，其余“同上”。缺少链接时停止计划及 CSV 生成，先澄清，不借用历史链接。标签固定为 `玩法卖点（单选，必选）/展示向/展示向`，不随进度表一二级标签变化。包内 `assets/original-template.csv` 仅参考，**禁止直接上传**；不依赖其他电脑的模板绝对路径。
 
-preflight 只在无写入尝试时允许通过。verify 返回 complete（本批完整、历史未变且下拉有效）、not_applied（未出现本批内容，不代表可自动重试）、partial（部分出现，停止）、conflict（历史变化、字段错误或计划外新增，停止）。XLSX 无法表达飞书协同锁/所有下拉颜色，必须另做 UI 检查。
+preflight 只在无写入尝试时允许通过。verify 返回 complete（本批完整、历史未变且下拉有效）、not_applied（未出现本批内容，不代表可自动重试）、partial（部分出现，停止）、conflict（历史变化、字段错误或计划外新增，停止）。XLSX 无法表达协同锁/所有下拉颜色，CLI 批次必须另有当前 API 规则证明，不使用 UI 检查替代。
 
 verify 允许飞书自动把既有筛选范围的末行延长到本批末行，但新增筛选行必须完全处于本批追加行内，列范围、起始行、筛选条件和排序配置必须不变。其他筛选变化仍为 conflict；这不授权代理修改历史筛选。
 
-飞书可能在 XLSX 中完全省略已保存的自定义下拉规则。仅此缺漏允许使用 `verify --validation-evidence ui-validations.json` 补充实际 UI 验收；导出中存在但错误的规则、值/公式错误、历史变化仍拒绝。JSON 为数组，每项含 worksheet、精确 range、options（实际已保存完整选项）、source="custom"、mode="single"/"multiple"、confirmed=true、saved=true、reason="xlsx_omits_inline_rule"、实际测试表 url、已存在 screenshot 绝对路径及当前快照 snapshot_digest（Snapshot.fingerprint）。须先重新打开当前本批选区的数据验证对话框，核对保存的选项、模式、来源并保存截图；不能以尚未保存的输入或推测创建证据。此证据只对应当前快照，不能复用于更晚的快照。记录 append_verified/resumed 时，evidence.json 的 validations 字段携带同一数组。verify 返回 ui_validated_ranges 明示哪些范围由 UI 证据补验，不能宣称这些规则已通过 XLSX 验证。
+历史 UI 证据兼容：已有 ui-validations.json 数组仍按原 worksheet/range/options/source/mode/confirmed/saved/reason/url/screenshot/snapshot_digest 校验。它只对应原采集快照，不能复用于更晚快照，不能替代新 CLI 批次的 API 规则证明。本次流程不再通过页面对话框生成这种证据；缺少可验收证据的旧批次交接，不修改旧清单或伪造截图。导出中存在但错误的规则、值/公式错误和历史变化始终拒绝。
 
 ```text
 python batch.py status --batch <批次目录>
@@ -84,7 +84,7 @@ python batch.py message --batch <批次目录>
 
 ui.json 表示实际观察的布尔事实：logged_in、can_create、unpublished 必须 true，保存时 required_complete 必须 true；导入另需 draft_saved=true、import_enabled=true、import_would_publish=false。save_result=failure/unknown 则停止。publish 和未许可 action 永远拒绝。守卫不操纵网页、不使禁用项启用。
 
-draft_saved evidence 必须含 confirmed=true、unpublished=true、实际 CLS url、已存在的 screenshot 绝对路径；可选 requirement_number 必须是实际读取的正式 GOFCN 编号。scripts_imported evidence 还需 quantity、names 与该组完整一致。handoff 和 blocked evidence 的 reason 必填。保存结果未知不能填 confirmed=true。
+draft_saved evidence 必须含 confirmed=true、unpublished=true、实际 CLS url；新 API 证据必须有 transport=cls_api、draft_id、operation/receipt 的本批绝对路径，通过完整回读验证，无需 screenshot。历史 UI 证据仍要求已存在截图；可选 requirement_number 必须是实际读取的正式 GOFCN 编号。scripts_imported evidence 还需 quantity、names 与该组完整一致。handoff 和 blocked evidence 的 reason 必填。保存结果未知不能填 confirmed=true。
 
 事件独占创建、不覆盖，每组 handoff 终止该组自动化。blocked 后必须等待；用户解决问题且明确要求恢复时才运行：
 
@@ -94,4 +94,6 @@ python batch.py record --batch <批次目录> --step resumed --snapshot fresh.xl
 
 resume.json 需 confirmed=true、reason；若已开始 CLS，另需 cls_reconciled=true（已通过接口回读或实际 UI 核对现有草稿/导入，不是推测）。通常仅允许完整追加，或完全没有追加尝试且基线未变的批次恢复。对于已尝试但未生效的追加，须用户明确要求本次重试、UI 确认同步完成、最新快照 verify=not_applied 且完整语义摘要与原基线相同；resume.json 另填 retry_append=true、sync_confirmed=true。此事件只允许下一次 preflight/append_started，尝试开始后授权被消耗。复用原 CSV，不重新 prepare。部分写入、占用、历史变化或未知结果不允许重贴。证据布尔值不能代替真实用户授权和现场核验。
 
-恢复前读 status 与现有页面；完整批次复用 CSV，部分批次不自动补写。素材编号、plan_id、草稿内部 ID 不能推导正式需求编号。用户后续提供实际编号可 record requirement_number，更新群消息，不代发。
+恢复前读 status，通过 CLI/CLS 接口回读；完整批次复用 CSV，部分批次不自动补写。CLI 批次不自动重试任何已尝试的写入；上述 retry_append/sync_confirmed 仅为历史 UI 事件兼容，不用于新 CLI 批次。素材编号、plan_id、草稿内部 ID 不能推导正式需求编号。用户后续提供实际编号可 record requirement_number，更新群消息，不代发。
+
+`batch.py report --batch <批次> [--output <本批新报告.json>]` 生成本地 JSON 报告：实际工作表/ID、范围、阶段状态、CLS receipt 和群消息。生成时重新验证已有 CLS operation/receipt 与原批需求；报告不做网络请求，标明证据采集时间。输出文件独占创建，不覆盖旧报告。UI 历史证据可以保留，新报告不伪造截图。

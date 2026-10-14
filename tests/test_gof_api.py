@@ -213,6 +213,10 @@ class ApiTests(unittest.TestCase):
         with self.assertRaises(batch.Blocked):
             api.execute(server, path, receipt_file)
         self.assertEqual(server.write_count, 1)
+        reconciled = api.reconcile(server, path)
+        self.assertEqual(reconciled["status"], "complete")
+        self.assertEqual(server.write_count, 1)
+        self.assertTrue(Path(reconciled["report"]).is_file())
         # Separate immutable batch root for the late-occupancy scenario.
         other = Path(batch.prepare(self.plan, self.snapshot, self.root / "race", api_plan=self.context)["batch"])
         server = SimulatedServer(self.root / "race-live.xlsx", True)
@@ -350,8 +354,6 @@ class ApiTests(unittest.TestCase):
             batch.record(path, "append_started")
             batch.record(path, "append_verified", fresh=fresh)
             batch.record(path, "cls_started", "01")
-            screenshot = path / "proof.jpg"
-            screenshot.write_bytes(b"unit-test-proof")
             save = cls_api.operation(path, "01", "save_draft", catalog(), OBS)
             batch.write_json_new(path / "save-op.json", save)
             batch.record(path, "cls_api_attempt", "01", {"action": "save_draft", "operation_id": save["operation_id"], "observations": OBS})
@@ -362,10 +364,11 @@ class ApiTests(unittest.TestCase):
                        "action": "save_draft", "operation_id": save["operation_id"], "parent": parent, "calls": trace}
             batch.write_json_new(path / "save-receipt.json", receipt)
             evidence = {"transport": "cls_api", "confirmed": True, "unpublished": True, "draft_id": 10224,
-                        "url": "https://creative.centurygames.cn/requirement/10224/edit-outer", "screenshot": str(screenshot),
+                        "url": "https://creative.centurygames.cn/requirement/10224/edit-outer",
                         "operation": str(path / "save-op.json"), "receipt": str(path / "save-receipt.json"),
                         "requirement_number": parent["number"]}
             batch.record(path, "draft_saved", "01", evidence)
+            self.assertNotIn("screenshot", evidence)
             observations = dict(OBS, draft_saved=True, import_enabled=True, import_would_publish=False)
             upload = cls_api.operation(path, "01", "import_scripts", catalog(), observations)
             batch.write_json_new(path / "import-op.json", upload)
@@ -384,6 +387,9 @@ class ApiTests(unittest.TestCase):
             with self.assertRaises(batch.Blocked):
                 cls_api.validate_batch_receipt(path, "01", dict(evidence, receipt=str(path / "bad-receipt.json")), "scripts_imported")
             batch.record(path, "scripts_imported", "01", evidence)
+            audit = batch.report(path)
+            self.assertEqual(audit["groups"][0]["scripts_imported"]["draft_id"], 10224)
+            self.assertIn("回读时间", audit["evidence_time"])
             self.assertIn("scripts_imported", batch.status(path)["groups"]["01"])
             self.assertIn("GOFCN20261014001", batch.message(path)["message"])
             with self.assertRaises(batch.Blocked):
@@ -414,6 +420,45 @@ class ApiTests(unittest.TestCase):
             runner.assert_not_called()
         self.assertFalse((self.root / "export.xlsx").exists())
         self.assertFalse((self.root / "receipt.json").exists())
+
+    def test_default_cli_enabled_and_user_scopes_checked_in_isolated_profile(self):
+        self.assertTrue(api.OFFICIAL_API_ENABLED)
+        calls = []
+        def runner(args, **kwargs):
+            calls.append((args, kwargs))
+            if "--version" in args:
+                return subprocess.CompletedProcess(args, 0, "lark-cli version 1.0.98", "")
+            if "status" in args:
+                value = {"brand": "feishu", "identity": "user", "verified": True, "identities": {"user": {}}}
+            else:
+                value = {"ok": True, "granted": list(api.SCOPES), "missing": []}
+            return subprocess.CompletedProcess(args, 0, json.dumps(value), "")
+        self.assertTrue(api.Cli("unit-cli", runner).doctor()["logged_in"])
+        self.assertEqual(len(calls), 3)
+        self.assertIn("gof-requirement", calls[1][0])
+        self.assertTrue(calls[1][1]["env"]["LARKSUITE_CLI_CONFIG_DIR"].endswith(".state\\feishu-cli"))
+        missing = api.Cli("unit-cli", lambda *a, **k: subprocess.CompletedProcess(a[0], 1,
+                         json.dumps({"ok": False, "error": "no_token", "missing": list(api.SCOPES)}), ""))
+        with self.assertRaises(batch.Blocked):
+            missing.check_scopes(api.SCOPES)
+
+    def test_api_batch_cannot_authorize_resending_after_empty_unknown_result(self):
+        path = self.prepare(True)
+        batch.record(path, "append_started")
+        batch.record(path, "blocked", evidence={"reason": "unknown result"})
+        with self.assertRaisesRegex(batch.Blocked, "只能回读"):
+            batch.record(path, "resumed", evidence={"confirmed": True, "reason": "retry", "retry_append": True,
+                                                   "sync_confirmed": True}, fresh=self.snapshot)
+
+    def test_api_receipt_claims_and_missing_readback_cannot_replace_screenshot(self):
+        evidence = {"transport": "cls_api", "confirmed": True, "unpublished": True,
+                    "url": "https://creative.centurygames.cn/requirement/10224/edit-outer",
+                    "draft_id": 10224, "receipt": str(self.root / "missing.json")}
+        with self.assertRaises((batch.Blocked, OSError)):
+            batch.cls_evidence(evidence)
+        ui = {k: v for k, v in evidence.items() if k != "transport"}
+        with self.assertRaisesRegex(batch.Blocked, "截图"):
+            batch.cls_evidence(ui)
 
 
 if __name__ == "__main__":
