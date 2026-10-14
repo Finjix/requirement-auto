@@ -1,6 +1,6 @@
 interface:
   display_name: "GOFCN 需求自动化"
-  short_description: "默认全流程，先收齐需求并确认计划，再连续追加进度表、保存未发布草稿及导入脚本"
+  short_description: "确认完整计划后通过飞书网页安全追加，生成 CSV 并通过 CLS 接口保存草稿及导入脚本"
   default_prompt: "使用 $gof-requirement 默认完成进度表、CSV、CLS 未发布草稿、允许的脚本导入和可复制群消息，不询问处理范围；澄清阶段只问缺失信息，收齐后在完整计划中统一说明所有字段及安排，我回复执行计划后连续执行，遇到实际阻碍才提问。"
 policy:
   allow_implicit_invocation: true

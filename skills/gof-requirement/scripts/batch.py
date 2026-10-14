@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from xml.etree.ElementTree import tostring
+from xml.etree.ElementTree import fromstring, tostring
 
 import openpyxl
 from openpyxl.formula.translate import Translator
@@ -450,8 +450,29 @@ def load_batch(path):
     return path, manifest
 
 
-def prepare(plan, snapshot, workspace):
+def clipboard_tsv(plan):
+    area = CellRange(plan["range"])
+    lines = []
+    for row in plan["rows"]:
+        cells = []
+        for col in range(area.min_col, area.max_col + 1):
+            value = row["values"][f"{get_column_letter(col)}{row['row']}"]
+            value = "" if value is None else str(value)
+            require(not any(ch in value for ch in "\t\r\n"), "剪贴板单元格包含分隔符，不能生成原始 TSV")
+            cells.append(value)
+        lines.append("\t".join(cells))
+    return "\r\n".join(lines) + "\r\n"
+
+
+def prepare(plan, snapshot, workspace, api_plan=None):
     require(plan == make_plan(snapshot, plan["request"], plan.get("current_sheet")), "当前快照与获批计划不同，需更新计划并重新确认")
+    if api_plan is not None:
+        from feishu_api import check_seal
+        check_seal(api_plan, "api_plan_id")
+        check_target(api_plan.get("target", ""))
+        require(api_plan.get("batch_plan_id") == plan["plan_id"]
+                and api_plan.get("baseline_digest") == snapshot.fingerprint, "接口计划与本批快照不匹配")
+    tsv = clipboard_tsv(plan)
     base = Path(workspace).resolve() / "outputs" / "gof-requirement"
     base.mkdir(parents=True, exist_ok=True)
     path = base / plan["plan_id"]
@@ -460,11 +481,8 @@ def prepare(plan, snapshot, workspace):
     with snapshot.path.open("rb") as source, (path / "baseline.xlsx").open("xb") as output:
         shutil.copyfileobj(source, output)
     with (path / "append.tsv").open("x", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle, delimiter="\t", lineterminator="\r\n")
-        area = CellRange(plan["range"])
-        for row in plan["rows"]:
-            writer.writerow(row["values"][f"{get_column_letter(col)}{row['row']}"]
-                            for col in range(area.min_col, area.max_col + 1))
+        # Browser clipboard TSV is not CSV: quoting formulas makes them literal text.
+        handle.write(tsv)
     for group in plan["groups"]:
         with (path / group["csv"]).open("x", encoding="utf-8-sig", newline="") as handle:
             writer = csv.writer(handle, lineterminator="\r\n")
@@ -473,6 +491,9 @@ def prepare(plan, snapshot, workspace):
                 link = group["request"]["script_url"]
                 writer.writerow([name, link if index == 0 else "同上", FIXED_TAG])
     files = ["append.tsv"] + [g["csv"] for g in plan["groups"]]
+    if api_plan is not None:
+        write_json_new(path / "api-plan.json", api_plan)
+        files.append("api-plan.json")
     manifest = {"plan": plan, "baseline_sha256": hashlib.sha256((path / "baseline.xlsx").read_bytes()).hexdigest(),
                 "artifacts": {name: hashlib.sha256((path / name).read_bytes()).hexdigest() for name in files}}
     write_json_new(path / "manifest.json", manifest)
@@ -509,9 +530,56 @@ def status(path):
                        for g in manifest["plan"]["groups"]}}
 
 
-def verify(path, fresh):
+def filter_extends_only_into_append(before, after, area):
+    if not before or not after:
+        return False
+    try:
+        old, new = fromstring(before), fromstring(after)
+        old_range, new_range = CellRange(old.attrib["ref"]), CellRange(new.attrib["ref"])
+        if not (old_range.min_col == new_range.min_col and old_range.max_col == new_range.max_col
+                and old_range.min_row == new_range.min_row and old_range.max_row < new_range.max_row
+                and old_range.max_row + 1 >= area.min_row and new_range.max_row == area.max_row):
+            return False
+        new.set("ref", old.attrib["ref"])
+        return tostring(old) == tostring(new)
+    except (ValueError, KeyError):
+        return False
+
+
+def ui_validates_omitted_dropdown(spec, evidence, fresh, sheet, value):
+    if not isinstance(evidence, list):
+        return False
+    matches = [item for item in evidence if isinstance(item, dict)
+               and item.get("worksheet") == sheet and item.get("range") == spec["range"]]
+    if len(matches) != 1:
+        return False
+    item = matches[0]
+    options = item.get("options")
+    if not (item.get("confirmed") is True and item.get("saved") is True
+            and item.get("source") == "custom" and item.get("reason") == "xlsx_omits_inline_rule"
+            and item.get("snapshot_digest") == fresh.fingerprint
+            and item.get("mode") in {"single", "multiple"}
+            and isinstance(options, list) and all(isinstance(o, str) and o for o in options)
+            and value in options and set(spec["options"]) <= set(options)):
+        return False
+    try:
+        check_target(item.get("url", ""))
+        screenshot = Path(item.get("screenshot", ""))
+        return screenshot.is_absolute() and screenshot.is_file()
+    except (Blocked, TypeError, ValueError):
+        return False
+
+
+def verify(path, fresh, validation_evidence=None):
     path, manifest = load_batch(path)
     plan = manifest["plan"]
+    api_dropdowns = None
+    if "api-plan.json" in manifest["artifacts"]:
+        from feishu_api import validate_rule_evidence
+        # API rules are checked even when the XLSX happens to include validations.
+        # A pre-write or zero-applied snapshot can still be inspected without post-write proof.
+        if isinstance(validation_evidence, dict) and validation_evidence.get("transport") == "feishu_api":
+            api_dropdowns = validate_rule_evidence(path, fresh, validation_evidence)
     baseline = Snapshot(path / "baseline.xlsx")
     try:
         require(baseline.fingerprint == plan["baseline_digest"], "基线语义摘要与计划不一致")
@@ -536,6 +604,9 @@ def verify(path, fresh):
             if sheet in data:
                 data[sheet]["rows"] = {r: v for r, v in data[sheet]["rows"].items()
                                       if not area.min_row <= int(r) <= area.max_row}
+        if sheet in before_meta and sheet in after_meta and filter_extends_only_into_append(
+                before_meta[sheet]["filter"], after_meta[sheet]["filter"], area):
+            after_meta[sheet]["filter"] = before_meta[sheet]["filter"]
         if before_meta != after_meta:
             issues.append("历史布局/合并/隐藏/保护/筛选发生变化")
         if validation_projection(baseline, (sheet, area)) != validation_projection(fresh, (sheet, area)):
@@ -557,28 +628,55 @@ def verify(path, fresh):
             elif actual is not None:
                 issues.append(f"应为空的新增字段被占用：{coord}")
         state = "conflict" if issues else "not_applied" if matches == 0 else "partial" if blanks else "complete"
+        ui_validated = []
         if state == "complete":
+            require("api-plan.json" not in manifest["artifacts"] or api_dropdowns is not None,
+                    "接口追加需要当前快照对应的完整 API 规则回读")
             for dropdown in plan["dropdowns"]:
                 r = CellRange(dropdown["range"])
                 for row in range(r.min_row, r.max_row + 1):
                     coord = f"{get_column_letter(r.min_col)}{row}"
                     value = ws[coord].value
                     matching = [v for v in ws.data_validations.dataValidation if coord in v.sqref]
+                    if api_dropdowns is not None and not matching:
+                        spec = next((d for d in api_dropdowns if d["range"] == dropdown["range"]), None)
+                        if spec and value in spec["options"]:
+                            continue
+                    if not matching and ui_validates_omitted_dropdown(
+                            dropdown, validation_evidence, fresh, sheet, value):
+                        if dropdown["range"] not in ui_validated:
+                            ui_validated.append(dropdown["range"])
+                        continue
                     if not matching or not any(value in inline_options(v)
                                                and set(dropdown["options"]) <= set(inline_options(v)) for v in matching):
                         issues.append(f"新增下拉未包含实际值/原有选项：{coord}")
                         break
             if issues:
                 state = "conflict"
-        return {"status": state, "matched_cells": matches, "expected_cells": meaningful, "issues": issues[:20]}
+        result = {"status": state, "matched_cells": matches, "expected_cells": meaningful, "issues": issues[:20]}
+        if ui_validated:
+            result["ui_validated_ranges"] = ui_validated
+        if api_dropdowns is not None:
+            result["api_validated_ranges"] = [d["range"] for d in api_dropdowns]
+        return result
     finally:
         baseline.close()
+
+
+def can_start_append(records):
+    if all(e["step"] in {"blocked", "resumed"} for e in records):
+        return True
+    # A user-authorized retry is consumed by the next append_started event.
+    return (bool(records) and records[-1]["step"] == "resumed"
+            and records[-1]["evidence"].get("retry_append") is True
+            and records[-1]["evidence"].get("sync_confirmed") is True
+            and all(e["step"] in {"append_started", "blocked", "resumed"} for e in records))
 
 
 def preflight(path, fresh):
     path, manifest = load_batch(path)
     records = events(path)
-    require(not status(path)["blocked"] and all(e["step"] in {"blocked", "resumed"} for e in records),
+    require(not status(path)["blocked"] and can_start_append(records),
             "本批已有执行尝试/阻塞，必须先核对现状，不能自动重贴")
     require(fresh.fingerprint == manifest["plan"]["baseline_digest"], "快照变化或目标被占用，需更新计划并确认")
     area = CellRange(manifest["plan"]["range"])
@@ -600,6 +698,9 @@ def cls_check(path, group_id, action, ui):
     require(state["append_verified"] and not state["blocked"], "进度表尚未验证或批次已阻塞")
     require(group_id in state["groups"], "组不存在")
     stages = state["groups"][group_id]
+    attempted = [e for e in state["events"] if e.get("group") == group_id and e["step"] == "cls_api_attempt"
+                 and e["evidence"].get("action") == action]
+    require(not attempted, "本组接口动作已有尝试；必须回读核对，不能自动重发")
     require("cls_started" in stages and "handoff" not in stages, "需先记录 CLS 尝试，已移交的组不可自动继续")
     require(ui.get("logged_in") is True, "CLS 未登录")
     require(ui.get("can_create") is True, "未证明 CLS 有建单权限")
@@ -622,31 +723,46 @@ def screenshot_evidence(evidence):
     check_cls_url(evidence.get("url", ""))
     file = Path(evidence.get("screenshot", ""))
     require(file.is_absolute() and file.is_file(), "需已存在的截图绝对路径")
+    if evidence.get("transport") == "cls_api":
+        from cls_api import validate_receipt
+        validate_receipt(evidence)
 
 
 def record(path, step, group_id=None, evidence=None, fresh=None):
     path, manifest = load_batch(path)
     records = events(path)
     evidence = evidence or {}
+    from feishu_api import reject_secrets
+    reject_secrets(evidence)
     state = status(path)
     require(not state["blocked"] or step == "resumed", "已阻塞批次不能继续自动化；保留现场等待用户处理")
     if step == "resumed":
         require(state["blocked"] and fresh is not None and group_id is None, "恢复需阻塞记录及最新快照")
         require(evidence.get("confirmed") is True and isinstance(evidence.get("reason"), str)
                 and evidence["reason"].strip(), "恢复需用户明确决定及原因")
-        result = verify(path, fresh)
+        result = verify(path, fresh, evidence.get("validations"))
         never_attempted = not any(e["step"] == "append_started" for e in records)
-        require(result["status"] == "complete" or (never_attempted and result["status"] == "not_applied"
-                and fresh.fingerprint == manifest["plan"]["baseline_digest"]), "部分写入/冲突/未确认的写入尝试不能恢复")
+        retry_append = evidence.get("retry_append") is True
+        if retry_append:
+            require(evidence.get("sync_confirmed") is True and not state["append_verified"]
+                    and all(e["step"] in {"append_started", "blocked", "resumed"} for e in records),
+                    "重试需确认同步完成，且不能已验证追加或开始 CLS")
+            require(result["status"] == "not_applied"
+                    and fresh.fingerprint == manifest["plan"]["baseline_digest"],
+                    "重试仅允许全批为空且完整快照与基线一致；部分写入/冲突不能重试")
+        else:
+            require(result["status"] == "complete" or (never_attempted and result["status"] == "not_applied"
+                    and fresh.fingerprint == manifest["plan"]["baseline_digest"]), "部分写入/冲突/未确认的写入尝试不能恢复")
         if any(e["step"] == "cls_started" for e in records):
             require(evidence.get("cls_reconciled") is True, "需先核对现有草稿/导入结果，避免重复工单")
         evidence = {**evidence, "verified_snapshot_digest": fresh.fingerprint}
     elif step == "append_started":
-        require(all(e["step"] in {"blocked", "resumed"} for e in records) and group_id is None,
+        require(can_start_append(records) and group_id is None,
                 "已有写入尝试，禁止重复记录/自动重贴")
     elif step == "append_verified":
         require(any(e["step"] == "append_started" for e in records) and not state["append_verified"], "追加验证顺序不正确")
-        require(fresh is not None and verify(path, fresh)["status"] == "complete", "追加未完整通过校验")
+        require(fresh is not None and verify(path, fresh, evidence.get("validations"))["status"] == "complete",
+                "追加未完整通过校验")
     elif step == "blocked":
         require(isinstance(evidence.get("reason"), str) and evidence["reason"].strip(), "需阻塞原因")
     else:
@@ -656,19 +772,30 @@ def record(path, step, group_id=None, evidence=None, fresh=None):
         require("handoff" not in stages or step == "requirement_number", "本组已移交，不自动继续")
         if step == "cls_started":
             require(not stages, "已有 CLS 尝试，先查草稿，不能重复新建")
+        elif step == "cls_api_attempt":
+            action = evidence.get("action")
+            require(action in {"save_draft", "import_scripts"} and isinstance(evidence.get("operation_id"), str)
+                    and re.fullmatch(r"[0-9a-f]{64}", evidence["operation_id"]), "接口尝试动作/摘要无效")
+            cls_check(path, group_id, action, evidence.get("observations", {}))
         elif step == "draft_saved":
-            require(stages == ["cls_started"], "已有草稿或记录顺序错误")
+            require([s for s in stages if s != "cls_api_attempt"] == ["cls_started"], "已有草稿或记录顺序错误")
             screenshot_evidence(evidence)
+            if evidence.get("transport") == "cls_api":
+                from cls_api import validate_batch_receipt
+                validate_batch_receipt(path, group_id, evidence, "draft_saved")
         elif step == "scripts_imported":
             require("draft_saved" in stages and "scripts_imported" not in stages, "导入顺序不正确或重复")
             screenshot_evidence(evidence)
+            if evidence.get("transport") == "cls_api":
+                from cls_api import validate_batch_receipt
+                validate_batch_receipt(path, group_id, evidence, "scripts_imported")
             require(type(evidence.get("quantity")) is int and evidence["quantity"] == group["request"]["quantity"]
                     and evidence.get("names") == group["names"], "导入数量/名称不符")
         elif step == "handoff":
             require(isinstance(evidence.get("reason"), str) and evidence["reason"].strip(), "需明确人工接手事项")
         elif step == "requirement_number":
             require("draft_saved" in stages or "handoff" in stages, "尚无可补充编号的工单")
-            require(evidence.get("confirmed") is True, "正式编号必须来自用户/实际 UI")
+            require(evidence.get("confirmed") is True, "正式编号必须来自用户/实际页面或接口回读")
         else:
             raise Blocked("事件步骤不受支持")
     number = evidence.get("requirement_number")
@@ -715,6 +842,8 @@ def main(argv=None):
             cmd.add_argument("--workspace", required=True)
         else:
             cmd.add_argument("--batch", required=True)
+            if name == "verify":
+                cmd.add_argument("--validation-evidence")
     for name in ("record", "status", "cls-check", "message"):
         cmd = commands.add_parser(name)
         cmd.add_argument("--batch", required=True)
@@ -727,7 +856,9 @@ def main(argv=None):
         if name == "cls-check":
             cmd.add_argument("--group", required=True)
             cmd.add_argument("--action", required=True)
-            cmd.add_argument("--ui", required=True)
+            observe = cmd.add_mutually_exclusive_group(required=True)
+            observe.add_argument("--ui")
+            observe.add_argument("--observations", help="API/页面实际观察的相同条件，兼容原 --ui")
     args = parser.parse_args(argv)
     snap = None
     try:
@@ -741,14 +872,15 @@ def main(argv=None):
         elif args.command == "preflight":
             result = preflight(args.batch, snap)
         elif args.command == "verify":
-            result = verify(args.batch, snap)
+            result = verify(args.batch, snap, read_json(args.validation_evidence)
+                            if args.validation_evidence else None)
         elif args.command == "record":
             result = record(args.batch, args.step, args.group,
                             read_json(args.evidence) if args.evidence else None, snap)
         elif args.command == "status":
             result = status(args.batch)
         elif args.command == "cls-check":
-            result = cls_check(args.batch, args.group, args.action, read_json(args.ui))
+            result = cls_check(args.batch, args.group, args.action, read_json(args.ui or args.observations))
         else:
             result = message(args.batch)
         print(canonical(result))

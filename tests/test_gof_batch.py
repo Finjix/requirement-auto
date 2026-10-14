@@ -143,6 +143,27 @@ class BatchTests(unittest.TestCase):
         with (path / plan["groups"][0]["csv"]).open(encoding="utf-8-sig", newline="") as f:
             self.assertEqual(list(csv.reader(f))[1][0], plan["groups"][0]["names"][0])
 
+    def test_clipboard_tsv_preserves_formula_and_literal_quotes_without_csv_escaping(self):
+        req = request(2)
+        req["groups"][0]["keyword"] = '含,"引号"'
+        req["groups"][0]["material_name"] = '多明星04_2min_混剪_含,"引号"'
+        plan = batch.make_plan(self.snapshot, req)
+        path = self.prepared(plan)
+        data = (path / "append.tsv").read_bytes().decode("utf-8")
+        rows = [r.split("\t") for r in data.removesuffix("\r\n").split("\r\n")]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(len(r) == 12 for r in rows))
+        self.assertEqual(rows[0][1], '含,"引号"')
+        self.assertEqual(rows[0][4], plan["rows"][0]["values"]["G5"])
+        self.assertTrue(rows[0][4].startswith('=CONCATENATE("GOFCN",'))
+
+    def test_clipboard_tsv_rejects_embedded_cell_separators(self):
+        plan = copy.deepcopy(self.plan)
+        for separator in ("\t", "\r", "\n"):
+            plan["rows"][0]["values"]["G5"] = '=CONCATENATE("GOFCN",' + separator + 'C5)'
+            with self.assertRaises(batch.Blocked):
+                batch.clipboard_tsv(plan)
+
     def test_multiple_supplier_and_topic_files(self):
         req = request(2)
         other = copy.deepcopy(req["groups"][0])
@@ -507,6 +528,154 @@ class BatchTests(unittest.TestCase):
                     batch.record(path, "resumed", evidence={"confirmed": True, "reason": "试图恢复"}, fresh=fresh)
         finally:
             partial.close()
+
+    def test_confirmed_empty_retry_is_single_use_and_reuses_artifacts(self):
+        path = self.prepared()
+        original_csv = (path / self.plan["groups"][0]["csv"]).read_bytes()
+        batch.record(path, "append_started")
+        batch.record(path, "blocked", evidence={"reason": "粘贴未生效"})
+        decision = {"confirmed": True, "reason": "用户明确要求修复并重试",
+                    "retry_append": True, "sync_confirmed": True}
+        for missing in ("confirmed", "retry_append", "sync_confirmed"):
+            with self.assertRaises(batch.Blocked):
+                batch.record(path, "resumed", evidence={k: v for k, v in decision.items() if k != missing},
+                             fresh=self.snapshot)
+        batch.record(path, "resumed", evidence=decision, fresh=self.snapshot)
+        self.assertEqual(batch.preflight(path, self.snapshot)["status"], "ready_to_append")
+        batch.record(path, "append_started")
+        with self.assertRaises(batch.Blocked):
+            batch.preflight(path, self.snapshot)
+        with self.assertRaises(batch.Blocked):
+            batch.record(path, "append_started")
+        fresh = self.applied()
+        try:
+            batch.record(path, "append_verified", fresh=fresh)
+        finally:
+            fresh.close()
+        self.assertTrue(batch.status(path)["append_verified"])
+        self.assertEqual((path / self.plan["groups"][0]["csv"]).read_bytes(), original_csv)
+
+    def test_confirmed_retry_rejects_partial_occupied_or_changed_snapshot(self):
+        path = self.prepared()
+        batch.record(path, "append_started")
+        batch.record(path, "blocked", evidence={"reason": "粘贴未生效"})
+        decision = {"confirmed": True, "reason": "用户要求重试", "retry_append": True,
+                    "sync_confirmed": True}
+        snapshots = [self.applied(partial=True),
+                     self.edit(lambda w: setattr(w.active["C5"], "value", "jiang"), "occupied.xlsx"),
+                     self.edit(lambda w: setattr(w.active["A1"], "fill", PatternFill("solid", fgColor="FF0000")),
+                               "changed.xlsx")]
+        try:
+            for fresh in snapshots:
+                with self.assertRaises(batch.Blocked):
+                    batch.record(path, "resumed", evidence=decision, fresh=fresh)
+            self.assertTrue(batch.status(path)["blocked"])
+        finally:
+            for fresh in snapshots:
+                fresh.close()
+
+    def test_retry_cannot_restart_completed_or_cls_batch(self):
+        path = self.verified()
+        batch.record(path, "cls_started", "01")
+        batch.record(path, "blocked", evidence={"reason": "CLS 登录失效"})
+        fresh = self.applied()
+        try:
+            with self.assertRaises(batch.Blocked):
+                batch.record(path, "resumed", evidence={"confirmed": True, "reason": "错误重试",
+                             "retry_append": True, "sync_confirmed": True, "cls_reconciled": True}, fresh=fresh)
+        finally:
+            fresh.close()
+
+    def test_filter_may_extend_only_over_newly_appended_rows(self):
+        self.snapshot.close()
+        w = openpyxl.load_workbook(self.file)
+        w.active.auto_filter.ref = "A1:N4"
+        w.save(self.file)
+        w.close()
+        self.snapshot = batch.Snapshot(self.file)
+        self.plan = batch.make_plan(self.snapshot, request())
+        path = self.prepared()
+        fresh = self.applied()
+        applied_file = fresh.path
+        fresh.close()
+        w = openpyxl.load_workbook(applied_file)
+        w.active.auto_filter.ref = "A1:N64"
+        w.save(applied_file)
+        w.close()
+        fresh = batch.Snapshot(applied_file)
+        try:
+            self.assertEqual(batch.verify(path, fresh)["status"], "complete")
+        finally:
+            fresh.close()
+        for ref in ("A1:N65", "A1:O64", "A2:N64", "A1:N3"):
+            w = openpyxl.load_workbook(applied_file)
+            w.active.auto_filter.ref = ref
+            w.save(applied_file)
+            w.close()
+            fresh = batch.Snapshot(applied_file)
+            try:
+                self.assertEqual(batch.verify(path, fresh)["status"], "conflict")
+            finally:
+                fresh.close()
+
+    def test_filter_extension_does_not_allow_changed_conditions_or_history_rows(self):
+        area = batch.CellRange("C5:N64")
+        old = '<autoFilter ref="A1:N4"><filterColumn colId="0"><filters><filter val="kept" /></filters></filterColumn></autoFilter>'
+        extended = old.replace('A1:N4', 'A1:N64')
+        self.assertTrue(batch.filter_extends_only_into_append(old, extended, area))
+        self.assertFalse(batch.filter_extends_only_into_append(old, extended.replace('kept', 'changed'), area))
+        self.assertFalse(batch.filter_extends_only_into_append(old.replace('A1:N4', 'A1:N3'), extended, area))
+
+    def test_ui_evidence_only_complements_omitted_rule_with_snapshot_bound_proof(self):
+        self.snapshot.close()
+        w = openpyxl.load_workbook(self.file)
+        w.active.data_validations.dataValidation = [v for v in w.active.data_validations.dataValidation
+                                                    if 'I2' not in v.sqref]
+        w.save(self.file)
+        w.close()
+        self.snapshot = batch.Snapshot(self.file)
+        self.plan = batch.make_plan(self.snapshot, request())
+        path = self.prepared()
+        batch.record(path, 'append_started')
+        fresh = self.applied()
+        file = fresh.path
+        fresh.close()
+        w = openpyxl.load_workbook(file)
+        w.active.data_validations.dataValidation = [v for v in w.active.data_validations.dataValidation
+                                                    if 'I5' not in v.sqref]
+        w.save(file)
+        w.close()
+        fresh = batch.Snapshot(file)
+        spec = next(d for d in self.plan['dropdowns'] if d['range'] == 'I5:I64')
+        shot = self.root / 'validation.png'
+        shot.write_bytes(b'isolated UI validation evidence')
+        evidence = [{'confirmed': True, 'saved': True, 'source': 'custom', 'mode': 'single',
+                     'reason': 'xlsx_omits_inline_rule', 'snapshot_digest': fresh.fingerprint,
+                     'worksheet': self.plan['worksheet'], 'range': spec['range'], 'options': spec['options'],
+                     'url': batch.TARGET, 'screenshot': str(shot)}]
+        try:
+            self.assertEqual(batch.verify(path, fresh)['status'], 'conflict')
+            self.assertEqual(batch.verify(path, fresh, evidence)['status'], 'complete')
+            for changes in ({'snapshot_digest': 'stale'}, {'saved': False}, {'range': 'I5:I63'},
+                            {'options': []}, {'screenshot': str(self.root / 'missing.png')},
+                            {'url': 'https://example.com'}, {'source': 'reference'}):
+                with self.subTest(changes=changes):
+                    self.assertEqual(batch.verify(path, fresh, [{**evidence[0], **changes}])['status'], 'conflict')
+            batch.record(path, 'append_verified', evidence={'validations': evidence}, fresh=fresh)
+        finally:
+            fresh.close()
+        w = openpyxl.load_workbook(file)
+        wrong = DataValidation(type='list', formula1='"wrong"')
+        wrong.add('I5:I64')
+        w.active.add_data_validation(wrong)
+        w.save(file)
+        w.close()
+        fresh = batch.Snapshot(file)
+        try:
+            evidence[0]['snapshot_digest'] = fresh.fingerprint
+            self.assertEqual(batch.verify(path, fresh, evidence)['status'], 'conflict')
+        finally:
+            fresh.close()
 
 
 if __name__ == "__main__":
