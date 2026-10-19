@@ -1,8 +1,8 @@
 # 数据契约与辅助命令
 
-`scripts/batch.py` 无网络功能、不写在线表、不修改输入 XLSX；仅用标准 Python 和 `openpyxl`。使用 `<skill>/assets/dependencies/python/python.exe -B`，不依赖系统或代理环境 Python。失败输出 JSON `status=blocked` 并非零退出。
+`gof.mjs batch` 无网络功能、不写在线表、不修改输入 XLSX；XLSX 由插件自带的只读解析器读取（不依赖任何外部库或其他运行时）。失败输出 JSON `status=blocked` 并非零退出。
 
-默认飞书路径是[SDK 桥](feishu-sdk-workflow.md)，通过 `feishu_api.py` 解析实际目标、导出完整快照、生成/匹配包含 api_plan 的计划及安全追加。新批次包含不可变 api-plan.json，不直接通过 batch.py prepare 创建 UI 批次。CLS 见[接口操作参考](api-workflow.md)；`cls_api.py` 离线生成/检查请求，`cls_api.js` 在当前 CLS 同源会话执行限定 HTTP。历史 API/UI 清单和事件仍可读取，不能移除不可变 api-plan.json 来绕过保护。`cls-check --observations` 与原 --ui 二选一，表示同样的真实观察条件。
+默认飞书路径是[SDK 桥](feishu-sdk-workflow.md)，通过 `gof.mjs feishu` 解析实际目标、导出完整快照、生成/匹配包含 api_plan 的计划及安全追加。新批次包含不可变 api-plan.json，不直接通过 gof.mjs batch prepare 创建 UI 批次。CLS 见[接口操作参考](api-workflow.md)；`gof.mjs cls` 离线生成/检查请求，`cls_api.js` 在当前 CLS 同源会话执行限定 HTTP。历史 API/UI 清单和事件仍可读取，不能移除不可变 api-plan.json 来绕过保护。`cls-check --observations` 与原 --ui 二选一，表示同样的真实观察条件。
 
 API 操作前追加 cls_api_attempt（action=save_draft/import_scripts、operation_id、observations），同组同动作已有尝试即拒绝再次请求。API draft_saved/scripts_imported 证据要求 transport=cls_api、draft_id、operation/receipt 的本批绝对路径；记录时重新核对完整回读及原批需求，不要求截图。历史 UI 证据仍保留截图要求。飞书 verify 的 API 证据为 `{ "transport": "feishu_api", "proof": "<本批规则证明绝对路径>" }`，并非自填成功布尔值；record append_verified/resumed 时置于 evidence.validations。
 
@@ -41,10 +41,10 @@ quantity 为正整数。默认全流程的必要澄清清单为八项：`keyword
 
 ## 命令与输出
 
-下述命令替换为实际绝对路径。新业务流程先用 feishu_api.py 的 snapshot/plan/prepare/append；下列 batch.py plan/prepare 仅为离线处理与历史兼容，不能替代真实的桥 api_plan。batch.py 的 observed-url 在桥的恢复/验收中使用刚经 Wiki 节点解析核对的测试目标；URL 字符串本身不能替代真实 token、sheet ID、版本及权限校验。
+下述命令替换为实际绝对路径。新业务流程先用 gof.mjs feishu 的 snapshot/plan/prepare/append；下列 gof.mjs batch plan/prepare 仅为离线处理与历史兼容，不能替代真实的桥 api_plan。gof.mjs batch 的 observed-url 在桥的恢复/验收中使用刚经 Wiki 节点解析核对的测试目标；URL 字符串本身不能替代真实 token、sheet ID、版本及权限校验。
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py plan --request request.json --snapshot downloaded.xlsx --observed-url <实际URL> [--current-sheet <表名>]
+node <skill>/../../server/dist/gof.mjs batch plan --request request.json --snapshot downloaded.xlsx --observed-url <实际URL> [--current-sheet <表名>]
 ```
 
 只读输出计划 JSON：plan_id、基线摘要、工作表/列映射、追加范围、行值/公式、名称和下拉选项。系统计划模式中只输出计划不写文件；用户确认后才把完整 JSON 保存为 approved-plan.json。
@@ -52,11 +52,11 @@ quantity 为正整数。默认全流程的必要澄清清单为八项：`keyword
 历史重复编号和编号/名称不一致列入 history_warnings，不修改历史数据；所有可读编号共同参与取最大值避让。若既有编号无法读取而不能证明新号无冲突则停止。
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py prepare --plan approved-plan.json --snapshot fresh.xlsx --observed-url <实际URL>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py preflight --batch <批次目录> --snapshot fresh.xlsx --observed-url <实际URL>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step append_started
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py verify --batch <批次目录> --snapshot after.xlsx --observed-url <实际URL>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step append_verified --snapshot after.xlsx --observed-url <实际URL>
+node <skill>/../../server/dist/gof.mjs batch prepare --plan approved-plan.json --snapshot fresh.xlsx --observed-url <实际URL>
+node <skill>/../../server/dist/gof.mjs batch preflight --batch <批次目录> --snapshot fresh.xlsx --observed-url <实际URL>
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step append_started
+node <skill>/../../server/dist/gof.mjs batch verify --batch <批次目录> --snapshot after.xlsx --observed-url <实际URL>
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step append_verified --snapshot after.xlsx --observed-url <实际URL>
 ```
 
 prepare 重算并比较获批计划，变化则拒绝。默认输出到 `<系统 temp>/gof-requirement/<plan_id>`；`--output-root <目录>` 可指定批次根目录。历史 `--workspace <工作区>` 仍输出 `<workspace>/outputs/gof-requirement/<plan_id>`，与 --output-root 互斥。已有目录拒绝；含 baseline.xlsx、manifest.json、append.tsv、分组 CSV、追加式 events/*.json。所有路径仅供技能内部核验与恢复，不默认向用户展示，不自动清理。脚本不存储“用户授权”标志，也不能代替真实对话授权。
@@ -72,14 +72,14 @@ verify 允许飞书自动把既有筛选范围的末行延长到本批末行，�
 历史 UI 证据兼容：已有 ui-validations.json 数组仍按原 worksheet/range/options/source/mode/confirmed/saved/reason/url/screenshot/snapshot_digest 校验。它只对应原采集快照，不能复用于更晚快照，不能替代新接口批次的 API 规则证明。本次流程不再通过页面对话框生成这种证据；缺少可验收证据的旧批次交接，不修改旧清单或伪造截图。导出中存在但错误的规则、值/公式错误和历史变化始终拒绝。
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py status --batch <批次目录>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step cls_started --group 01
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py cls-check --batch <批次目录> --group 01 --action save_draft --ui ui.json
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step draft_saved --group 01 --evidence evidence.json
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py cls-check --batch <批次目录> --group 01 --action import_scripts --ui ui.json
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step scripts_imported --group 01 --evidence evidence.json
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step handoff --group 01 --evidence evidence.json
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py message --batch <批次目录>
+node <skill>/../../server/dist/gof.mjs batch status --batch <批次目录>
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step cls_started --group 01
+node <skill>/../../server/dist/gof.mjs batch cls-check --batch <批次目录> --group 01 --action save_draft --ui ui.json
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step draft_saved --group 01 --evidence evidence.json
+node <skill>/../../server/dist/gof.mjs batch cls-check --batch <批次目录> --group 01 --action import_scripts --ui ui.json
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step scripts_imported --group 01 --evidence evidence.json
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step handoff --group 01 --evidence evidence.json
+node <skill>/../../server/dist/gof.mjs batch message --batch <批次目录>
 ```
 
 ui.json 表示实际观察的布尔事实：logged_in、can_create、unpublished 必须 true，保存时 required_complete 必须 true；导入另需 draft_saved=true、import_enabled=true、import_would_publish=false。save_result=failure/unknown 则停止。publish 和未许可 action 永远拒绝。守卫不操纵网页、不使禁用项启用。
@@ -89,11 +89,11 @@ draft_saved evidence 必须含 confirmed=true、unpublished=true、实际 CLS ur
 事件独占创建、不覆盖，每组 handoff 终止该组自动化。blocked 后必须等待；用户解决问题且明确要求恢复时才运行：
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/batch.py record --batch <批次目录> --step resumed --snapshot fresh.xlsx --observed-url <实际URL> --evidence resume.json
+node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step resumed --snapshot fresh.xlsx --observed-url <实际URL> --evidence resume.json
 ```
 
 resume.json 需 confirmed=true、reason；若已开始 CLS，另需 cls_reconciled=true（已通过接口回读或实际 UI 核对现有草稿/导入，不是推测）。通常仅允许完整追加，或完全没有追加尝试且基线未变的批次恢复。对于已尝试但未生效的追加，须用户明确要求本次重试、UI 确认同步完成、最新快照 verify=not_applied 且完整语义摘要与原基线相同；resume.json 另填 retry_append=true、sync_confirmed=true。此事件只允许下一次 preflight/append_started，尝试开始后授权被消耗。复用原 CSV，不重新 prepare。部分写入、占用、历史变化或未知结果不允许重贴。证据布尔值不能代替真实用户授权和现场核验。
 
 恢复前读 status，通过桥/CLS 接口回读；完整批次复用 CSV，部分批次不自动补写。接口批次不自动重试任何已尝试的写入；上述 retry_append/sync_confirmed 仅为历史 UI 事件兼容，不用于新接口批次。素材编号、plan_id、草稿内部 ID 不能推导正式需求编号。用户后续提供实际编号可 record requirement_number，更新群消息，不代发。
 
-`batch.py report --batch <批次> [--output <本批新报告.json>]` 生成本地 JSON 报告：实际工作表/ID、范围、阶段状态、CLS receipt 和群消息。生成时重新验证已有 CLS operation/receipt 与原批需求；报告不做网络请求，标明证据采集时间。输出文件独占创建，不覆盖旧报告。UI 历史证据可以保留，新报告不伪造截图。
+`gof.mjs batch report --batch <批次> [--output <本批新报告.json>]` 生成本地 JSON 报告：实际工作表/ID、范围、阶段状态、CLS receipt 和群消息。生成时重新验证已有 CLS operation/receipt 与原批需求；报告不做网络请求，标明证据采集时间。输出文件独占创建，不覆盖旧报告。UI 历史证据可以保留，新报告不伪造截图。

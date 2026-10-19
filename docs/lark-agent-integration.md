@@ -55,7 +55,7 @@ start.cmd
 
 - 安装、重复启动不重装、改动后替换、删除后卸载；整套流程在 lark-agent 的自动测试里（用真实 Codex CLI）。
 - 按 lark-agent 每轮实际生成的配置启动 `codex app-server`：技能 `requirement-auto:gof-requirement` 可见；只有一个 `feishu-auth` 服务，四个工具齐全；`feishu_auth_status` 返回 `storage: "host"`、`app_configured: true`。
-- 从已装副本运行 `skill_runtime.py doctor`（运行时校验通过）和 `feishu_api.py login status`（读到宿主环境，`storage: "host"`）。
+- 从已装副本运行 `node <插件根>/server/dist/gof.mjs feishu doctor`（Node、桥、登录和权限）和 `gof.mjs feishu login status`（读到宿主环境，`storage: "host"`）。
 - lark-agent 完整启动：`/health` 的 `plugins.loaded` 列出插件，无效文件夹出现在 `plugins.skipped`。
 
 **没有验证（需要真实飞书应用、真实 Codex 登录或你的授权）：**
