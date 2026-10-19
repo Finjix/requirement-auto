@@ -15,7 +15,7 @@ dev/                                 开发专用，不进入发布包
   feishu-sdk/                        桥和 MCP 服务的 TypeScript 源码、esbuild 脚本、测试
   tests/                             Python 测试
   run_tests.py  package_plugin.py  runtime_manifest.py
-docs/lark-agent-integration.md       lark-agent 日后接入本插件要做的事
+docs/lark-agent-integration.md       放进 lark-agent：怎么放、两边的约定、验证过什么
 ```
 
 ## 它怎么工作
@@ -36,7 +36,7 @@ codex plugin add requirement-auto@requirement-auto
 ```
 
 - **单机用 Codex 桌面版**：插件自带的 `feishu-auth` 服务用 `PLUGIN_DATA` 存登录；应用凭证写进该目录的 `app.json`（`{"appId":"…","appSecret":"…"}`，面向该应用的管理员，注意文件权限）。MCP 进程拿不到桌面环境变量（见下）。
-- **lark-agent**：由宿主按轮覆盖 MCP 配置，见 [docs/lark-agent-integration.md](docs/lark-agent-integration.md)。
+- **lark-agent（拖入即用）**：把 `plugins/requirement-auto` 复制到 lark-agent 的 `plugins/` 下，重启 lark-agent，不需要任何配置。lark-agent 启动时自动安装，并按用户每轮覆盖 MCP 配置、注入用户目录和飞书应用。步骤和约定见 [docs/lark-agent-integration.md](docs/lark-agent-integration.md)。
 - 改了插件后要让已装副本生效：`codex plugin remove requirement-auto@requirement-auto` 再 `add`（或提升 `plugin.json` 的 version）。
 
 ### Codex 0.163.0 的实测结论
@@ -73,7 +73,7 @@ plugins/requirement-auto/skills/gof-requirement/assets/dependencies/python/pytho
 
 ## 已知限制
 
-- CLS 一步依赖 `mcp__cua_repl` 的内置浏览器取登录会话，而 lark-agent 关闭了浏览器工具，在 lark-agent 里这一步目前走不通，需要单独设计。
+- CLS 一步依赖 `mcp__cua_repl` 的内置浏览器取登录会话，而 lark-agent 关闭了浏览器工具，在 lark-agent 里这一步目前走不通，需要单独设计；技能还没有为此做降级处理（在 lark-agent 里，进度表追加和验收可用，CLS 草稿和导入不可用）。
 - 仅限 Windows x64（便携 Python）。
 
 ## 依赖版本
