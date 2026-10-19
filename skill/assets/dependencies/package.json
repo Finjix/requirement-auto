@@ -1,9 +1,0 @@
-{
-  "name": "gof-requirement-runtime",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Build-only locked dependencies for the offline GOFCN skill package",
-  "dependencies": {
-    "@larksuite/cli": "1.0.98"
-  }
-}

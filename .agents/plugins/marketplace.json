@@ -1,0 +1,20 @@
+{
+  "name": "requirement-auto",
+  "interface": {
+    "displayName": "requirement-auto"
+  },
+  "plugins": [
+    {
+      "name": "requirement-auto",
+      "source": {
+        "source": "local",
+        "path": "./plugins/requirement-auto"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

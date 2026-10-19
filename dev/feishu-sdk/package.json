@@ -1,0 +1,25 @@
+{
+  "name": "requirement-auto-feishu-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Feishu SDK layer of the requirement-auto plugin: device-flow login, per-user token store, allowlisted API calls, MCP server and the bridge used by the Python scripts. Bundled into plugins/requirement-auto/server/dist.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "node build.mjs",
+    "test": "npm run typecheck && npm run build && node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.75.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

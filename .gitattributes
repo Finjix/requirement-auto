@@ -1,2 +1,3 @@
 # Runtime hashes must survive Git checkout without line-ending conversion.
-skill/assets/dependencies/** -text
+plugins/requirement-auto/skills/gof-requirement/assets/dependencies/** -text
+plugins/requirement-auto/server/dist/** -text

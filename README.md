@@ -1,33 +1,87 @@
 # requirement-auto
 
-GOFCN 素材需求自动化智能体技能（Agent Skill），通过包内飞书 CLI 追加创意进度表并验收，生成 CSV、保存 CLS 未发布草稿、导入脚本和生成可复制群消息。
+GOFCN 素材需求自动化的 **Codex 插件**（可被 ChatGPT/Codex 桌面版或 lark-agent 加载）：通过飞书 SDK 防覆盖追加创意进度表并验收，生成 CSV，保存 CLS 未发布草稿、导入脚本，生成可复制群消息。飞书用户登录用设备授权，登录信息按用户隔离存放。
 
-## 目录与发布
+## 目录
 
-- `skill/`：完整技能，包含 `SKILL.md`、`agents/`、`scripts/`、`references/` 和 `assets/`（含运行依赖）。
-  - `scripts/batch.py`：离线批次处理与验收；`scripts/feishu_api.py`：飞书操作；`scripts/cls_api.py` 与 `cls_api.js`：CLS 请求及回读校验。
-  - `scripts/skill_runtime.py doctor`：运行时自检。
-  - `references/`：按流程查阅的说明文档；`assets/`：CSV 模板与 `dependencies/` 便携运行依赖。
-- `dev/`：本地开发专用目录，包含测试、依赖准备及打包工具，不进入发布包。
+```
+.agents/plugins/marketplace.json     本仓库就是一个 marketplace（名字 requirement-auto）
+plugins/requirement-auto/            插件本体，安装和打包的就是这个目录
+  plugin.json                        可移植插件清单（Agent Plugins 1.0.0）
+  mcp.json                           stdio MCP 服务 feishu-auth：飞书登录工具
+  server/dist/                       桥和 MCP 服务的单文件产物（提交入库，装好即用）
+  skills/gof-requirement/            技能：SKILL.md、references/、scripts/（Python）、assets/（CSV 模板、便携 Python）
+dev/                                 开发专用，不进入发布包
+  feishu-sdk/                        桥和 MCP 服务的 TypeScript 源码、esbuild 脚本、测试
+  tests/                             Python 测试
+  run_tests.py  package_plugin.py  runtime_manifest.py
+docs/lark-agent-integration.md       lark-agent 日后接入本插件要做的事
+```
 
-运行时直接使用包内 Python、Node 和飞书 CLI，无需安装依赖或修改系统 PATH。首次使用飞书和 CLS 仍需正常配置、登录及授权。
+## 它怎么工作
 
-发布时直接将整个 `skill` 文件夹压缩为 ZIP，再按需改名；不包含 `.state/`、缓存和个人凭据。也可运行 `skill/assets/dependencies/python/python.exe -B dev/package_skill.py --output dev/dist/requirement-auto-windows-x64.zip`，离线校验后打包并生成 SHA-256。
+- **飞书全部走 SDK**：不再有 lark-cli。`server/dist/bridge.mjs`（基于 `@larksuiteoapi/node-sdk`）只暴露白名单操作：读取 Wiki/文档/表格规则、导出完整 XLSX、防覆盖写入（`allow_overwrite:false`，服务端拒绝非空目标）。Python 脚本 `feishu_api.py` 负责"校验 → 写 → 回读 → 验收"的编排，通过桥访问飞书。
+- **登录用设备授权**：`feishu_auth_login` 返回授权链接和验证码，用户在自己的浏览器里确认，`feishu_auth_poll` 保存登录。刷新令牌一次性有效，续期在文件锁内进行。宿主声明了用户的 Open ID 时，授权账号不是该用户会被拒绝。
+- **按用户隔离**：宿主给每个 Codex 进程设 `LARK_AGENT_USER_DIR=<user/用户名>`，该用户的飞书登录和批次都在 `<用户目录>/requirement-auto/{feishu,batches}`。工具和脚本都不接受用户标识参数，令牌不出现在任何输出里。
+  **边界**：lark-agent 的 Codex 是 `danger-full-access`，仍是同一个 Windows 账号。这是防串号和误操作的逻辑隔离，防不住被提示词注入后主动去读别人目录的模型。
+- **MCP 只管登录**：业务编排留在 Python，因为追加的顺序校验不能拆成模型逐步调用。
 
-批次中间文件默认保存在系统临时目录，由技能内部使用，不自动清理。正常交付展示业务结果、CLS 草稿入口和可复制群消息。
+## 安装与使用
 
-测试：`skill/assets/dependencies/python/python.exe -B dev/run_tests.py`。新增开发工具和测试统一放入 `dev/`，不要在仓库根目录或 `skill/` 中建立开发工具、测试或临时产物目录。技能运行所需的脚本、资源和依赖保留在 `skill/`。
+需要 Windows x64、Node.js 24+。
+
+```bash
+codex plugin marketplace add <本仓库路径>
+codex plugin add requirement-auto@requirement-auto
+```
+
+- **单机用 Codex 桌面版**：插件自带的 `feishu-auth` 服务用 `PLUGIN_DATA` 存登录；应用凭证写进该目录的 `app.json`（`{"appId":"…","appSecret":"…"}`，面向该应用的管理员，注意文件权限）。MCP 进程拿不到桌面环境变量（见下）。
+- **lark-agent**：由宿主按轮覆盖 MCP 配置，见 [docs/lark-agent-integration.md](docs/lark-agent-integration.md)。
+- 改了插件后要让已装副本生效：`codex plugin remove requirement-auto@requirement-auto` 再 `add`（或提升 `plugin.json` 的 version）。
+
+### Codex 0.163.0 的实测结论
+
+- 插件的 `mcp.json` 必须含 `$schema`，且 stdio 条目只允许 `type/command/args/env/cwd`；多写任何键（比如 `env_vars`）整个服务会被静默丢弃。
+- 插件声明的 MCP 进程只拿到 PATH、`PLUGIN_ROOT`、`PLUGIN_DATA` 和静态 `env`；宿主环境变量不会传进去，`${VAR}` 也不展开（只展开 `${PLUGIN_ROOT}`）。所以按用户传目录必须由宿主在配置里注册同名 MCP 服务，并关掉插件自带的那一个。
+- 技能在 Codex 里的名字带命名空间：`requirement-auto:gof-requirement`。
+
+## 开发与测试
+
+```bash
+cd dev/feishu-sdk && npm install        # 一次
+npm test                                # 类型检查 → 打包到 plugins/.../server/dist → node:test
+```
+
+整套检查（运行时清单、TS、Python、插件结构）：
+
+```bash
+plugins/requirement-auto/skills/gof-requirement/assets/dependencies/python/python.exe -I -B dev/run_tests.py
+```
+
+发布：`python.exe -I -B dev/package_plugin.py --output dev/dist/requirement-auto-windows-x64.zip`（先校验结构，再打包并生成 SHA-256）。直接复制 `plugins/requirement-auto` 目录也可以；不要带上 `.state`、批次、`auth.json`、`app.json`。
+
+新增开发工具和测试放进 `dev/`；插件运行需要的脚本、资源和依赖放在 `plugins/requirement-auto/`。`assets/dependencies/` 的文件有摘要清单，改了运行时文件要重新 `dev/runtime_manifest.py write`。
+
+## 还没做、需要你来验证的事
+
+离线测试（mock 飞书服务）不能代替真实验收，以下都需要真实飞书应用和你的授权，我没有运行：
+
+1. 飞书应用后台：给应用的**用户身份**开通 `wiki:wiki:readonly sheets:spreadsheet:readonly sheets:spreadsheet:read sheets:spreadsheet:write_only sheets:spreadsheet drive:export:readonly docx:document:readonly offline_access`（隔离探测另需 `sheets:spreadsheet:create`），发布版本。
+2. 真实设备授权登录：`feishu_auth_login` → 浏览器确认 → `feishu_auth_poll`。`oauth/v1/device_authorization` 和 `sheet_ai/.../invoke_write` 没有公开文档，只有官方 lark-cli 在用，协议来自它的开源代码和 `--dry-run` 抓取。
+3. **在隔离表上重做防覆盖探测**：`feishu_api.py login start --probe-scope` → `probe`。旧的 lark-cli 时代记录全部作废。探测时记下服务端"非空拒写"的真实错误码和文案，补进 `dev/feishu-sdk/src/api.ts` 的 `OCCUPIED` 判断。
+4. 在测试进度表上走一遍全流程。
+
+## 已知限制
+
+- CLS 一步依赖 `mcp__cua_repl` 的内置浏览器取登录会话，而 lark-agent 关闭了浏览器工具，在 lark-agent 里这一步目前走不通，需要单独设计。
+- 仅限 Windows x64（便携 Python）。
 
 ## 依赖版本
 
-运行平台：64 位 Windows。
-
 | 依赖 | 版本 |
 |---|---|
-| Python | 3.13.15 |
-| openpyxl | 3.1.5 |
-| et_xmlfile | 2.0.0 |
-| Node.js | 24.21.0 |
-| 飞书 CLI（@larksuite/cli） | 1.0.98 |
-
-完整依赖、固定版本锁文件、文件摘要及许可证均保留在 `skill/assets/dependencies/`。
+| Python（便携） | 3.13.15 |
+| openpyxl / et_xmlfile | 3.1.5 / 2.0.0 |
+| Node.js（系统，运行桥和 MCP） | ≥ 24 |
+| @larksuiteoapi/node-sdk | 1.75.0（已打包进 `server/dist`） |
+| @modelcontextprotocol/sdk | 1.32.1（已打包进 `server/dist`） |

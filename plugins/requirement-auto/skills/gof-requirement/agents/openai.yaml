@@ -1,0 +1,6 @@
+interface:
+  display_name: "GOFCN 需求自动化"
+  short_description: "通过插件内飞书 SDK 桥追加进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 草稿及导入脚本"
+  default_prompt: "使用 $gof-requirement 默认完成进度表、CSV、CLS 未发布草稿、允许的脚本导入和可复制群消息，不询问处理范围；澄清阶段只问缺失信息，收齐后在完整计划中统一说明所有字段及安排，我回复执行计划后连续执行，遇到实际阻碍才提问。"
+policy:
+  allow_implicit_invocation: true
