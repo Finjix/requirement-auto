@@ -23,8 +23,7 @@ const ENTRY_POINTS = ['bridge', 'mcp', 'gof'].map(name => `server/dist/${name}.m
 const REQUIRED_FILES = [
   'plugin.json', 'mcp.json', ...ENTRY_POINTS,
   'skills/gof-requirement/SKILL.md', 'skills/gof-requirement/agents/openai.yaml',
-  'skills/gof-requirement/scripts/cls_api.js', 'skills/gof-requirement/assets/csv-template.csv',
-  'skills/gof-requirement/references/feishu-sdk-workflow.md',
+  'skills/gof-requirement/assets/csv-template.csv', 'skills/gof-requirement/references/feishu-sdk-workflow.md',
 ];
 
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));

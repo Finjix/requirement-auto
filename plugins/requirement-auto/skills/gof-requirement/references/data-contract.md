@@ -2,7 +2,7 @@
 
 `gof.mjs batch` 无网络功能、不写在线表、不修改输入 XLSX；XLSX 由插件自带的只读解析器读取（不依赖任何外部库或其他运行时）。失败输出 JSON `status=blocked` 并非零退出。
 
-默认飞书路径是[SDK 桥](feishu-sdk-workflow.md)，通过 `gof.mjs feishu` 解析实际目标、导出完整快照、生成/匹配包含 api_plan 的计划及安全追加。新批次包含不可变 api-plan.json，不直接通过 gof.mjs batch prepare 创建 UI 批次。CLS 见[接口操作参考](api-workflow.md)；`gof.mjs cls` 离线生成/检查请求，`cls_api.js` 在当前 CLS 同源会话执行限定 HTTP。历史 API/UI 清单和事件仍可读取，不能移除不可变 api-plan.json 来绕过保护。`cls-check --observations` 与原 --ui 二选一，表示同样的真实观察条件。
+默认飞书路径是[SDK 桥](feishu-sdk-workflow.md)，通过 `gof.mjs feishu` 解析实际目标、导出完整快照、生成/匹配包含 api_plan 的计划及安全追加。新批次包含不可变 api-plan.json，不直接通过 gof.mjs batch prepare 创建 UI 批次。CLS 见[接口操作参考](api-workflow.md)；`gof.mjs cls` 离线生成/检查请求，`gof.mjs cls run` 用限定的 HTTP 适配器执行（登录见 cls-session.md）。历史 API/UI 清单和事件仍可读取，不能移除不可变 api-plan.json 来绕过保护。`cls-check --observations` 与原 --ui 二选一，表示同样的真实观察条件。
 
 API 操作前追加 cls_api_attempt（action=save_draft/import_scripts、operation_id、observations），同组同动作已有尝试即拒绝再次请求。API draft_saved/scripts_imported 证据要求 transport=cls_api、draft_id、operation/receipt 的本批绝对路径；记录时重新核对完整回读及原批需求，不要求截图。历史 UI 证据仍保留截图要求。飞书 verify 的 API 证据为 `{ "transport": "feishu_api", "proof": "<本批规则证明绝对路径>" }`，并非自填成功布尔值；record append_verified/resumed 时置于 evidence.validations。
 
@@ -74,15 +74,17 @@ verify 允许飞书自动把既有筛选范围的末行延长到本批末行，�
 ```text
 node <skill>/../../server/dist/gof.mjs batch status --batch <批次目录>
 node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step cls_started --group 01
-node <skill>/../../server/dist/gof.mjs batch cls-check --batch <批次目录> --group 01 --action save_draft --ui ui.json
+node <skill>/../../server/dist/gof.mjs cls observe --action save_draft --output observations.json
+node <skill>/../../server/dist/gof.mjs batch cls-check --batch <批次目录> --group 01 --action save_draft --observations observations.json
 node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step draft_saved --group 01 --evidence evidence.json
-node <skill>/../../server/dist/gof.mjs batch cls-check --batch <批次目录> --group 01 --action import_scripts --ui ui.json
+node <skill>/../../server/dist/gof.mjs cls observe --action import_scripts --draft <草稿ID> --output observations.json
+node <skill>/../../server/dist/gof.mjs batch cls-check --batch <批次目录> --group 01 --action import_scripts --observations observations.json
 node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step scripts_imported --group 01 --evidence evidence.json
 node <skill>/../../server/dist/gof.mjs batch record --batch <批次目录> --step handoff --group 01 --evidence evidence.json
 node <skill>/../../server/dist/gof.mjs batch message --batch <批次目录>
 ```
 
-ui.json 表示实际观察的布尔事实：logged_in、can_create、unpublished 必须 true，保存时 required_complete 必须 true；导入另需 draft_saved=true、import_enabled=true、import_would_publish=false。save_result=failure/unknown 则停止。publish 和未许可 action 永远拒绝。守卫不操纵网页、不使禁用项启用。
+observations.json（接口批次由 `cls observe` 生成；旧的 UI 批次用 --ui ui.json）表示实际观察的布尔事实：logged_in、can_create、unpublished 必须 true，保存时 required_complete 必须 true；导入另需 draft_saved=true、import_enabled=true、import_would_publish=false。save_result=failure/unknown 则停止。publish 和未许可 action 永远拒绝。守卫不操纵网页、不使禁用项启用。
 
 draft_saved evidence 必须含 confirmed=true、unpublished=true、实际 CLS url；新 API 证据必须有 transport=cls_api、draft_id、operation/receipt 的本批绝对路径，通过完整回读验证，无需 screenshot。历史 UI 证据仍要求已存在截图；可选 requirement_number 必须是实际读取的正式 GOFCN 编号。scripts_imported evidence 还需 quantity、names 与该组完整一致。handoff 和 blocked evidence 的 reason 必填。保存结果未知不能填 confirmed=true。
 

@@ -1,11 +1,31 @@
-# CLS 浏览器会话读取
+# CLS 登录与会话
 
-浏览器只用于取得正常 CLS 登录会话及执行受限适配器的同源 HTTP。飞书业务全部走插件内的 SDK 桥；CLS 不通过 UI 填写、导入、保存或截图验收。
+CLS 在公司单点登录之后，没有设备授权或本地回调可用，登录只能由用户在正常网页上完成。本技能不依赖 Codex 的内置浏览器或电脑控制：`gof.mjs cls login` 用本机已安装的 Chrome 或 Edge（也可用环境变量 `REQUIREMENT_AUTO_BROWSER` 指定浏览器的绝对路径）打开 CLS，用户在窗口里正常登录。命令只观察页面自己发出的 CLS API 请求里的 Authorization，用 `/api/userinfo` 确认服务端接受它，然后关闭浏览器。之后的建单、导入、回读全部是 HTTP 接口请求，不再需要浏览器。
 
-使用 `mcp__cua_repl` 的内置浏览器 `iab`，初始化和受支持 CDP API 以当次工具文档为准。只操作 `https://creative.centurygames.cn` 的普通页面。未登录时由用户完成正常网页登录，不代填密码、不自动完成 SSO 授权。
+## 命令
 
-通过 Network 观察普通页面请求中的 Authorization，只保留在 REPL 内存。禁止导出 Cookie、从 localStorage/隐藏 store/凭据文件取值，禁止打印完整 Network 事件、认证头或包含令牌的执行表达式。取得会话后关闭 Network 观察；结束时清空认证及事件变量。
+```text
+node <skill>/../../server/dist/gof.mjs cls session                 # 用已保存的登录检查一次，不弹窗口
+node <skill>/../../server/dist/gof.mjs cls login [--wait 90]       # 先静默检查；没有登录就弹出窗口等用户登录
+```
 
-用 [CLS 接口参考](api-workflow.md) 中的局部 module 包装加载受限适配器。仅返回脱敏 catalog 和验收 receipt；不保存带认证信息的脚本表达式。跨 tab 后重新确认 CLS origin。登录失效时停止，由用户正常重新登录；不切换其他浏览器或通过 API Key 绕过权限。
+- 所有联网的 `cls` 子命令（`catalog`、`observe`、`run`、`read-draft`、`verify`）都会自己静默取得登录，不需要事先运行 `session`。没有可用登录时它们停止并提示运行 `cls login`，不会弹窗口。
+- `cls login`：先静默检查 12 秒；已登录就直接返回，不开窗口。否则在**运行本命令的这台电脑**上打开浏览器窗口，最多等 `--wait` 秒（默认 90，最大 600）。用户完成登录后窗口自动关闭，命令返回 `logged_in`。等待超时返回 `waiting`，窗口保持打开，用户登录完再运行一次 `cls login` 即可接上；用户关掉窗口则报阻塞。
+- 调用工具时把命令的超时设为 `--wait` 加 30 秒以上，否则命令会在等待中被工具终止（窗口仍保留，下一次 `cls login` 会接上）。
+- 登录在窗口里进行，Agent 只能告诉用户“请在弹出的浏览器窗口里登录公司账号”，不能代填密码、不能自动完成单点登录授权，也不通过 API Key 或其他账号绕过。
 
-只读调查确认：CLS 正常登录跳至 DSC Admin，公司 SSO 支持网页登录。公开前端未提供已验证的 CLI/device flow/localhost 回调支持，因此本 skill 不实现替代登录。未来需有权访问的正式接入文档和批准配置再评估。
+## 令牌和浏览器的边界
+
+- 令牌只在命令进程内存里，不写盘、不打印、不进批次记录或日志；记录里出现认证字段会被拒绝。每个命令结束即丢弃，下一个命令重新从浏览器取。
+- 浏览器的数据放在用户自己目录下的 `cls/browser-profile`（宿主设置了 `LARK_AGENT_USER_DIR` 时是 `<用户目录>/requirement-auto/cls/browser-profile`），登录保存在这里，各用户互不相通。这是浏览器自己的存储，本技能不读取其中的 Cookie、本地存储或任何文件。
+- 只观察 `https://creative.centurygames.cn/api/` 的请求头，不修改页面、不点击、不输入、不读取页面内容、不截图。
+- 同一个用户的 `cls` 命令按顺序执行，不要并行：同一份浏览器资料同一时间只能有一个浏览器。
+- 登录失效时命令停止并要求重新 `cls login`；不切换其他浏览器、账号或绕过权限。
+
+## 环境
+
+- 弹窗口需要有桌面会话的电脑（lark-agent 在这台电脑的桌面上启动时满足）。远程用户在飞书里对话时，窗口出现在运行 lark-agent 的那台电脑上，需要有人在那台电脑前完成登录；目前没有把登录窗口转发给远程用户的办法。
+- 静默检查不需要桌面，只需要装有 Chrome 或 Edge。
+- 接口请求由 Node 发出，不走浏览器的网络设置。公司网络要求代理时，在运行环境里设置 `NODE_USE_ENV_PROXY=1` 和 `HTTPS_PROXY`。
+
+只读调查确认：CLS 正常登录跳至 DSC Admin，公司 SSO 支持网页登录；公开前端没有已验证的 CLI/device flow/localhost 回调支持，因此本技能不实现替代登录。未来如有正式接入文档和批准配置再评估。

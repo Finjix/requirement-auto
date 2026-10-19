@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepare, record, status, report, message } from '../src/gof/batch.ts';
+import { createClsAdapter } from '../src/gof/cls-adapter.ts';
 import { clsPreview, operation } from '../src/gof/cls.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
@@ -108,19 +109,14 @@ test('an operation and its receipts are checked as strictly as before', () => {
   assert.throws(() => writeJsonNew(opPath, op), /EEXIST/);
 });
 
-test('the browser-side adapter accepts an operation built here (same canonical form and digest)', async () => {
+test('the adapter checks an operation built here (same canonical form and digest) before it sends anything', async () => {
   const dir = groupReady();
   const op = operation(dir, '01', 'save_draft', catalog, observations);
-  const source = fs.readFileSync(path.join(here(), '..', '..', '..', 'plugins', 'requirement-auto', 'skills', 'gof-requirement', 'scripts', 'cls_api.js'), 'utf8');
-  const mod: { exports: { createClsAdapter?: (c: any) => any } } = { exports: {} };
-  new Function('module', source)(mod);
-  const adapter = mod.exports.createClsAdapter!({ origin: 'https://creative.centurygames.cn', authorization: 'Bearer test', fetch: async () => { throw new Error('no network'); }, crypto: globalThis.crypto });
+  const adapter = createClsAdapter({ origin: 'https://creative.centurygames.cn', authorization: 'Bearer test', fetch: async () => { throw new Error('no network'); } });
   // createDraft validates the operation before any request: a wrong digest is refused, a right one gets as far as the catalog read, which has no network here.
   await assert.rejects(() => adapter.createDraft({ ...op, operation_id: '0'.repeat(64) }), /操作文件摘要错误/);
   await assert.rejects(() => adapter.createDraft(op), /CLS 读取失败/);
 });
-
-function here(): string { return path.dirname(fileURLToPath(import.meta.url)); }
 
 test('the cls command line builds and saves an operation file', async () => {
   const dir = groupReady();

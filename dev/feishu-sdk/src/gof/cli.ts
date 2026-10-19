@@ -2,7 +2,9 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { clsCheck, message, preflight, prepare, record, report, status, verify } from './batch.ts';
+import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
+import * as online from './cls-online.ts';
 import { Bridge, document, execute, login, planWithApi, probe, reconcile, recomputeApiPlan, takeSnapshot } from './feishu.ts';
 import { makePlan } from './plan.ts';
 import { Snapshot } from './snapshot.ts';
@@ -127,6 +129,36 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge): P
   }
 }
 
+const intOf = (v: unknown, flag: string): number => { need(typeof v === 'string' && /^[1-9]\d*$/.test(v), `--${flag} 需要正整数`); return Number(v); };
+
+const CLS_ONLINE = ['login', 'session', 'catalog', 'observe', 'run', 'read-draft', 'verify'];
+
+/** The commands that talk to CLS: they log in through the browser on this user's profile and work over HTTP (see cls-online.ts). */
+async function clsOnlineCommand(command: string, args: string[], via: online.Online): Promise<Result> {
+  switch (command) {
+    case 'login': {
+      const wait = str(parse(args, { wait: { type: 'string' } }).values.wait);
+      return online.login(via, wait === undefined ? 90 : Number(wait));
+    }
+    case 'session': parse(args, {}); return online.sessionStatus(via);
+    case 'catalog': return online.catalog(via, mustHave(parse(args, { output: { type: 'string' } }).values.output, 'output'));
+    case 'observe': {
+      const { values } = parse(args, { action: { type: 'string' }, draft: { type: 'string' }, output: { type: 'string' } });
+      return online.observe(via, mustHave(values.action, 'action'), mustHave(values.output, 'output'), values.draft === undefined ? undefined : intOf(values.draft, 'draft'));
+    }
+    case 'run': {
+      const { values } = parse(args, { batch: { type: 'string' }, operation: { type: 'string' }, output: { type: 'string' } });
+      return online.run(via, mustHave(values.batch, 'batch'), mustHave(values.operation, 'operation'), mustHave(values.output, 'output'));
+    }
+    case 'read-draft': return online.readDraft(via, intOf(parse(args, { id: { type: 'string' } }).values.id, 'id'));
+    case 'verify': {
+      const { values } = parse(args, { batch: { type: 'string' }, operation: { type: 'string' }, draft: { type: 'string' }, output: { type: 'string' } });
+      return online.verifyDraft(via, mustHave(values.batch, 'batch'), mustHave(values.operation, 'operation'), intOf(values.draft, 'draft'), mustHave(values.output, 'output'));
+    }
+    default: throw new Blocked(`未知的 cls 子命令：${command}`);
+  }
+}
+
 function clsCommand(args: string[]): Result {
   const { values } = parse(args, { preview: { type: 'boolean' }, request: { type: 'string' }, batch: { type: 'string' }, group: { type: 'string' },
     action: { type: 'string' }, catalog: { type: 'string' }, observations: { type: 'string' }, output: { type: 'string' } });
@@ -145,17 +177,22 @@ function clsCommand(args: string[]): Result {
   return { status: 'operation_ready', operation: output, operation_id: op.operation_id, native_defaults: op.native_defaults };
 }
 
-export async function main(argv: string[], bridge: Bridge = new Bridge()): Promise<{ result: Result; code: number }> {
+export async function main(argv: string[], bridge: Bridge = new Bridge(), via: online.Online = online.realOnline): Promise<{ result: Result; code: number }> {
   try {
     const [group, command, ...rest] = argv;
     let result: Result;
     if (group === 'batch') result = batchCommand(command ?? '', rest);
     else if (group === 'feishu') result = await feishuCommand(command ?? '', rest, bridge);
-    else if (group === 'cls') result = clsCommand(argv.slice(1));
+    else if (group === 'cls') result = CLS_ONLINE.includes(command ?? '') ? await clsOnlineCommand(command!, rest, via) : clsCommand(argv.slice(1));
     else throw new Blocked('用法：gof.mjs <batch|feishu|cls> <命令> [参数]');
     const blocked = ['conflict', 'partial'].includes(result.status) || (group === 'feishu' && result.status === 'blocked');
     return { result, code: blocked ? 2 : 0 };
   } catch (error) {
+    if (error instanceof ClsError) {
+      // After a write of unknown outcome the caller needs to know which draft and operation to read back.
+      return { result: { status: 'blocked', reason: error.message, ...(error.kind === 'unknown' ? { unknown_result: true } : {}),
+        ...(error.draftId ? { draft_id: error.draftId } : {}), ...(error.operationId ? { operation_id: error.operationId } : {}) }, code: 2 };
+    }
     if (error instanceof Blocked || error instanceof Error) return { result: { status: 'blocked', reason: error.message }, code: 2 };
     return { result: { status: 'blocked', reason: String(error) }, code: 2 };
   }

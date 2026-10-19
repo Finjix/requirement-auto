@@ -27,7 +27,7 @@ export function compareCodePoints(a: string, b: string): number {
   return x.length - y.length;
 }
 
-/** Sorted-key compact JSON. The CLS adapter in the browser (cls_api.js) recomputes digests of this form byte for byte. */
+/** Sorted-key compact JSON, the form every digest and seal in a batch is computed over. */
 export function canonical(value: unknown): string {
   if (value === null || value === undefined) return 'null';
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;

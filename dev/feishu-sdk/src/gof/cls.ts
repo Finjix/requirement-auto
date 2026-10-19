@@ -8,7 +8,7 @@ import { Blocked, canonical, CSV_HEADERS, FIXED_TAG, isInside, need, readJson, s
 /** Offline CLS operation builder and receipt validator. Never stores credentials or sends HTTP. */
 
 type Obj = Record<string, any>;
-const TAG_NAMES = [FIXED_TAG, '玩法卖点（单选必选）/展示向/展示向'];
+export const TAG_NAMES = [FIXED_TAG, '玩法卖点（单选必选）/展示向/展示向'];
 
 function unique<T>(items: T[], predicate: (item: T) => boolean, label: string): T {
   const found = items.filter(predicate);
@@ -78,7 +78,7 @@ export function buildPayload(group: Group, catalog: Obj): [Obj, number, Obj] {
 }
 
 /** RFC 4180 reading of the generated CSV. */
-function parseCsv(text: string): string[][] {
+export function parseCsv(text: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
