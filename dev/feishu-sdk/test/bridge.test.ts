@@ -10,7 +10,7 @@ import { tempDir } from './helpers/tmp.ts';
 import { clock } from './helpers/clock.ts';
 import { MockFeishu } from './helpers/mock-feishu.ts';
 
-test('the bridge version is the one the Python scripts expect, and every command is known to the entry point', () => {
+test('the bridge version is the one the gof command line expects, and every command is known to the entry point', () => {
   assert.equal(BRIDGE_VERSION, 'feishu-sdk-bridge/1');
   for (const name of INPUT_COMMANDS) assert.ok((COMMANDS as readonly string[]).includes(name), name);
   for (const name of ['info', 'auth-status', 'auth-logout']) assert.ok(!INPUT_COMMANDS.has(name), `${name} must not wait on stdin`);
@@ -32,7 +32,7 @@ test('unknown commands and malformed arguments are refused, not guessed', async 
   } finally { fs.rmSync(env.LARK_AGENT_USER_DIR, { recursive: true, force: true }); }
 });
 
-test('the scope check reports what is granted and what is missing without the word "ok", which the Python side reads as failure', async () => {
+test('the scope check reports what is granted and what is missing without the word "ok", which the gof command line reads as failure', async () => {
   const mock = await new MockFeishu().start();
   const dir = tempDir('ra-br-');
   try {

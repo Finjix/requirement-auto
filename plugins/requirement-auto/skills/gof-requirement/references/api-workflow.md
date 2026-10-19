@@ -16,7 +16,7 @@
 
 ```javascript
 // source 为本地 cls_api.js；authorization 来自已观察的请求，仅存内存。
-// operation 为 cls_api.py 生成的本组 JSON；不要把执行表达式写入文件。
+// operation 为 gof.mjs cls 生成的本组 JSON；不要把执行表达式写入文件。
 const expression = `(async()=>{
   const module={exports:{}};
   ${source}
@@ -29,14 +29,14 @@ const response = await cdp.send('Runtime.evaluate', {
 });
 ```
 
-先只读 `readCatalog`，保存已脱敏 catalog（不含邮箱、令牌或用户全量信息），由 `cls_api.py` 匹配本次字段。供应商只接受完整名称或唯一括号别名；创意人严格对应审核人；项目按 code=GOFCN、方向按项目和名称、任务类型按实际选项匹配。不硬编码此前的 94/390/663/653。未指定的报价/币种沿用已观察到的原生默认 0/cny，并在完整计划标为系统默认，不冒充用户确认报价；其他可选字段留空，用户指定时才匹配并填写。
+先只读 `readCatalog`，保存已脱敏 catalog（不含邮箱、令牌或用户全量信息），由 `gof.mjs cls` 匹配本次字段。供应商只接受完整名称或唯一括号别名；创意人严格对应审核人；项目按 code=GOFCN、方向按项目和名称、任务类型按实际选项匹配。不硬编码此前的 94/390/663/653。未指定的报价/币种沿用已观察到的原生默认 0/cny，并在完整计划标为系统默认，不冒充用户确认报价；其他可选字段留空，用户指定时才匹配并填写。
 
-完整计划前执行 `cls_api.py --preview --request request.json --catalog catalog.json`。只输出本次每组拟用字段和 ID、创意人及系统默认值，不创建工单或操作文件；可选字段、匹配歧义和报价/日期问题必须在这里解决，不能延后到执行阶段。
+完整计划前执行 `gof.mjs cls --preview --request request.json --catalog catalog.json`。只输出本次每组拟用字段和 ID、创意人及系统默认值，不创建工单或操作文件；可选字段、匹配歧义和报价/日期问题必须在这里解决，不能延后到执行阶段。
 
 每组的顺序：
 
-1. 进度表已完整验证后 `batch.py record --step cls_started --group 01`。
-2. 生成保存操作：`cls_api.py --batch <批次> --group 01 --action save_draft --catalog catalog.json --observations observations.json --output <批次>/save-operation.json`。observations 采用原 cls-check 条件；必须来自真实观察。
+1. 进度表已完整验证后 `gof.mjs batch record --step cls_started --group 01`。
+2. 生成保存操作：`gof.mjs cls --batch <批次> --group 01 --action save_draft --catalog catalog.json --observations observations.json --output <批次>/save-operation.json`。observations 采用原 cls-check 条件；必须来自真实观察。
 3. 请求前 `record --step cls_api_attempt --group 01 --evidence attempt.json`。attempt.json 包含 action、operation_id 和 observations。此记录禁止跨会话重复执行同一动作。
 4. 同源调用 `createDraft(operation)`。它重新检查账号和权限，POST `/api/workflow/script/save` 固定 status=-2，不传既有 id；随后 GET 回读。保存返回 receipt 到本批新文件，从草稿 ID 得到真实入口 URL，无需打开业务页或截图。
 5. `record draft_saved`，evidence 带 confirmed/unpublished、transport=cls_api、draft_id、真实 URL、operation 文件和 receipt 文件，及接口实际返回的 requirement_number（如有）。脚本重新验收所有字段和尝试顺序；缺少或不符的回读不能用成功布尔值代替。

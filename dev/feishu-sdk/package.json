@@ -3,14 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Feishu SDK layer of the requirement-auto plugin: device-flow login, per-user token store, allowlisted API calls, MCP server and the bridge used by the Python scripts. Bundled into plugins/requirement-auto/server/dist.",
+  "description": "Feishu SDK layer of the requirement-auto plugin: device-flow login, per-user token store, allowlisted API calls, MCP server, the bridge and the gof command line (the skill's business logic). Bundled into plugins/requirement-auto/server/dist.",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "build": "node build.mjs",
-    "test": "npm run typecheck && npm run build && node --test test/*.test.ts"
+    "test": "npm run typecheck && npm run build && node --test test/*.test.ts && node ../package_plugin.mjs --check"
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.75.0",

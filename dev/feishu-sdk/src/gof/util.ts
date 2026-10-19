@@ -19,7 +19,7 @@ export const TARGET = `https://centurygames.feishu.cn/wiki/${NODE}`;
 export const FIXED_TAG = '玩法卖点（单选，必选）/展示向/展示向';
 export const CSV_HEADERS = ['脚本名称', '脚本内容', '创意标签'];
 
-/** Unicode code point order, which is what the Python scripts sorted keys by. */
+/** Unicode code point order, which is the order the original scripts sorted keys in, and so what existing digests were computed over. */
 export function compareCodePoints(a: string, b: string): number {
   const x = Array.from(a, ch => ch.codePointAt(0)!);
   const y = Array.from(b, ch => ch.codePointAt(0)!);

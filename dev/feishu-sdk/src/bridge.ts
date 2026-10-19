@@ -35,7 +35,7 @@ function strings(value: unknown, name: string): string[] {
 }
 
 /**
- * One command of the bridge the Python scripts use. The user this serves comes from the environment the host started the process
+ * One command of the bridge (the gof command line calls this in process). The user this serves comes from the environment the host started the process
  * with; the input has no way to name another one. Never returns a token.
  */
 export async function runBridge(command: string, input: unknown, context: BridgeContext = {}): Promise<BridgeReply> {

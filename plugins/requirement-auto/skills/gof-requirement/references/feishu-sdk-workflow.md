@@ -1,19 +1,18 @@
 # 飞书 SDK 桥
 
-适用于飞书文档读取、测试进度表完整导出、获批追加和下拉规则验收。业务命令统一通过 `scripts/feishu_api.py`，它调用插件内的 `server/dist/bridge.mjs`（基于飞书官方 Node SDK `@larksuiteoapi/node-sdk`，只有白名单操作）。不直接调用通用写接口、不切换浏览器兜底，也不使用 lark-cli。
+适用于飞书文档读取、测试进度表完整导出、获批追加和下拉规则验收。业务命令统一通过 `server/dist/gof.mjs feishu …`，它在同一进程里调用插件内的 SDK 桥（与 `server/dist/bridge.mjs` 同一份代码）（基于飞书官方 Node SDK `@larksuiteoapi/node-sdk`，只有白名单操作）。不直接调用通用写接口、不切换浏览器兜底，也不使用 lark-cli。
 
 ## 运行条件
 
-- 系统已装 Node.js 24+（桥和 MCP 服务都用它）；Python 用包内 `assets/dependencies/python/python.exe`，版本固定、文件有摘要清单。
+- 系统已装 Node.js 24+（桥和 MCP 服务都用它）；没有其他运行时。
 - 宿主通过环境变量告诉进程"这是谁的数据目录、用哪个飞书应用"：`LARK_AGENT_USER_DIR`（用户目录，必须是绝对路径）、`LARK_AGENT_USER_OPEN_ID`（可选，该用户的 Open ID）、`FEISHU_APP_ID` / `FEISHU_APP_SECRET`。用户数据放在 `<用户目录>/requirement-auto/{feishu,batches}`。
 - 没有宿主（单机直接用）时数据放 `PLUGIN_DATA`，再退回 `~/.requirement-auto/default`；应用凭证可写在该目录的 `app.json`（`{"appId":"…","appSecret":"…"}`）。有宿主时从不读 `app.json`。
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/skill_runtime.py doctor     无网络：校验 Python 摘要、桥文件、Node 版本
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py doctor        查询当前用户的登录与必要权限
+node <skill>/../../server/dist/gof.mjs feishu doctor        检查 Node、桥、当前用户的登录与必要权限
 ```
 
-缺文件、版本/摘要不符或平台不是 Windows x64 时停止，不运行 npm install、不下载、不用系统 CLI、不自动更新。
+缺少桥文件或 Node 低于 24 时停止，不运行 npm install、不下载、不用系统 CLI、不自动更新。
 
 ## 登录与授权
 
@@ -22,10 +21,10 @@
 优先用 MCP 工具（插件自带 `feishu-auth` 服务）：`feishu_auth_status` → `feishu_auth_login` → 把链接和验证码原样发给用户并结束本轮 → 用户回复后 `feishu_auth_poll`；`feishu_auth_logout` 仅在用户要求退出或换账号时用。MCP 不可用时用同一份登录的脚本版：
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py login start [--probe-scope]
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py login poll [--wait 40]
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py login status
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py login logout
+node <skill>/../../server/dist/gof.mjs feishu login start [--probe-scope]
+node <skill>/../../server/dist/gof.mjs feishu login poll [--wait 40]
+node <skill>/../../server/dist/gof.mjs feishu login status
+node <skill>/../../server/dist/gof.mjs feishu login logout
 ```
 
 `--probe-scope` 仅在已获批的隔离探测前使用，额外请求 `sheets:spreadsheet:create`。
@@ -38,12 +37,12 @@
 ## 快照、计划、追加
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py snapshot --output <新快照.xlsx>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py document --url <本次脚本文档链接>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py plan --request request.json --snapshot <快照.xlsx>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py prepare --plan approved-api-plan.json --snapshot <fresh.xlsx>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py append --batch <批次> --receipt <隔离安全记录.json>
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py reconcile --batch <已有批次>
+node <skill>/../../server/dist/gof.mjs feishu snapshot --output <新快照.xlsx>
+node <skill>/../../server/dist/gof.mjs feishu document --url <本次脚本文档链接>
+node <skill>/../../server/dist/gof.mjs feishu plan --request request.json --snapshot <快照.xlsx>
+node <skill>/../../server/dist/gof.mjs feishu prepare --plan approved-api-plan.json --snapshot <fresh.xlsx>
+node <skill>/../../server/dist/gof.mjs feishu append --batch <批次> --receipt <隔离安全记录.json>
+node <skill>/../../server/dist/gof.mjs feishu reconcile --batch <已有批次>
 ```
 
 目标固定为测试 Wiki 节点 `YFyywzwLsiT07EkpBaecr8nIncn`。桥解析真实 spreadsheet token，工作表元数据与完整 XLSX 顺序/名称必须一致。用户明确指定表名优先，否则选择年月最新且列结构正确的 GOFCN 表，歧义时询问。计划明确展示表名和 sheet ID；不读取用户当前浏览器标签。
@@ -70,8 +69,8 @@ append 先核对隔离安全记录、用户身份、版本、fresh XLSX、隐藏
 传输层从 lark-cli 换成了 SDK 桥，所以旧版 receipt（`cli_version`、schema 1）全部作废。必须先取得独立在线验证计划授权：仅创建一个新的 `GOFCN_API_SAFETY_*` 工作簿，写入哨兵和返回空字符串的公式，测试三次占用拒写并回读。不能使用进度表旧格，不删除验证表。
 
 ```text
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py login start --probe-scope   （用户确认授权后 login poll）
-<skill>/assets/dependencies/python/python.exe -B <skill>/scripts/feishu_api.py probe --receipt <新的安全记录.json>
+node <skill>/../../server/dist/gof.mjs feishu login start --probe-scope   （用户确认授权后 login poll）
+node <skill>/../../server/dist/gof.mjs feishu probe --receipt <新的安全记录.json>
 ```
 
 只有服务端明确拒绝占用写入（桥返回 `kind: occupied`）且每次原值/公式不变，才生成绑定桥版本 `feishu-sdk-bridge/1` 的记录。网络/权限失败不等于防覆盖成功，不人工生成通过记录。探测中遇到的真实"非空拒写"错误码和文案，应补进 `dev/feishu-sdk/src/api.ts` 的 `OCCUPIED` 判断和对应测试。未获批或未验证时可以完成只读计划，业务追加保持受阻。
@@ -85,8 +84,8 @@ append 先核对隔离安全记录、用户身份、版本、fresh XLSX、隐藏
 ## 发布与维护（维护者）
 
 ```text
-<仓库>/plugins/requirement-auto/skills/gof-requirement/assets/dependencies/python/python.exe -I -B <仓库>/dev/run_tests.py
-<仓库>/plugins/requirement-auto/skills/gof-requirement/assets/dependencies/python/python.exe -I -B <仓库>/dev/package_plugin.py --output <新交付包.zip>
+cd <仓库>/dev/feishu-sdk && npm test
+node <仓库>/dev/package_plugin.mjs --output <新交付包.zip>
 ```
 
 桥与 MCP 服务的源码在 `dev/feishu-sdk/`，`npm run build` 打包到 `plugins/requirement-auto/server/dist/`（产物提交入库，安装插件不需要 npm install）。发布工具只校验及打包已有文件，不下载、不安装、不更新锁文件；ZIP 不含批次、个人凭据或浏览器会话。
