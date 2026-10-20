@@ -7,7 +7,7 @@ import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
-import { Bridge, document, execute, login, planWithApi, probe, reconcile, recomputeApiPlan, takeSnapshot } from './feishu.ts';
+import { Bridge, document, execute, login, planWithApi, probe, reconcile, recomputeApiPlan, takeSnapshot, addTagOption } from './feishu.ts';
 import { makePlan } from './plan.ts';
 import { Snapshot } from './snapshot.ts';
 import { Blocked, checkTarget, isInside, need, readJson, writeJsonNew } from './util.ts';
@@ -123,6 +123,10 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
     }
     case 'reconcile': return reconcile(bridge, mustHave(parse(args, { batch: { type: 'string' } }).values.batch, 'batch'));
     case 'document': return document(bridge, mustHave(parse(args, { url: { type: 'string' } }).values.url, 'url'));
+    case 'dropdown-add': {
+      const { values } = parse(args, { field: { type: 'string' }, option: { type: 'string' }, sheet: { type: 'string' }, color: { type: 'string' } });
+      return addTagOption(bridge, mustHave(values.field, 'field'), mustHave(values.option, 'option'), mustHave(values.sheet, 'sheet'), str(values.color));
+    }
     case 'snapshot': return takeSnapshot(bridge, mustHave(parse(args, { output: { type: 'string' } }).values.output, 'output'));
     case 'plan': {
       const { values } = parse(args, { snapshot: { type: 'string' }, request: { type: 'string' } });

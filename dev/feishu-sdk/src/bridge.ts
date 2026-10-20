@@ -14,12 +14,12 @@ export interface BridgeContext {
 export const BRIDGE_VERSION = 'feishu-sdk-bridge/1';
 export const COMMANDS = [
   'info', 'auth-status', 'auth-verify', 'auth-login', 'auth-poll', 'auth-logout', 'auth-check-scopes',
-  'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create',
+  'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create', 'sheets-dropdown-add',
 ] as const;
 
 /** Commands that read their arguments from stdin; the rest take none. */
 export const INPUT_COMMANDS: ReadonlySet<string> = new Set([
-  'auth-login', 'auth-poll', 'auth-check-scopes', 'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create',
+  'auth-login', 'auth-poll', 'auth-check-scopes', 'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create', 'sheets-dropdown-add',
 ]);
 
 function object(input: unknown, command: string): Record<string, any> {
@@ -82,6 +82,10 @@ export async function runBridge(command: string, input: unknown, context: Bridge
       case 'sheets-export': data = await api.exportXlsx(String(args.token ?? ''), String(args.output ?? '')); break;
       case 'sheets-cells-set': data = await api.cellsSet(String(args.token ?? ''), args.writes as CellWrite[]); break;
       case 'sheets-create': data = await api.createWorkbook(String(args.title ?? '')); break;
+      case 'sheets-dropdown-add':
+        data = await api.addDropdownOption(String(args.token ?? ''), String(args.sheet_id ?? ''), String(args.column ?? ''), Number(args.first_row),
+          Number(args.last_row), String(args.option ?? ''), String(args.color ?? ''));
+        break;
       default: throw new BridgeError('invalid_request', `未知命令：${command}`);
     }
     return { ok: true, data };

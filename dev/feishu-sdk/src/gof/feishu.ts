@@ -133,6 +133,12 @@ export class Bridge {
     return this.call('sheets-cells-set', { token, writes }, { write: true });
   }
 
+  /** Adds one option to the existing dropdown of one column span; every rule variant keeps its own options and colors. */
+  async dropdownAdd(args: Obj): Promise<any> {
+    need(/^[A-Za-z0-9]+$/.test(args.token), '非法表格 token');
+    return this.call('sheets-dropdown-add', args, { write: true });
+  }
+
   async createWorkbook(title: string): Promise<any> {
     return this.call('sheets-create', { title }, { write: true });
   }
@@ -387,6 +393,43 @@ export async function document(bridge: Bridge, url: string): Promise<any> {
     token = node.obj_token;
   }
   return bridge.apiRead(`/open-apis/docx/v1/documents/${token}/raw_content`);
+}
+
+const TAG_COLUMNS: Record<string, string> = { primary: '一级标签', secondary: '二级标签' };
+const TAG_COLORS = ['#bacefd', '#d9f5d6', '#fed4a4', '#ece2fe', '#f8def8', '#b1e8fc', '#fbbfbc', '#f8e6ab'];
+const rowCap = 5000;
+
+/**
+ * Adds a missing 一级标签/二级标签 option to the whole column of one sheet. Only for a tag the request needs and the dropdown lacks: the
+ * caller (the agent) checks that and put it in the approved plan. Existing options, colors and cell values are not changed.
+ */
+export async function addTagOption(bridge: Bridge, field: string, option: string, sheetName: string, color?: string): Promise<Obj> {
+  need(field in TAG_COLUMNS, 'field 必须是 primary 或 secondary');
+  await bridge.doctor();
+  const token = await target(bridge);
+  const sheet = (await sheetsOf(bridge, token)).find(s => s.title === sheetName);
+  need(sheet, `找不到工作表：${sheetName}`);
+  const sid = sheet.sheet_id as string;
+  const header = (await bridge.apiRead(`/open-apis/sheets/v2/spreadsheets/${token}/values_batch_get`, { ranges: `${sid}!A1:Z1` })).valueRanges?.[0]?.values?.[0];
+  need(Array.isArray(header), '读不到表头');
+  const hits = (header as unknown[]).flatMap((cell, i) => typeof cell === 'string' && cell.trim().startsWith(TAG_COLUMNS[field]!) ? [i] : []);
+  need(hits.length === 1, `表头里找不到唯一的${TAG_COLUMNS[field]}列`);
+  const column = columnLetter(hits[0]! + 1);
+  const chosen = color ?? TAG_COLORS[[...option].reduce((n, c) => n + c.codePointAt(0)!, 0) % TAG_COLORS.length]!;
+  const rows = Number(sheet.grid_properties?.row_count);
+  need(Number.isInteger(rows) && rows >= 2, '读不到工作表行数');
+  const updated: Obj[] = [];
+  for (let first = 2; first <= rows; first += rowCap) {
+    const last = Math.min(first + rowCap - 1, rows);
+    try {
+      updated.push(await bridge.dropdownAdd({ token, sheet_id: sid, column, first_row: first, last_row: last, option, color: chosen }));
+    } catch (e) {
+      // A span with no dropdown at all, or one that already has the option, is simply not part of this change.
+      if (!/没有现有下拉|都已包含/.test((e as Error).message)) throw e;
+    }
+  }
+  need(updated.length > 0, '没有任何范围需要新增该选项（已存在，或该列没有下拉）');
+  return { sheet: sheetName, column, option, updated_ranges: updated.reduce((n, u) => n + Number(u.updated_ranges), 0) };
 }
 
 export async function takeSnapshot(bridge: Bridge, output: string): Promise<Obj> {

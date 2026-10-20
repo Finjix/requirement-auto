@@ -19,7 +19,7 @@ Work in two phases:
 
 ## Hard rules
 
-- **Progress sheet:** never delete, clear or overwrite values or formulas; never sort, move old rows, replace the sheet, clear validation, edit old dropdown rules, or fill down across old data. Write only into a range proven empty for this batch; never fill gaps in old rows. On failure stop; no rollback by delete/overwrite/undo.
+- **Progress sheet:** never delete, clear or overwrite values or formulas; never sort, move old rows, replace the sheet, clear validation, edit old dropdown rules (the one exception is the tag rule below), or fill down across old data. Write only into a range proven empty for this batch; never fill gaps in old rows. On failure stop; no rollback by delete/overwrite/undo.
 - **CLS:** save drafts only. Never publish (no publish API, shortcut or equivalent). Importing this batch's CSV into the saved unpublished draft is allowed; if the system requires publishing first, hand over to the user.
 - **Never:** confirm delivery, upload video, send the group message, use the open-material API/API key.
 - Only the test target is supported (`https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn`; CLS `https://creative.centurygames.cn/requirements`). Never switch to the production sheet or to another target.
@@ -93,6 +93,7 @@ Rules:
 - **The reviewer and the creator are the same person:** one person fills the progress column 创意者／脚本审核人, the CLS import creator and the message creator. Ask once; never ask whether they are the same or for a separate CLS creator.
 - **CLS requirement name is never asked and never put in `request.json`** (the program rejects it). The CLS stage runs after the sheet append, so it builds the name per group from that group's real material numbers: `GOFCN<first>-GOFCN<last>`, e.g. `GOFCN67294-GOFCN67299` (a one-item group: just `GOFCN<number>`). The plan shows it as derived from the proposed numbers.
 - Numbering: script and material numbers continue the sheet's existing sequence, identical in both places per row; the user never picks them. Primary/secondary tags are inferred from the name and listed in the plan; ask only if ambiguous or in conflict with the naming formula.
+- **New primary/secondary tag, only when needed:** add a dropdown option only when this request needs a 一级/二级标签 that the column's dropdown does not have yet, and say so in the plan ("新增一级标签 X"). Never add tags proactively, in bulk or on a guess; if a similar existing tag fits, ask instead. After approval and before the append, run `gof feishu dropdown-add --field primary|secondary --option <tag> --sheet <sheet name>` (whole column of the target sheet; existing options, colors and values stay). Once per missing tag, then re-run `gof feishu snapshot` for the append.
 - Leave blank: client, creative expression, creative batch, head reference, creative reference and all other progress fields. Never copy old rows.
 - Optional CLS fields: fill from what the user gave, otherwise blank, decided in the plan, never during execution. Unspecified quote/currency use the native defaults 0 / cny; label them "system default" in the plan, not as user-confirmed amounts.
 - CSV tag is fixed `玩法卖点（单选，必选）/展示向/展示向`, independent of the progress tags.
