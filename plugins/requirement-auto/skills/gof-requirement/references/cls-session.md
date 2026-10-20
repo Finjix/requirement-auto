@@ -2,7 +2,7 @@
 
 CLS sits behind company SSO, which is Feishu web QR login; there is no device flow or local callback. So **the user logs in by scanning a QR code with their own phone**, and the browser is always headless (no window, no desktop, nobody at the machine). `gof cls login --qr` opens CLS in the installed Chrome or Edge (override with env `REQUIREMENT_AUTO_BROWSER` = absolute path) through a minimal built-in DevTools client, and screenshots the Feishu QR page. It only observes the `Authorization` header of the page's own CLS API requests, confirms it with `/api/userinfo`, then closes the browser. All later work is plain HTTP; no browser needed. Does not use Codex's built-in browser or computer use.
 
-`gof` = `node <skill>/../../server/dist/gof.mjs`. Check both logins with `gof login check` (SKILL.md section 0); the commands below do the logging in.
+`gof` = `node <skill>/../../server/dist/gof.mjs`. Check both logins with `gof login check` (SKILL.md section 0); the commands below do the logging in. Feishu is always logged in first, in this same browser profile (`gof feishu authorize --qr`, see SKILL.md section 0), and that one scan normally also covers CLS: the profile then holds a Feishu web session, so `cls session` / `login check` reach CLS without a QR. Feishu is always logged in first: do not start `cls login` while `login check` still wants the Feishu login, and never ask the user for both in one message.
 
 ```text
 gof cls login --qr cls-login.png    # write the QR image into the working directory

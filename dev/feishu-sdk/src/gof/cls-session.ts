@@ -49,8 +49,8 @@ export interface CaptureOptions {
  * there is one), only the "授权" button, and once per page. Anything else is left alone and reported.
  */
 export interface ConsentOptions {
-  /** The only application whose request is approved; the page has to name it. */
-  app: string;
+  /** The only application whose request is approved; the page has to name it. Without it any application's page is approved (the device login: see feishu-web.ts). */
+  app?: string | undefined;
   /** The account the login is pinned to, if any; the page has to name it too. */
   account?: string | undefined;
   /** The login is pinned to an account whose name is not known: the page cannot be checked, so nothing is clicked. */
@@ -89,7 +89,7 @@ export function accountNames(name: string): string[] {
   return [...new Set(parts.filter(part => part.length >= 2))];
 }
 
-async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptions, beforeClick: () => void = () => undefined): Promise<ConsentAttempt> {
+export async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptions, beforeClick: () => void = () => undefined): Promise<ConsentAttempt> {
   const probe = await cdp.send<{ result: { value?: { href: string; text: string; button: { x: number; y: number } | null } } }>(
     'Runtime.evaluate', { expression: CONSENT_PROBE, returnByValue: true }, sessionId);
   const page = probe.result.value;
@@ -98,7 +98,7 @@ async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptio
   let here: URL;
   try { here = new URL(page.href); } catch { return { state: 'not_ready' }; }
   if (!(options.isConsentPage ?? feishuConsentPage)(here)) return { state: 'not_ready' };
-  if (!page.text.includes(options.app)) return { state: 'refused', reason: `飞书授权页请求的不是 ${options.app}，没有点击；请用户自己查看这个授权请求` };
+  if (options.app && !page.text.includes(options.app)) return { state: 'refused', reason: `飞书授权页请求的不是 ${options.app}，没有点击；请用户自己查看这个授权请求` };
   if (options.unnamedPin) return { state: 'refused', reason: '已绑定的 CLS 账号没有名称，无法核对授权页上的账号，没有点击；请管理员处理账号绑定' };
   if (options.account && !accountNames(options.account).some(name => page.text.includes(name))) {
     return { state: 'refused', reason: `飞书授权页上的账号不是已绑定的“${options.account}”，没有点击；请用绑定的账号扫码` };

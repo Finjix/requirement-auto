@@ -41,7 +41,7 @@ At the start of **every** task (new request, continuing a batch, status query, r
 gof login check
 ```
 
-It really verifies both logins (Feishu: asks the Feishu server and renews an expired token; CLS: takes a real session from the hidden browser). Read-only. `feishu_auth_status` only reads the local record, so it is not a check. Result `status`:
+It really verifies both logins, **Feishu first**: it asks the Feishu server (renewing an expired token) and only when Feishu is fine takes a real CLS session from the hidden browser. While Feishu needs a login, CLS is reported `not_checked`. Read-only. `feishu_auth_status` only reads the local record, so it is not a check. Result `status`:
 
 - `ok`: continue.
 - `login_required`: do what `todo` says (below).
@@ -50,16 +50,18 @@ It really verifies both logins (Feishu: asks the Feishu server and renews an exp
 
 Re-run it: after approval and before the first write; after the sheet append and before the CLS stage; whenever any command reports a lost login, auth error or "not logged in" (check first, never retry blindly); when resuming. If a mid-task check fails, the approved plan stays: have the user log in again and continue. No new batch, no re-sent writes; read back what was already written.
 
-**When login is needed**, put everything in one message and end the turn:
-- Feishu (`login_required` / `scopes_missing`): call `feishu_auth_login` and send the link and code verbatim (do not rewrite or shorten), asking the user to confirm in their own browser.
-- CLS (`login_required`): run `gof cls login --qr cls-login.png` in the working directory. New images there are sent to the user automatically. Say: scan the QR image with the Feishu mobile app and confirm on the phone; send it only to the user; it expires in a few minutes. If it returns `expected_account`, tell the user that account name. `logged_in` means no QR is needed; `no_qr` means the page is not on a QR code, so run `gof cls session` first and `--qr` again only if still logged out.
+**When login is needed, ask for one login at a time, Feishu first. Never ask for Feishu and CLS in the same message.** `login check` returns only the next `todo`; do exactly that and end the turn:
+- Feishu (`login_required` / `scopes_missing`): call `feishu_auth_login` but **keep its link to yourself**, then run `gof feishu authorize --qr feishu-login.png` in the working directory. The hidden browser opens the link: if it is not logged in to Feishu it stops on the Feishu QR sign-in page and the picture goes to the user (`qr_ready`); if it already has a Feishu web session it presses 【授权】 itself (`approved`, no scan). Say: scan the QR image with the Feishu mobile app and confirm on the phone; send it only to the user; it expires in a few minutes. **This one scan also logs in CLS**, so the user will not be asked to scan again. Do not mention CLS yet. Only if no browser is installed (the command says so) fall back to sending the link and code verbatim for the user to open in their own browser.
+- CLS (`login_required`, which is reported only once Feishu is `ok`): run `gof cls login --qr cls-login.png` in the working directory. New images there are sent to the user automatically. Say: scan the QR image with the Feishu mobile app and confirm on the phone; send it only to the user; it expires in a few minutes. If it returns `expected_account`, tell the user that account name. `logged_in` means no QR is needed; `no_qr` means the page is not on a QR code, so run `gof cls session` first and `--qr` again only if still logged out.
 - If the user's channel cannot show images, say so and stop. No other login method.
 
-**After the user replies:** Feishu -> `feishu_auth_poll`. CLS -> `gof cls session` (takes the login from the waiting hidden browser, ~25 s, and closes it; it clicks the consent button itself, see below). Run `cls` commands one at a time, never in parallel. Then re-run `gof login check` until `ok`. Ask only for what is still missing. QR expired or scan failed: run `cls login --qr cls-login.png` again for a new image. Denied or wrong account: say so and stop.
+**After the user replies:** Feishu -> `gof feishu authorize` (no `--qr`; it presses 【授权】 in the waiting browser, `approved`), then `feishu_auth_poll`, then re-run `gof login check`: CLS normally comes back `ok` on its own, because the browser is now logged in to Feishu and the CLS consent is pressed by `cls session`'s own rules. `login_required` from `authorize` means nobody scanned or the QR expired: run it again with `--qr`. Only if CLS is still `login_required`, send the CLS QR in a new message. CLS -> `gof cls session` (takes the login from the waiting hidden browser, ~25 s, and closes it; it clicks the consent button itself, see below). Run `cls` commands one at a time, never in parallel. Then re-run `gof login check` until `ok`. Ask only for what is still missing, one login per message. QR expired or scan failed: run `cls login --qr cls-login.png` again for a new image. Denied or wrong account: say so and stop.
 
 `cls session` messages to relay to the user as is, without acting:
 - "CLS account is bound to X, this login is another account": ask them to scan with X's Feishu account. Changing accounts needs an admin to clear their CLS login data. Never delete it yourself.
 - "consent page asks for an app other than dsc_admin" / "account on the consent page is not the bound one": nothing was clicked; the user decides.
+
+**Feishu 【授权】 click (already decided by the user, do not ask again):** `gof feishu authorize` presses 【授权】 on Feishu's authorization page of this user's own pending device authorization, nothing else, never 【拒绝】, once per page. Whose account it is stays checked by `feishu_auth_poll`.
 
 **Consent click (already decided by the user, do not ask again):** after the scan, Feishu shows the `dsc_admin` consent page. `cls session` clicks 【授权】 itself, only if the page names the app `dsc_admin` and, once an account is bound, that account; never 【拒绝】; once per login. You never click anything, type passwords, scan for the user, drive SSO, read cookies or use another account.
 
