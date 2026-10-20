@@ -13,7 +13,7 @@ export interface BridgeContext {
 
 export const BRIDGE_VERSION = 'feishu-sdk-bridge/1';
 export const COMMANDS = [
-  'info', 'auth-status', 'auth-login', 'auth-poll', 'auth-logout', 'auth-check-scopes',
+  'info', 'auth-status', 'auth-verify', 'auth-login', 'auth-poll', 'auth-logout', 'auth-check-scopes',
   'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create',
 ] as const;
 
@@ -57,6 +57,17 @@ export async function runBridge(command: string, input: unknown, context: Bridge
         data = { bridge: BRIDGE_VERSION, node: process.version, storage: paths.mode, app_configured: !!app, required_scopes: REQUIRED_SCOPES };
         break;
       case 'auth-status': data = await auth.status(); break;
+      case 'auth-verify': {
+        const user = await api.verifyUser();
+        const expected = expectedOpenId(env);
+        if (expected && user.open_id !== expected) throw new BridgeError('identity_mismatch', '当前保存的飞书登录不是当前用户本人的账号，需要用本人账号重新授权');
+        const status = await auth.status();
+        data = {
+          logged_in: true, open_id: user.open_id, ...(user.name ? { name: user.name } : {}),
+          missing_scopes: status.missing_scopes ?? [], refresh_expires_at: status.refresh_expires_at,
+        };
+        break;
+      }
       case 'auth-login': data = await auth.startLogin(strings(args.extra_scopes, 'extra_scopes')); break;
       case 'auth-poll': data = await auth.pollLogin(typeof args.wait_ms === 'number' ? args.wait_ms : undefined); break;
       case 'auth-logout': await auth.logout(); data = { logged_in: false }; break;

@@ -63,12 +63,13 @@ start.cmd
 1. 用真实模型回合走一遍：用户在飞书里提需求 → Codex 选用技能 → 调 `feishu_auth_login`。特别是非交互的 `approval=never` 下 MCP 工具调用不被拦截，我只在 app-server 里直接调用过工具。
 2. 飞书应用后台：给应用的**用户身份**开通 `wiki:wiki:readonly sheets:spreadsheet:readonly sheets:spreadsheet:read sheets:spreadsheet:write_only sheets:spreadsheet drive:export:readonly docx:document:readonly offline_access`（隔离探测另需 `sheets:spreadsheet:create`），允许用户身份授权，并发布版本。lark-agent 不记录插件需要的权限，以这份清单为准。
 3. 真实设备授权登录，以及两个飞书账号分别登录互不串号（用 A 的链接让 B 确认应被拒绝；`user/<A>/requirement-auto/feishu/auth.json` 与 `user/<B>/…` 里的 `open_id` 不同）。
-4. 按 [README](../README.md) 的“还没做”清单做隔离探测，在真实 CLS 上走一遍 `cls login`（令牌只带 Authorization 头是否被接受、静默取会话是否可行），再在测试进度表上走全流程。
+4. 按 [README](../README.md) 的“还没做”清单做隔离探测，再在测试进度表上走全流程。CLS 登录本身已在真实环境验证（见 README），但还没有经过 lark-agent 的每用户环境走一遍。
 
 ## 已知限制
 
-- **CLS 登录需要有人在运行 lark-agent 的那台电脑前**：CLS 在公司 SSO 后面，没有设备授权或回调。技能不再依赖 Codex 的内置浏览器或电脑控制（lark-agent 也不需要为它打开任何开关）：`gof.mjs cls login` 用这台电脑上的 Chrome 或 Edge 打开 CLS，用户在窗口里登录一次，登录保存在 `user/<名>/requirement-auto/cls/browser-profile`，之后的命令用隐藏的浏览器静默取得会话并走 HTTP。前提是这台电脑装了 Chrome 或 Edge，且 lark-agent 是在有桌面的会话里启动的（`start.cmd`）。远程的飞书用户自己看不到这个窗口，需要有人在这台电脑前代为登录；目前没有把窗口转发出去的办法。
+- **CLS 登录走二维码，不需要有人在电脑前，也没有浏览器窗口**：技能先 `gof.mjs cls login --qr cls-login.png`，无头浏览器停在飞书扫码页，图片写在 Codex 的工作目录（`user/<名>/workspace`，也就是 lark-agent 的交付目录），随回复自动发给用户，由用户用飞书手机端扫码确认；之后 `gof.mjs cls session` 取得登录。二维码只能发给本人。登录保存在 `user/<名>/requirement-auto/cls/browser-profile`，之后的命令用无头浏览器静默取得会话并走 HTTP。前提是这台电脑装了 Chrome 或 Edge，不需要桌面会话。
 - **机器人密钥**：有插件时，每个用户的每一轮 Codex 进程都带着 `FEISHU_APP_SECRET`。lark-agent 的 README 本来就声明 Codex 能读 `.env`，这里没有新增一类风险，但要知道。想收紧：给设备授权单独建一个飞书应用，把 `.env` 里的 `FEISHU_APP_ID/SECRET` 换成它。
+- **宿主设了 `LARK_AGENT_USER_OPEN_ID` 就必须同时设 `LARK_AGENT_USER_DIR`**，否则命令拒绝运行，不会回落到所有用户共用的目录。
 - **隔离是逻辑上的**：Codex 是 `danger-full-access`，同一个 Windows 账号。这防得住串号和误操作，防不住被提示词注入后主动去读别人目录（`cat user/别人/requirement-auto/feishu/auth.json`）的模型。要真隔离，得给每个用户单独的系统账号或沙箱。
 
 | 防住的 | 怎么防 |

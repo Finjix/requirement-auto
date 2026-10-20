@@ -137,8 +137,10 @@ const CLS_ONLINE = ['login', 'session', 'catalog', 'observe', 'run', 'read-draft
 async function clsOnlineCommand(command: string, args: string[], via: online.Online): Promise<Result> {
   switch (command) {
     case 'login': {
-      const wait = str(parse(args, { wait: { type: 'string' } }).values.wait);
-      return online.login(via, wait === undefined ? 90 : Number(wait));
+      const { values } = parse(args, { qr: { type: 'string' } });
+      const qr = str(values.qr);
+      need(qr, 'cls login 需要 --qr <png文件>：登录用二维码，由用户用飞书手机端扫码，不弹出浏览器窗口');
+      return online.loginWithQr(via, qr);
     }
     case 'session': parse(args, {}); return online.sessionStatus(via);
     case 'catalog': return online.catalog(via, mustHave(parse(args, { output: { type: 'string' } }).values.output, 'output'));
@@ -177,15 +179,33 @@ function clsCommand(args: string[]): Result {
   return { status: 'operation_ready', operation: output, operation_id: op.operation_id, native_defaults: op.native_defaults };
 }
 
+/**
+ * The two logins, checked for real and together: Feishu by asking Feishu, CLS by looking in the browser that holds its session. Each task
+ * starts with this, and so does each stage that follows a wait (see SKILL.md), so that a login that has lapsed is found before any work
+ * depends on it. It changes nothing and takes nothing from the user; what to do about a failure is the caller's business.
+ */
+async function loginCheck(bridge: Bridge, via: online.Online): Promise<Result> {
+  const [feishu, cls] = await Promise.all([bridge.checkLogin(), online.check(via)]);
+  const sides = [feishu.status, cls.status];
+  // A block comes first: logging in again does not fix it, so nobody should be asked to scan or authorize before it is reported.
+  const status = sides.every(s => s === 'ok') ? 'ok' : sides.some(s => s === 'blocked' || s === 'identity_mismatch') ? 'blocked'
+    : sides.some(s => s === 'login_required' || s === 'scopes_missing') ? 'login_required' : 'unknown';
+  const todo: string[] = [];
+  if (feishu.status === 'login_required' || feishu.status === 'scopes_missing') todo.push('飞书：调用 feishu_auth_login，把授权链接和验证码原样发给用户');
+  if (cls.status === 'login_required') todo.push('CLS：运行 gof.mjs cls login --qr cls-login.png，把二维码图片发给用户本人扫码');
+  return { status, feishu, cls, ...(todo.length ? { todo } : {}) };
+}
+
 export async function main(argv: string[], bridge: Bridge = new Bridge(), via: online.Online = online.realOnline): Promise<{ result: Result; code: number }> {
   try {
     const [group, command, ...rest] = argv;
     let result: Result;
     if (group === 'batch') result = batchCommand(command ?? '', rest);
     else if (group === 'feishu') result = await feishuCommand(command ?? '', rest, bridge);
+    else if (group === 'login' && command === 'check') result = await loginCheck(bridge, via);
     else if (group === 'cls') result = CLS_ONLINE.includes(command ?? '') ? await clsOnlineCommand(command!, rest, via) : clsCommand(argv.slice(1));
-    else throw new Blocked('用法：gof.mjs <batch|feishu|cls> <命令> [参数]');
-    const blocked = ['conflict', 'partial'].includes(result.status) || (group === 'feishu' && result.status === 'blocked');
+    else throw new Blocked('用法：gof.mjs <batch|feishu|cls|login> <命令> [参数]');
+    const blocked = ['conflict', 'partial'].includes(result.status) || (group === 'feishu' && result.status === 'blocked') || (group === 'login' && result.status !== 'ok');
     return { result, code: blocked ? 2 : 0 };
   } catch (error) {
     if (error instanceof ClsError) {

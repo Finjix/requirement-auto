@@ -38,6 +38,9 @@ export const OPEN_ID_ENV = 'LARK_AGENT_USER_OPEN_ID';
 export function resolveDataPaths(env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): DataPaths {
   const userDir = env[USER_DIR_ENV]?.trim();
   if (userDir) return layout('host', path.join(absolute(USER_DIR_ENV, userDir), 'requirement-auto'));
+  // A host that names the user but not the directory has forgotten the directory: falling back to a folder shared by everybody
+  // would let that user's logins and batches be reached by the next one.
+  if (env[OPEN_ID_ENV]?.trim()) throw new BridgeError('config', `${OPEN_ID_ENV} 已设置但没有 ${USER_DIR_ENV}：拒绝回落到共享目录`);
   const pluginData = env.PLUGIN_DATA?.trim();
   if (pluginData) return layout('plugin-data', absolute('PLUGIN_DATA', pluginData));
   return layout('standalone', path.join(home, '.requirement-auto', 'default'));

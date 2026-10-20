@@ -159,22 +159,31 @@ export async function attachBrowser(profileDir: string): Promise<BrowserHandle |
 export interface LaunchOptions {
   exe: string;
   profileDir: string;
-  /** A visible window, for a person to use; otherwise the browser runs without one. */
-  headed: boolean;
+  /**
+   * Let the browser outlive this process. By default it does not: Node (libuv on Windows) puts a child in a job that ends with its
+   * parent, which is what a hidden browser should do, so a crashed command leaves none behind. A browser that is left waiting for a
+   * person to scan a QR code is the opposite: it keeps running when the command returns, and the next command joins it.
+   */
+  detach?: boolean;
   env?: NodeJS.ProcessEnv;
 }
 
 export async function launchBrowser(options: LaunchOptions): Promise<BrowserHandle> {
-  const { exe, profileDir, headed } = options;
+  const { exe, profileDir } = options;
+  const detach = options.detach ?? false;
   fs.mkdirSync(profileDir, { recursive: true });
   fs.rmSync(activePortFile(profileDir), { force: true });
   const args = [
-    `--user-data-dir=${profileDir}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-sync',
+    // CLS signs in through the company's Feishu SSO, whose cookies are session-only. A browser that exits normally forgets those,
+    // so every later command would find nobody logged in; "continue where you left off" is what makes it keep them.
+    `--user-data-dir=${profileDir}`, '--restore-last-session', '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-sync',
     '--disable-background-networking', '--disable-component-update', '--password-store=basic', '--disable-features=Translate',
-    ...(headed ? ['--new-window'] : ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--mute-audio']),
+    '--headless=new', '--disable-gpu', '--hide-scrollbars', '--mute-audio',
     'about:blank',
   ];
-  const child: ChildProcess = spawn(exe, args, { stdio: 'ignore', windowsHide: !headed, env: options.env ?? process.env });
+  const child: ChildProcess = spawn(exe, args, { stdio: 'ignore', windowsHide: true, detached: detach, env: options.env ?? process.env });
+  // This process must not wait for the browser to exit: one left waiting for a scan outlives the command.
+  child.unref();
   let exited = false;
   let startFailure = '';
   child.once('exit', () => { exited = true; });
@@ -194,6 +203,7 @@ export async function launchBrowser(options: LaunchOptions): Promise<BrowserHand
     if (child.pid) await killTree(child.pid);
     throw new Blocked(`无法连接浏览器的调试接口：${(error as Error).message}`);
   });
+  await closeSpareBlankTabs(cdp);
   return {
     cdp, launched: true,
     async close() {
@@ -203,6 +213,18 @@ export async function launchBrowser(options: LaunchOptions): Promise<BrowserHand
       cdp.close();
     },
   };
+}
+
+/**
+ * Restoring the last session brings back last time's tabs, and the address given on the command line opens one more blank tab on top
+ * of them, so the blank tabs would add up with every start. One is kept for the command to use.
+ */
+async function closeSpareBlankTabs(cdp: Cdp): Promise<void> {
+  try {
+    const { targetInfos } = await cdp.send<{ targetInfos: { type: string; targetId: string; url: string }[] }>('Target.getTargets');
+    const blanks = targetInfos.filter(t => t.type === 'page' && t.url === 'about:blank');
+    for (const spare of blanks.slice(1)) await cdp.send('Target.closeTarget', { targetId: spare.targetId }).catch(() => undefined);
+  } catch { /* the tabs are only tidied; the browser works either way */ }
 }
 
 /** Joins the browser on this profile or starts one. */

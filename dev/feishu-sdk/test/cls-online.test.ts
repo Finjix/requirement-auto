@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { prepare, record } from '../src/gof/batch.ts';
 import { main } from '../src/gof/cli.ts';
 import type { Online } from '../src/gof/cls-online.ts';
-import type { Capture } from '../src/gof/cls-session.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { readJson } from '../src/gof/util.ts';
@@ -195,27 +194,14 @@ test('without a login every online command stops with the instruction to log in,
   } finally { cls.close(); }
 });
 
-test('cls login: picks up a login that is already there without a window, otherwise opens one and waits for the person', async () => {
-  const seen: [boolean, number][] = [];
-  const script = (...states: Capture[]): Online => ({
+test('cls login --qr: a login that is already there is picked up by one hidden look, and no token is ever printed', async () => {
+  const seen: number[] = [];
+  const online: Online = {
     session: async () => { throw new Error('not used'); },
-    capture: async (headed, waitMs) => { seen.push([headed, waitMs]); return states.shift()!; },
-  });
-  const account = { id: 7, name: '张三' };
-  const here = await main(['cls', 'login'], undefined, script({ state: 'ok', authorization: 'x', account }));
-  assert.deepEqual([here.result.status, here.result.window, seen], ['logged_in', 'not_needed', [[false, 12_000]]]);
-
-  seen.length = 0;
-  const shown = await main(['cls', 'login', '--wait', '30'], undefined, script({ state: 'login_required' }, { state: 'ok', authorization: 'x', account }));
-  assert.deepEqual([shown.result.status, shown.result.window, seen], ['logged_in', 'closed', [[false, 12_000], [true, 30_000]]]);
-
-  const waiting = await main(['cls', 'login'], undefined, script({ state: 'login_required' }, { state: 'waiting' }));
-  assert.deepEqual([waiting.code, waiting.result.status], [0, 'waiting']);
-  assert.match(waiting.result.message, /窗口/);
-
-  const closed = await main(['cls', 'login'], undefined, script({ state: 'login_required' }, { state: 'closed' }));
-  assert.equal(closed.code, 2);
-  assert.equal((await main(['cls', 'login', '--wait', '1'], undefined, script())).code, 2);
-  const text = JSON.stringify([here, shown, waiting, closed]);
+    capture: async waitMs => { seen.push(waitMs); return { state: 'ok', authorization: 'x', account: { id: 7, name: '张三' } }; },
+  };
+  const here = await main(['cls', 'login', '--qr', path.join(tempDir('cls-qr-'), 'q.png')], undefined, online);
+  assert.deepEqual([here.code, here.result.status, here.result.account, seen], [0, 'logged_in', { id: 7, name: '张三' }, [12_000]]);
+  const text = JSON.stringify(here);
   assert.ok(!text.includes('authorization') && !/Bearer|"x"/.test(text), 'the token is never in what a command prints');
 });

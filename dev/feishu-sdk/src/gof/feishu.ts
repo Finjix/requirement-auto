@@ -69,6 +69,31 @@ export class Bridge {
     }
   }
 
+  /**
+   * Is the Feishu login good right now? Unlike `doctor` this asks Feishu, and it says what is wrong instead of stopping:
+   * ok | login_required | identity_mismatch | scopes_missing | unreachable | blocked.
+   */
+  async checkLogin(): Promise<Obj> {
+    let reply: BridgeReply;
+    try { reply = await this.run('auth-verify', {}); } catch { return { status: 'unreachable', reason: '飞书桥调用失败' }; }
+    if (!reply || typeof reply !== 'object' || typeof reply.ok !== 'boolean') return { status: 'blocked', reason: '飞书桥返回结构不匹配' };
+    if (reply.ok) {
+      const data = reply.data as Obj;
+      const missing: string[] = Array.isArray(data?.missing_scopes) ? data.missing_scopes : [];
+      const who = { ...(data?.name ? { name: data.name } : {}) };
+      return missing.length
+        ? { status: 'scopes_missing', ...who, missing_scopes: missing, reason: '飞书登录缺少本流程必要的权限，需要重新授权' }
+        : { status: 'ok', ...who };
+    }
+    const { kind, message } = reply.error;
+    if (kind === 'auth_required') return { status: 'login_required', reason: message };
+    if (kind === 'identity_mismatch') return { status: 'identity_mismatch', reason: message };
+    if (kind === 'scope_missing') return { status: 'scopes_missing', reason: message };
+    if (kind === 'network') return { status: 'unreachable', reason: '暂时连不上飞书，稍后再查；这不说明登录失效' };
+    if (SHOWN_KINDS.has(kind)) return { status: 'blocked', reason: message };
+    return { status: 'blocked', reason: '飞书接口调用失败，无法确认登录状态' };
+  }
+
   async doctor(): Promise<Obj> {
     const info = await this.call('info');
     need(info.bridge === BRIDGE_VERSION, '飞书桥版本与技能不匹配');

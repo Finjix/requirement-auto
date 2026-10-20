@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { findBrowser, openBrowser, type BrowserHandle } from './chromium.ts';
+import { findBrowser, openBrowser, type BrowserHandle, type Cdp } from './chromium.ts';
 import { resolveDataPaths } from '../paths.ts';
 import { Blocked } from './util.ts';
 
@@ -11,6 +11,8 @@ import { Blocked } from './util.ts';
  * or put in a record. The browser is closed as soon as it has been seen, and the HTTP work is done from here with the token.
  *
  * What is never done: reading cookies, local storage or the profile files, typing into the page, or changing the page.
+ * The one thing that is done to a page is on Feishu's consent page for the CLS application, after the person has scanned the code
+ * with their own phone: see approveConsent.
  */
 
 export const CLS_ORIGIN = 'https://creative.centurygames.cn';
@@ -20,24 +22,73 @@ export interface Account { id: number; name: string }
 
 export type Capture =
   | { state: 'ok'; authorization: string; account: Account }
-  /** The wait ran out; a login window that was opened for a person is still open. */
-  | { state: 'waiting' }
   /** The browser was closed before a logged-in request was seen. */
   | { state: 'closed' }
   /** Nothing logged in showed up in a browser nobody is sitting at. */
-  | { state: 'login_required' };
+  | { state: 'login_required' }
+  /** A consent page was waiting that is not the one this tool approves; nothing was clicked. */
+  | { state: 'consent_refused'; reason: string };
 
 export interface CaptureOptions {
   /** Where the browser keeps its profile. */
   profileDir: string;
-  /** Show a window for a person to log in. Otherwise the browser runs hidden and only an existing login can be picked up. */
-  headed: boolean;
   /** How long to wait for a logged-in request. */
   waitMs: number;
   /** Tests point this at a local server. Production code never passes it: the command line has no way to name another origin. */
   origin?: string;
   exe?: string | undefined;
   env?: NodeJS.ProcessEnv;
+  /** Approve Feishu's consent page for the CLS application when it shows up while waiting. Without it nothing is ever clicked. */
+  consent?: ConsentOptions;
+}
+
+/**
+ * After the scan, Feishu asks the person to let the CLS application (the company's own single sign-on app) use their account. The
+ * person has just scanned the code on their own phone for exactly this login, and has said once, for good, that this consent is to be
+ * given, so it is given here. The approval is narrow: only the named application, only when the page names the pinned account (if
+ * there is one), only the "授权" button, and once per page. Anything else is left alone and reported.
+ */
+export interface ConsentOptions {
+  /** The only application whose request is approved; the page has to name it. */
+  app: string;
+  /** The account the login is pinned to, if any; the page has to name it too. */
+  account?: string | undefined;
+  /** Is this address a page that may hold the consent? Defaults to Feishu's authorize page. */
+  isConsentPage?: (url: URL) => boolean;
+}
+
+export type ConsentAttempt = { state: 'clicked' } | { state: 'not_ready' } | { state: 'refused'; reason: string };
+
+const feishuConsentPage = (url: URL): boolean => /^accounts\.(feishu\.cn|larksuite\.com)$/.test(url.hostname) && url.pathname.startsWith('/open-apis/authen/v1/authorize');
+
+// Runs in the consent page: its text (compared here, never printed or stored) and where its "授权" button is.
+const CONSENT_PROBE = `(() => {
+  const norm = s => (s || '').replace(/\\s+/g, '');
+  const candidates = [...document.querySelectorAll('button, [role="button"], a, div, span')].filter(e => e.children.length === 0 && norm(e.textContent) === '授权');
+  const element = candidates.map(e => e.closest('button, [role="button"]') || e).find(e => {
+    const r = e.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && !e.disabled && e.getAttribute('aria-disabled') !== 'true';
+  });
+  let button = null;
+  if (element) { element.scrollIntoView({ block: 'center' }); const r = element.getBoundingClientRect(); button = { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+  return { text: document.body ? document.body.innerText : '', button };
+})()`;
+
+async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptions): Promise<ConsentAttempt> {
+  const probe = await cdp.send<{ result: { value?: { text: string; button: { x: number; y: number } | null } } }>(
+    'Runtime.evaluate', { expression: CONSENT_PROBE, returnByValue: true }, sessionId);
+  const page = probe.result.value;
+  if (!page?.button) return { state: 'not_ready' }; // not a consent page (it also shows the sign-in code), or not drawn yet
+  if (!page.text.includes(options.app)) return { state: 'refused', reason: `飞书授权页请求的不是 ${options.app}，没有点击；请用户自己查看这个授权请求` };
+  if (options.account && !page.text.includes(options.account)) {
+    return { state: 'refused', reason: `飞书授权页上的账号不是已绑定的“${options.account}”，没有点击；请用绑定的账号扫码` };
+  }
+  const { x, y } = page.button;
+  await cdp.send('Page.bringToFront', {}, sessionId).catch(() => undefined);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }, sessionId);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, sessionId);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, sessionId);
+  return { state: 'clicked' };
 }
 
 /** Asks CLS who the token belongs to; undefined when it is not (or no longer) accepted. */
@@ -65,12 +116,12 @@ export async function captureAuthorization(options: CaptureOptions): Promise<Cap
   const origin = options.origin ?? CLS_ORIGIN;
   const exe = options.exe ?? findBrowser(options.env);
   if (!exe) throw new Blocked('没有找到 Chrome 或 Edge：请安装其一，或用环境变量 REQUIREMENT_AUTO_BROWSER 指定浏览器的绝对路径');
-  const browser = await openBrowser({ exe, profileDir: options.profileDir, headed: options.headed, ...(options.env ? { env: options.env } : {}) });
+  const browser = await openBrowser({ exe, profileDir: options.profileDir, ...(options.env ? { env: options.env } : {}) });
   try {
     const result = await watch(browser, origin, options);
-    // A window a person is still using stays open: the one this call opened while it waits for them, and one an earlier call opened
-    // when this look found no login in it (it may be exactly the login in progress). Anything else has done its job.
-    const keepOpen = result.state === 'waiting' || (!browser.launched && result.state === 'login_required');
+    // A browser an earlier call left waiting for a scan stays open when this look found no login in it (it may be exactly the login in
+    // progress). Anything else has done its job.
+    const keepOpen = !browser.launched && (result.state === 'login_required' || result.state === 'consent_refused');
     if (keepOpen) browser.cdp.close();
     else await browser.close();
     return result;
@@ -106,11 +157,9 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
       session = (async () => {
         const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
         await cdp.send('Network.enable', {}, sessionId);
-        if (!options.headed) {
-          // A hidden browser announces itself as headless; the site should see an ordinary one.
-          const { userAgent } = await cdp.send<{ userAgent?: string }>('Browser.getVersion');
-          if (userAgent) await cdp.send('Network.setUserAgentOverride', { userAgent: userAgent.replace('HeadlessChrome', 'Chrome') }, sessionId);
-        }
+        // A hidden browser announces itself as headless; the site should see an ordinary one.
+        const { userAgent } = await cdp.send<{ userAgent?: string }>('Browser.getVersion');
+        if (userAgent) await cdp.send('Network.setUserAgentOverride', { userAgent: userAgent.replace('HeadlessChrome', 'Chrome') }, sessionId);
         return sessionId;
       })();
       sessions.set(targetId, session);
@@ -126,6 +175,31 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
   cdp.on('Network.requestWillBeSentExtraInfo', (params) => {
     consider(typeof params.requestId === 'string' ? urls.get(params.requestId) : undefined, lower(params.headers, 'authorization'));
   });
+
+  // The consent page is looked for on a short interval for as long as the login is awaited. One login is approved once: after the
+  // first click nothing else is pressed, even if another tab shows the same page.
+  const clicked = new Set<string>();
+  let refuse: ((reason: string) => void) | undefined;
+  const refused = new Promise<{ refused: string }>(resolve => { refuse = reason => resolve({ refused: reason }); });
+  let looking = false;
+  const lookForConsent = async (): Promise<void> => {
+    const consent = options.consent;
+    if (!consent || looking || clicked.size > 0) return;
+    looking = true;
+    try {
+      const { targetInfos } = await cdp.send<{ targetInfos: { type: string; targetId: string; url: string }[] }>('Target.getTargets');
+      for (const target of targetInfos) {
+        if (target.type !== 'page') continue;
+        let url: URL;
+        try { url = new URL(target.url); } catch { continue; }
+        if (!(consent.isConsentPage ?? feishuConsentPage)(url)) continue;
+        const result = await approveConsent(cdp, await attach(target.targetId), consent);
+        if (result.state === 'clicked') { clicked.add(target.targetId); break; }
+        if (result.state === 'refused') refuse?.(result.reason);
+      }
+    } catch { /* the next look tries again */ } finally { looking = false; }
+  };
+  const looker = options.consent ? setInterval(() => void lookForConsent(), 700) : undefined;
 
   const closed = new Promise<'closed'>(resolve => cdp.onClose(() => resolve('closed')));
   await cdp.send('Target.setDiscoverTargets', { discover: true });
@@ -143,11 +217,92 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), options.waitMs); });
   try {
-    const outcome = await Promise.race([found, closed, timeout]);
+    const outcome = await Promise.race([found, closed, timeout, refused]);
     if (outcome === 'closed') return { state: 'closed' };
-    if (outcome === 'timeout') return options.headed ? { state: 'waiting' } : { state: 'login_required' };
+    if (outcome === 'timeout') return { state: 'login_required' };
+    if ('refused' in outcome) return { state: 'consent_refused', reason: outcome.refused };
     return { state: 'ok', authorization: outcome.authorization, account: outcome.account };
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); clearInterval(looker); }
+}
+
+export interface QrOptions {
+  profileDir: string;
+  /** Tests point this at a local server; the command line has no way to name another origin. */
+  origin?: string;
+  exe?: string | undefined;
+  env?: NodeJS.ProcessEnv;
+  /** Is this address the page that shows the sign-in QR code? Defaults to the Feishu sign-in page. */
+  isLoginPage?: (url: URL) => boolean;
+  /** How long to wait for that page to come up, and then for the code on it to be drawn. */
+  waitMs?: number;
+  settleMs?: number;
+}
+
+export type QrCapture =
+  | { state: 'qr'; png: Buffer }
+  /** The page did not stop on a sign-in page (it may already be signed in, or be somewhere unexpected); `where` is host and path only. */
+  | { state: 'not_login_page'; where: string };
+
+const feishuLoginPage = (url: URL): boolean => /^accounts\.(feishu\.cn|larksuite\.com)$/.test(url.hostname) && url.pathname.includes('login');
+const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/**
+ * Takes a picture of the sign-in page's QR code so that it can be sent to the person who has to scan it with their phone. This is
+ * the one place a screenshot is taken, and what it shows is the sign-in challenge itself: nothing of the page's content is read.
+ * The browser is hidden and stays running afterwards (it outlives this process), so that the scan can finish the login there;
+ * the next `cls session` joins it, takes the token, and closes it.
+ */
+export async function captureLoginQr(options: QrOptions): Promise<QrCapture> {
+  const origin = options.origin ?? CLS_ORIGIN;
+  const exe = options.exe ?? findBrowser(options.env);
+  if (!exe) throw new Blocked('没有找到 Chrome 或 Edge：请安装其一，或用环境变量 REQUIREMENT_AUTO_BROWSER 指定浏览器的绝对路径');
+  const isLoginPage = options.isLoginPage ?? feishuLoginPage;
+  const browser = await openBrowser({ exe, profileDir: options.profileDir, detach: true, ...(options.env ? { env: options.env } : {}) });
+  let leaveRunning = true;
+  try {
+    const { cdp } = browser;
+    const { targetInfos } = await cdp.send<{ targetInfos: { type: string; targetId: string }[] }>('Target.getTargets');
+    const targetId = targetInfos.find(t => t.type === 'page')?.targetId ?? (await cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' })).targetId;
+    const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true });
+    await cdp.send('Page.enable', {}, sessionId);
+    const { userAgent } = await cdp.send<{ userAgent?: string }>('Browser.getVersion');
+    if (userAgent) await cdp.send('Network.setUserAgentOverride', { userAgent: userAgent.replace('HeadlessChrome', 'Chrome') }, sessionId);
+    // A narrow, sharp page: the code fills most of the picture, which is read off a phone screen.
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 640, height: 720, deviceScaleFactor: 2, mobile: false }, sessionId);
+    // Always start from the entry page, so that the code is a fresh one.
+    await cdp.send('Page.navigate', { url: `${origin}${ENTRY}` }, sessionId);
+
+    // Right after a navigation starts the page is being swapped and the question fails for a moment: that is "not there yet".
+    const where = async (): Promise<URL | undefined> => {
+      try {
+        const history = await cdp.send<{ currentIndex: number; entries: { url: string }[] }>('Page.getNavigationHistory', {}, sessionId);
+        return new URL(history.entries[history.currentIndex]?.url ?? '');
+      } catch { return undefined; }
+    };
+    let current: URL | undefined;
+    for (const deadline = Date.now() + (options.waitMs ?? 20_000); Date.now() < deadline; await pause(250)) {
+      current = await where();
+      if (current && isLoginPage(current)) break;
+      current = undefined;
+    }
+    if (!current) {
+      const url = await where();
+      // A browser this call started and that is not on a sign-in page has nothing to wait for.
+      if (browser.launched) leaveRunning = false;
+      return { state: 'not_login_page', where: url ? `${url.host}${url.pathname}` : '' };
+    }
+    await pause(options.settleMs ?? 2_500);
+    const now = await where();
+    if (!now || !isLoginPage(now)) return { state: 'not_login_page', where: now ? `${now.host}${now.pathname}` : '' };
+    const shot = await cdp.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, sessionId);
+    return { state: 'qr', png: Buffer.from(shot.data, 'base64') };
+  } catch (error) {
+    leaveRunning = false;
+    throw error;
+  } finally {
+    if (leaveRunning) browser.cdp.close();
+    else await browser.close().catch(() => undefined);
+  }
 }
 
 /** The folders this user's CLS login lives in: the browser profile, under the user's own data directory. */
@@ -155,10 +310,21 @@ export function clsProfileDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveDataPaths(env).root, 'cls', 'browser-profile');
 }
 
+/** Where the QR picture that is waiting to be scanned is recorded (see cls-guard.ts). */
+export function clsQrFile(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveDataPaths(env).root, 'cls', 'login-qr.json');
+}
+
+/** Which CLS account this user's login is pinned to (id and name only; see cls-guard.ts). */
+export function clsAccountFile(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveDataPaths(env).root, 'cls', 'account.json');
+}
+
 /** A session for the commands that talk to CLS: whoever is logged in on this user's profile, or a refusal that says to log in. */
 export async function openSession(options: Partial<CaptureOptions> = {}): Promise<{ authorization: string; account: Account; origin: string }> {
   const origin = options.origin ?? CLS_ORIGIN;
-  const result = await captureAuthorization({ profileDir: options.profileDir ?? clsProfileDir(), headed: false, waitMs: options.waitMs ?? 25_000, ...options });
-  if (result.state !== 'ok') throw new Blocked('CLS 未登录或登录已过期：先运行 gof.mjs cls login，请用户在弹出的浏览器窗口里完成公司登录');
+  const result = await captureAuthorization({ profileDir: options.profileDir ?? clsProfileDir(), waitMs: options.waitMs ?? 25_000, ...options });
+  if (result.state === 'consent_refused') throw new Blocked(result.reason);
+  if (result.state !== 'ok') throw new Blocked('CLS 未登录或登录已过期：先运行 gof.mjs cls login --qr <png文件> 生成登录二维码，交给用户用飞书手机端扫码');
   return { authorization: result.authorization, account: result.account, origin };
 }

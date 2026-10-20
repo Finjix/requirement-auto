@@ -90,6 +90,17 @@ export class FeishuApi {
     throw new BridgeError('api', `飞书接口返回错误：${message}`, code);
   }
 
+  /**
+   * Asks Feishu who the stored login belongs to. It is a real call with the user's token, so a login that has lapsed, been revoked or
+   * been used up shows up here (after one renewal attempt) instead of in the middle of a write; the renewal also keeps an idle login alive.
+   */
+  async verifyUser(): Promise<{ open_id: string; name?: string }> {
+    const data = await this.send({ method: 'GET', url: '/open-apis/authen/v1/user_info' });
+    const openId = typeof data?.open_id === 'string' ? data.open_id : '';
+    if (!openId) throw new BridgeError('api', '无法确认当前登录的飞书账号');
+    return { open_id: openId, ...(typeof data?.name === 'string' && data.name ? { name: data.name } : {}) };
+  }
+
   /** A read-only call to one of the endpoints the workflow uses. */
   async get(urlPath: string, params?: Record<string, unknown>): Promise<any> {
     if (typeof urlPath !== 'string' || urlPath.includes('..') || urlPath.includes('?') || !urlPath.startsWith('/open-apis/')

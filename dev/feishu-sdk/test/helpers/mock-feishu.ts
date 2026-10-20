@@ -42,6 +42,11 @@ export class MockFeishu {
     await new Promise<void>(resolve => this.server.close(() => resolve()));
   }
 
+  /** The server forgets the access token it issued; the refresh token still works, so a renewal succeeds. */
+  revokeAccess(): void { this.access = 'revoked-access-token'; }
+  /** The server forgets both tokens, as when the user withdraws the authorization. */
+  revokeAll(): void { this.access = 'revoked-access-token'; this.refresh = 'revoked-refresh-token'; }
+
   get endpoints() { return { open: this.url, accounts: this.url }; }
   get currentAccess() { return this.access; }
   get currentRefresh() { return this.refresh; }

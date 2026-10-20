@@ -65,7 +65,7 @@ export function createServer(context: ServerContext = {}): McpServer {
 
   server.registerTool('feishu_auth_status', {
     title: '飞书登录状态',
-    description: '查看当前用户是否已登录飞书、授权了哪些权限、登录何时到期。只读，不联网，不返回令牌。',
+    description: '查看本地记录里当前用户是否已登录飞书、授权了哪些权限、登录何时到期。只读本地记录，不联网，不向飞书验证，所以不能用来判断登录现在是否还有效（要验证用 gof.mjs login check）；不返回令牌。',
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, () => guard(async a => {
     const status = await a.status(REQUIRED_SCOPES);

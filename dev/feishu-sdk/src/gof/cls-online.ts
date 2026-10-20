@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { events, loadBatch } from './batch.ts';
 import { ClsError, createClsAdapter } from './cls-adapter.ts';
-import { captureAuthorization, clsProfileDir, openSession, type Account, type Capture } from './cls-session.ts';
+import { guardOnline, readPin, writeQr } from './cls-guard.ts';
+import { captureAuthorization, captureLoginQr, clsAccountFile, clsProfileDir, clsQrFile, openSession, type Account, type Capture, type ConsentOptions } from './cls-session.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { Blocked, isInside, need, readJson, writeJsonNew } from './util.ts';
 
@@ -19,13 +20,43 @@ export interface Session { authorization: string; account: Account; origin: stri
 export interface Online {
   /** A hidden browser on the saved login: the session, or a refusal that says to log in. */
   session: () => Promise<Session>;
-  /** One look at the page for a login, with a window for a person (headed) or without. */
-  capture: (headed: boolean, waitMs: number) => Promise<Capture>;
+  /** One look in a hidden browser for a login that is already there, waiting up to this long. */
+  capture: (waitMs: number) => Promise<Capture>;
+  /** The CLS account this user's login is pinned to, once there is one. */
+  expectedAccount?: () => { id: number; name: string } | undefined;
+  /** Leaves a hidden browser on the sign-in page and writes a picture of its QR code to the file. */
+  loginQr?: (file: string) => Promise<QrOutcome>;
+}
+
+export type QrOutcome = { state: 'qr'; file: string } | { state: 'not_login_page'; where: string };
+
+/** The one consent page that is approved after a scan: the CLS application's own, for the account this login is pinned to. */
+export const CONSENT_APP = 'dsc_admin';
+function consentOptions(): ConsentOptions {
+  return { app: CONSENT_APP, account: readPin(clsAccountFile())?.name || undefined };
+}
+
+const rawOnline: Online = {
+  session: () => openSession({ consent: consentOptions() }),
+  capture: waitMs => captureAuthorization({ profileDir: clsProfileDir(), waitMs, consent: consentOptions() }),
+  loginQr: async file => {
+    const result = await captureLoginQr({ profileDir: clsProfileDir() });
+    return result.state === 'qr' ? { state: 'qr', file: writeQr(clsQrFile(), file, result.png) } : result;
+  },
+};
+
+/** Built per call: the user's directories come from the environment of the process that runs the command. */
+function guardedOnline(): Online {
+  return guardOnline(rawOnline, {
+    pinFile: clsAccountFile(), qrFile: clsQrFile(), profileDir: clsProfileDir(),
+  });
 }
 
 export const realOnline: Online = {
-  session: () => openSession(),
-  capture: (headed, waitMs) => captureAuthorization({ profileDir: clsProfileDir(), headed, waitMs }),
+  session: () => guardedOnline().session(),
+  capture: waitMs => guardedOnline().capture(waitMs),
+  expectedAccount: () => guardedOnline().expectedAccount?.(),
+  loginQr: file => guardedOnline().loginQr!(file),
 };
 
 function adapterFor(session: Session, extra: { beforeWrite?: (op: Result) => void } = {}) {
@@ -34,18 +65,38 @@ function adapterFor(session: Session, extra: { beforeWrite?: (op: Result) => voi
 
 const account = (a: Account) => ({ id: a.id, name: a.name });
 
-/** The window stays open when the wait runs out, so the next call picks the login up where the person left it. */
-export async function login(online: Online, waitSeconds: number): Promise<Result> {
-  need(Number.isFinite(waitSeconds) && waitSeconds >= 5 && waitSeconds <= 600, '--wait 需在 5 到 600 秒之间');
-  const quiet = await online.capture(false, 12_000);
-  if (quiet.state === 'ok') return { status: 'logged_in', account: account(quiet.account), window: 'not_needed' };
-  const shown = await online.capture(true, waitSeconds * 1000);
-  if (shown.state === 'ok') return { status: 'logged_in', account: account(shown.account), window: 'closed' };
-  if (shown.state === 'closed') throw new Blocked('浏览器窗口在登录完成前被关闭；请重新运行 gof.mjs cls login');
+/**
+ * The login: the QR code of the sign-in page goes to a picture file for the user to scan with their phone, and the
+ * hidden browser that shows it keeps running. After the scan, `cls session` (or `cls login`) takes the login from that browser.
+ */
+export async function loginWithQr(online: Online, file: string): Promise<Result> {
+  need(/\.png$/i.test(file), '二维码文件需要是 .png');
+  const quiet = await online.capture(12_000);
+  if (quiet.state === 'ok') return { status: 'logged_in', account: account(quiet.account) };
+  if (quiet.state === 'consent_refused') throw new Blocked(quiet.reason);
+  need(online.loginQr, '这个环境不能用二维码登录');
+  const outcome = await online.loginQr(path.resolve(file));
+  if (outcome.state === 'not_login_page') {
+    return { status: 'no_qr', where: outcome.where, message: '页面没有停在登录二维码上（可能已经登录，或正在跳转）；先运行 gof.mjs cls session 看一眼，仍未登录再重新运行本命令' };
+  }
+  const expected = online.expectedAccount?.();
   return {
-    status: 'waiting', wait_seconds: waitSeconds,
-    message: '已在运行本命令的这台电脑上打开浏览器窗口，请在窗口里完成公司登录；完成后再运行一次 gof.mjs cls login（窗口会自动关闭）',
+    status: 'qr_ready', qr_file: outcome.file, ...(expected ? { expected_account: expected.name } : {}),
+    message: `二维码已生成。把它发给用户，请其用飞书手机端扫码并在手机上确认${expected ? `（账号应为“${expected.name}”）` : ''}；二维码几分钟后失效，失效就重新运行本命令。用户说已确认后运行 gof.mjs cls session`,
   };
+}
+
+/** Is the CLS login good right now? One look in a hidden browser, with the real session behind it: ok | login_required | blocked. */
+export async function check(online: Online): Promise<Result> {
+  try {
+    const seen = await online.capture(25_000);
+    if (seen.state === 'ok') return { status: 'ok', account: account(seen.account) };
+    if (seen.state === 'consent_refused') return { status: 'blocked', reason: seen.reason };
+    return { status: 'login_required' };
+  } catch (error) {
+    if (error instanceof Blocked) return { status: 'blocked', reason: error.message };
+    throw error;
+  }
 }
 
 export async function sessionStatus(online: Online): Promise<Result> {
