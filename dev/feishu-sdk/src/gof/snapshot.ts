@@ -114,15 +114,21 @@ export function validationProjection(snapshot: Snapshot, allowed?: [string, Cell
   return result;
 }
 
+/** Is this header cell the column of the field? 设计师供应商 counts as 供应商, 审核人 and 脚本审核人 as 创意者. */
+export function headerMatches(field: string, header: string): boolean {
+  const text = header.replace(/\s+/g, '');
+  const stem = FIELD_HEADERS[field]!;
+  if (field === 'creator') return [stem, '审核人', '脚本审核人'].some(h => text.startsWith(h));
+  return field === 'supplier' ? text.includes(stem) : text.startsWith(stem);
+}
+
 export function columns(ws: SheetData): Columns {
   const result: Columns = {};
   for (let col = 1; col <= ws.maxCol; col++) {
     const header = ws.cells.get(`${columnLetter(col)}1`);
     const text = (header?.value ?? '').replace(/\s+/g, '');
     for (const [field, stem] of Object.entries(FIELD_HEADERS)) {
-      let matched = field === 'supplier' ? text.includes(stem) : text.startsWith(stem);
-      if (field === 'creator') matched = [stem, '审核人', '脚本审核人'].some(h => text.startsWith(h));
-      if (matched) {
+      if (headerMatches(field, text)) {
         need(!(field in result), `${ws.name} 的 ${stem} 表头不唯一`);
         result[field] = col;
       }

@@ -6,7 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BRIDGE_VERSION, type BridgeReply } from '../src/bridge.ts';
 import { status } from '../src/gof/batch.ts';
-import { Bridge, OccupiedRefusal, SCOPES, apiPlan, document, execute, login, planWithApi, probe, readRules, reconcile, recomputeApiPlan } from '../src/gof/feishu.ts';
+import { Bridge, OccupiedRefusal, SCOPES, addOption, apiPlan, execute, login, planWithApi, probe, readRules, reconcile, recomputeApiPlan, recomputePlan } from '../src/gof/feishu.ts';
+import { readBrief } from '../src/gof/brief.ts';
+import { context } from '../src/gof/context.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { prepare, record } from '../src/gof/batch.ts';
 import { acceptance, dropdowns } from '../src/gof/rules.ts';
@@ -307,6 +309,8 @@ test('a whole append: plan, prepare, safety receipt, one write, read back and ve
   const result = await execute(bridge, dir, receipt);
   assert.equal(result.status, 'append_verified');
   assert.equal(result.range, 'A6:I8');
+  assert.equal(result.sheet_url, 'https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn?sheet=s3');
+  assert.equal(readJson(result.report).links.progress_sheet, result.sheet_url);
   assert.equal(fake.productionWrites, 1);
   const state = status(dir);
   assert.deepEqual([state.append_verified, state.blocked], [true, false]);
@@ -356,5 +360,169 @@ test('the command line reports a refusal as blocked JSON with exit code 2', asyn
   assert.equal(result.result.status, 'blocked');
   assert.equal((await main(['frobnicate'])).code, 2);
   assert.equal((await main(['batch', 'plan', '--bogus', 'x'])).code, 2);
-  void document; void apiPlan; void makePlan;
+  void apiPlan; void makePlan;
+});
+
+// ---- reading the requirement document, the context for filling a request, dropdown options, planning again on a fresh snapshot
+
+class FakeDocs {
+  readonly tabs = [
+    { sheet_id: 't1', title: '2026.10.10', index: 0, resource_type: 'sheet', hidden: false, grid_properties: { row_count: 4, column_count: 4 } },
+    { sheet_id: 't2', title: '2026.10.16', index: 2, resource_type: 'sheet', hidden: false, grid_properties: { row_count: 4, column_count: 4 } },
+    { sheet_id: 'tx', title: '隐藏', index: 3, resource_type: 'sheet', hidden: true, grid_properties: { row_count: 4, column_count: 4 } },
+    { sheet_id: 'tb', title: '多维表格', index: 1, resource_type: 'bitable', hidden: false },
+  ];
+  values = [['序号', '创意形式\n（制作形式）', '脚本', null], [1, 'AI剧情', 'x'.repeat(400), [{ type: 'attachment', text: '1.mp4', fileToken: 'f1' }]],
+    [null, null, '', null], [2, '设定3.0', [{ type: 'text', text: '短' }, { type: 'mention', text: '@张三' }], { type: 'embed-image', fileToken: 'g1' }]];
+  ranges: string[] = [];
+
+  handle: Handler = (name, payload) => {
+    assert.equal(name, 'api-get');
+    const p: string = payload.path;
+    if (p.endsWith('/spaces/get_node')) {
+      const nodes: Record<string, unknown> = {
+        wikiSHEET: { obj_type: 'sheet', obj_token: 'shtREQ', title: '丁杰AI' },
+        wikiDOC: { obj_type: 'docx', obj_token: 'doxREQ', title: '丁杰代言人需求表' },
+        wikiMIND: { obj_type: 'mindnote', obj_token: 'mndREQ', title: '脑图' },
+      };
+      return reply({ node: nodes[payload.params.token] });
+    }
+    if (p === '/open-apis/sheets/v3/spreadsheets/shtREQ') return reply({ spreadsheet: { title: '杨燃对接文档' } });
+    if (p.endsWith('/sheets/query')) return reply({ sheets: this.tabs });
+    if (p.endsWith('/values_batch_get')) {
+      this.ranges.push(payload.params.ranges);
+      return reply({ valueRanges: [{ range: payload.params.ranges, values: this.values }] });
+    }
+    if (p === '/open-apis/docx/v1/documents/doxREQ/raw_content') return reply({ content: '丁杰代言人需求表\n2026.10.19\n根据给到的物料混剪产出44条素材' });
+    throw new Error(`unexpected ${p}`);
+  };
+}
+
+test('a requirement sheet is read as the linked tab (or the newest), its header and its non-empty rows, cells as plain text', async () => {
+  const docs = new FakeDocs();
+  const { bridge } = bridgeWith(docs.handle);
+  const linked = await readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET?sheet=t1');
+  assert.deepEqual([linked.kind, linked.title, linked.sheet], ['sheet', '丁杰AI', { sheet_id: 't1', title: '2026.10.10', chosen_by: 'link' }]);
+  assert.deepEqual(linked.tabs, ['2026.10.10', '2026.10.16']);
+  assert.deepEqual(linked.columns, ['A', 'B', 'C', 'D']);
+  assert.deepEqual(linked.header, ['序号', '创意形式\n（制作形式）', '脚本', '']);
+  assert.deepEqual(linked.rows.map((r: any) => r.row), [2, 4]);
+  assert.deepEqual(linked.rows[0].cells, ['1', 'AI剧情', `${'x'.repeat(300)}…`, '[附件:1.mp4]']);
+  assert.deepEqual(linked.rows[1].cells, ['2', '设定3.0', '短@张三', '[图片]']);
+  assert.deepEqual([linked.row_count, linked.clipped_cells, docs.ranges[0]], [2, 1, 't1!A1:D4']);
+  const newest = await readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET');
+  assert.deepEqual(newest.sheet, { sheet_id: 't2', title: '2026.10.16', chosen_by: 'last' });
+  const asked = await readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET', { sheet: '2026.10.10', full: true });
+  assert.deepEqual([asked.sheet.chosen_by, asked.rows[0].cells[2].length, asked.clipped_cells], ['asked', 400, undefined]);
+  const direct = await readBrief(bridge, 'https://centurygames.feishu.cn/sheets/shtREQ?sheet=t2');
+  assert.deepEqual([direct.title, direct.sheet.chosen_by], ['杨燃对接文档', 'link']);
+  await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET?sheet=tx'), /链接指向的工作表不存在或已隐藏/);
+  await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET', { sheet: '没有' }), /没有工作表“没有”/);
+});
+
+test('a requirement doc is read as its text with its title; other kinds of document and other hosts are refused', async () => {
+  const { bridge } = bridgeWith(new FakeDocs().handle);
+  const doc = await readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiDOC');
+  assert.deepEqual([doc.kind, doc.title, doc.chars], ['docx', '丁杰代言人需求表', 36]);
+  assert.match(doc.text, /产出44条素材/);
+  const direct = await readBrief(bridge, 'https://centurygames.feishu.cn/docx/doxREQ');
+  assert.equal(direct.title, '丁杰代言人需求表');
+  await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiMIND'), /暂不支持读取这种飞书文档（mindnote）/);
+  await failsWith(readBrief(bridge, 'https://evil.example.com/docx/doxREQ'), /不是公司飞书文档链接/);
+  await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/docx/doxREQ', { sheet: 't1' }), /只用于表格/);
+});
+
+test('the context gives the dropdown options from the API rules, the latest runs of rows of a supplier, and the earlier batches', async () => {
+  const fake = new FakeProduction();
+  const probeServer = new FakeSheets();
+  probeServer.production = fake.handle;
+  const bridge = new Bridge(async (name, payload) => probeServer.handle(name, payload));
+  const base = new Snapshot(path.join(fixtures, 'base.xlsx'));
+  const root = tmp();
+  prepare(makePlan(base, readJson(path.join(fixtures, 'requests', 'basic.json'))), base, { outputRoot: root });
+  fs.mkdirSync(path.join(root, 'not-a-batch'));
+  const result = await context(bridge, base, { supplier: '供应商甲', batchRoot: root });
+  assert.deepEqual([result.worksheet, result.sheet_id, result.next_number], ['GOFCN创意进度 26年3月', 's3', 1011]);
+  assert.deepEqual(result.options, { primary_tag: ['玩法', '画面', '系统'], secondary_tag: ['卖点', '体验'], creative_form: ['视频', '图文'],
+    supplier: ['供应商甲', '供应商乙'], creator: ['张三', '李四'] });
+  assert.deepEqual(result.recent.map((r: any) => [r.sheet, r.rows, r.count, r.numbers, r.keywords]), [
+    ['GOFCN创意进度 26年3月', '4-4', 1, 'GOFCN1006-GOFCN1006', ['老爆点3']],
+    ['GOFCN创意进度 26年3月', '2-2', 1, 'GOFCN1004-GOFCN1004', ['老爆点1']],
+    ['GOFCN创意进度 26年2月', '2-3', 2, 'GOFCN1001-GOFCN1002', ['爆点B', '爆点A']]]);
+  assert.deepEqual(result.recent[0], { sheet: 'GOFCN创意进度 26年3月', rows: '4-4', count: 1, numbers: 'GOFCN1006-GOFCN1006', supplier: '供应商甲',
+    primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频', creator: '张三', keywords: ['老爆点3'] });
+  assert.equal(result.past_requests.length, 1);
+  const past = result.past_requests[0];
+  assert.deepEqual([past.numbers, past.append_verified, past.groups.length], ['GOFCN1011-GOFCN1013', false, 2]);
+  assert.deepEqual(past.groups[1], { supplier: '供应商甲', reviewer: '李四', script_url: 'https://centurygames.feishu.cn/wiki/XYZ789',
+    cls: { currency: 'USD', direction: '方向一', quotation: '100.50', task_type: 'creative_a' }, requirement_name: 'GOFCN1013', quantity: 1,
+    items: [{ quantity: 1, primary_tag: '画面', secondary_tag: '体验', creative_form: '图文', keyword: '另一个' }], steps: [] });
+  assert.deepEqual((await context(bridge, base, { supplier: '没有这家', batchRoot: root })).past_requests, []);
+  assert.equal((await context(bridge, base, { batchRoot: root })).recent.length, 7);
+});
+
+test('dropdown-add finds the column of each of the five fields by its header and adds to the whole column', async () => {
+  const header: unknown[] = ['素材编号', '提炼词', '素材名称', '一级标签\n（方向）', '二级标签（卖点）', [{ type: 'text', text: '创意形式（制作形式）' }], '客户端',
+    '设计师供应商', '创意者\n脚本审核人'];
+  const sent: any[] = [];
+  const handler: Handler = (name, payload) => {
+    if (name === 'info') return reply({ bridge: BRIDGE_VERSION, app_configured: true, node: 'v24' });
+    if (name === 'auth-status') return reply({ logged_in: true, name: '李小明', open_id: 'ou_1', storage: 'host' });
+    if (name === 'auth-check-scopes') return reply({ complete: true, granted: payload.required, missing: [] });
+    if (name === 'sheets-dropdown-add') { sent.push(payload); return reply({ updated_ranges: 2 }); }
+    const p: string = payload.path;
+    if (p.endsWith('/spaces/get_node')) return reply(productionNode());
+    if (p.endsWith('/sheets/query')) {
+      return reply({ sheets: [{ sheet_id: 's3', title: '26年1月-GOFCN', index: 0, resource_type: 'sheet', grid_properties: { row_count: 7000, column_count: 14 } }] });
+    }
+    if (p.endsWith('/values_batch_get')) { assert.equal(payload.params.ranges, 's3!A1:N1'); return reply({ valueRanges: [{ values: [header] }] }); }
+    throw new Error(`unexpected ${name} ${p}`);
+  };
+  const { bridge } = bridgeWith(handler);
+  const columns: string[] = [];
+  for (const field of ['primary', 'secondary', 'form', 'supplier', 'reviewer', 'creative_form', 'creator']) {
+    const result = await addOption(bridge, field, '新选项', '26年1月-GOFCN', '#bacefd');
+    columns.push(result.column);
+    assert.equal(result.updated_ranges, 4);
+  }
+  assert.deepEqual(columns, ['D', 'E', 'F', 'H', 'I', 'F', 'I']);
+  assert.deepEqual(sent.slice(0, 2).map(s => [s.column, s.first_row, s.last_row, s.option, s.color]),
+    [['D', 2, 5001, '新选项', '#bacefd'], ['D', 5002, 7000, '新选项', '#bacefd']]);
+  await failsWith(addOption(bridge, 'client', 'x', '26年1月-GOFCN'), /--field 必须是/);
+  await failsWith(addOption(bridge, 'supplier', 'x', '没有的表'), /找不到工作表/);
+  header.push('供应商备注');
+  await failsWith(addOption(bridge, 'supplier', 'x', '26年1月-GOFCN'), /找不到唯一的供应商列/);
+});
+
+test('the approved plan is made again on a fresh snapshot: a new revision is fine, changed rows or numbers need a new approval', async () => {
+  const { bridge, approved, base } = await approvedBatch();
+  const same = await recomputePlan(bridge, base, approved);
+  assert.deepEqual(same, approved);
+  // The approved dropdown additions (or anybody's edit elsewhere) give the workbook a new revision.
+  const later = new Bridge(async (name, payload) => name === 'sheets-revision' ? reply({ revision: 43 }) : (bridge as any).run(name, payload));
+  await failsWith(recomputeApiPlan(later, base, approved), /版本\/规则与获批计划变化/);
+  const fresh = await recomputePlan(later, base, approved);
+  assert.equal(fresh.api_plan.revision, 43);
+  assert.deepEqual(fresh.batch_plan, approved.batch_plan);
+  const moved = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
+  await failsWith(recomputePlan(bridge, moved, approved), /素材编号或名称与获批计划不同/);
+  await failsWith(recomputePlan(bridge, base, { ...approved, batch_plan: { ...approved.batch_plan, range: 'A7:I9' } }), /获批计划被修改过/);
+  await failsWith(recomputePlan(bridge, base, { batch_plan: approved.batch_plan }), /获批计划不完整/);
+});
+
+test('plan --output saves the whole plan and prints only what the user is shown, with the dropdown options to add', async () => {
+  const { bridge } = await approvedBatch();
+  const requestFile = path.join(fixtures, 'requests', 'basic.json');
+  const out = path.join(tmp(), 'plan.json');
+  const args = ['feishu', 'plan', '--request', requestFile, '--snapshot', path.join(fixtures, 'base.xlsx'), '--output', out];
+  const { result, code } = await main(args, bridge);
+  assert.equal(code, 0, JSON.stringify(result));
+  assert.deepEqual(Object.keys(readJson(out)).sort(), ['api_plan', 'batch_plan']);
+  assert.deepEqual([result.status, result.worksheet, result.sheet_id, result.range, result.first_number, result.last_number],
+    ['plan_saved', 'GOFCN创意进度 26年3月', 's3', 'A6:I8', 1011, 1013]);
+  assert.deepEqual(result.groups[0], { group: '01', quantity: 2, requirement_name: 'GOFCN1011-GOFCN1012', supplier: '供应商丙', reviewer: '张三',
+    script_url: 'https://centurygames.feishu.cn/docx/ABC123def', items: [{ quantity: 2, first: 'GOFCN1011_玩法_卖点_视频_新爆点', last: 'GOFCN1012_玩法_卖点_视频_新爆点' }] });
+  assert.deepEqual(result.new_options, [{ field: 'supplier', option: '供应商丙' }]);
+  const again = await main(args, bridge);
+  assert.deepEqual([again.code, again.result.reason], [2, '计划文件已存在，不覆盖']);
 });

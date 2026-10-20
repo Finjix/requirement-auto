@@ -16,9 +16,30 @@ function unique<T>(items: T[], predicate: (item: T) => boolean, label: string): 
   return found[0]!;
 }
 
-function userMatch(user: Obj, wanted: string): boolean {
-  if (user.name === wanted) return true;
-  return [...String(user.name).matchAll(/[（(]([^（）()]+)[）)]/g)].some(m => m[1] === wanted);
+/** The short names a CLS name carries: in brackets ("…（丁杰）") or after a final dash ("…（个体工商户）-杨燃"). */
+function aliases(name: string): string[] {
+  const found = [...name.matchAll(/[（(]([^（）()]+)[）)]/g)].map(m => m[1]!);
+  const dash = /[-－—]\s*([^-－—（）()]+)$/.exec(name);
+  if (dash) found.push(dash[1]!.trim());
+  return found;
+}
+
+/**
+ * The one CLS user a name from the progress sheet means. The progress sheet spells people and companies short, CLS in full, so the
+ * exact name is tried first, then a short name the CLS name carries, then a CLS name containing it (冯彦蓉 → 冯彦蓉-实习生,
+ * 达治 → 达治（武汉）文化传媒有限公司). A name the request gives the CLS way (`cls.supplier` / `cls.creator`) must match exactly. The first
+ * level that finds anyone decides, and it must find exactly one.
+ */
+function matchUser(users: Obj[], wanted: string, exact: boolean, label: string): Obj {
+  const levels: ((user: Obj) => boolean)[] = [user => user.name === wanted];
+  if (!exact) {
+    levels.push(user => aliases(String(user.name)).includes(wanted), user => [...wanted].length >= 2 && String(user.name).includes(wanted));
+  }
+  for (const level of levels) {
+    const found = users.filter(level);
+    if (found.length > 0) return unique(found, () => true, label);
+  }
+  throw new Blocked(`${label} 不存在或匹配不唯一，需在计划前澄清`);
 }
 
 function dateValue(value: unknown): string {
@@ -36,6 +57,18 @@ function amount(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** What a request can choose from in CLS, by the names it uses: GOFCN directions, creative task types, active suppliers and people. */
+export function catalogChoices(catalog: Obj): Obj {
+  const game = (catalog.games as Obj[]).find(g => g.code === 'GOFCN');
+  const active = (catalog.users as Obj[]).filter(u => u.status === 1);
+  return {
+    directions: (catalog.directions as Obj[]).filter(d => game && d.game_id === game.id).map(d => d.name),
+    task_types: (catalog.types as Obj[]).filter(t => t.type === 'creative').map(t => t.key),
+    suppliers: active.filter(u => u.roles.includes('outsource')).map(u => u.name),
+    people: active.filter(u => !u.roles.includes('outsource')).map(u => u.name),
+  };
+}
+
 /** CLS requirement name: the group's first and last material number, e.g. GOFCN67294-GOFCN67299 (one item: GOFCN67294). */
 export function requirementName(names: string[]): string {
   const numbers = names.map(n => /^GOFCN(\d+)_/.exec(n)?.[1]);
@@ -45,15 +78,17 @@ export function requirementName(names: string[]): string {
   return first === last ? first : `${first}-${last}`;
 }
 
-export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj, number, Obj] {
+/** The payload, the creator's ID, the native defaults taken, and the CLS names everything was matched to (for the plan). */
+export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj, number, Obj, Obj] {
   const cls = group.cls;
   need(Object.keys(cls).length > 0, '全流程 CLS 字段未收齐');
   const game = unique<Obj>(catalog.games, x => x.code === 'GOFCN', 'GOFCN 项目');
   const userGames = catalog.account?.game_ids;
   need(Array.isArray(userGames) && userGames.includes(game.id), '当前账号未证明有 GOFCN 权限');
   const direction = unique<Obj>(catalog.directions, x => x.game_id === game.id && x.name === cls.direction, '创意方向');
-  const supplier = unique<Obj>(catalog.users, x => x.status === 1 && x.roles.includes('outsource') && userMatch(x, group.supplier), '供应商');
-  const creator = unique<Obj>(catalog.users, x => x.status === 1 && x.name === group.reviewer, '创意人');
+  const suppliers = (catalog.users as Obj[]).filter(x => x.status === 1 && x.roles.includes('outsource'));
+  const supplier = matchUser(suppliers, String(cls.supplier ?? group.supplier), cls.supplier !== undefined, '供应商');
+  const creator = matchUser((catalog.users as Obj[]).filter(x => x.status === 1), String(cls.creator ?? group.reviewer), cls.creator !== undefined, '创意人');
   const task = unique<Obj>(catalog.types, x => x.type === 'creative' && x.key === cls.task_type, '任务类型');
   const payload: Obj = {
     game_id: game.id, direct_id: direction.id, asset_data: '', name: names ? requirementName(names) : 'GOFCN<首号>-GOFCN<末号>', type: task.value, company: '',
@@ -83,7 +118,7 @@ export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj
     ['first_draft_time', 'draft_end_date'], ['final_cut_time', 'film_end_date']] as const) payload[field] = dateValue(cls[key] ?? '');
   const defaults: Obj = {};
   for (const [key, source] of [['currency', 'currency'], ['price', 'quotation']] as const) if ((cls[source] ?? '') === '') defaults[key] = payload[key];
-  return [payload, creator.id, defaults];
+  return [payload, creator.id, defaults, { direction: direction.name, task_type: task.key, supplier: supplier.name, creator: creator.name }];
 }
 
 /** RFC 4180 reading of the generated CSV. */
@@ -215,8 +250,8 @@ export function clsPreview(requestInput: unknown, catalog: Obj): Obj {
   need(catalog.can_create === true, '没有建单权限');
   const request = normalizeRequest(requestInput);
   const groups = request.groups.map((group, offset) => {
-    const [payload, creator, defaults] = buildPayload(group, catalog);
-    return { group: String(offset + 1).padStart(2, '0'), payload, creator_id: creator, native_defaults: defaults };
+    const [payload, creator, defaults, matched] = buildPayload(group, catalog);
+    return { group: String(offset + 1).padStart(2, '0'), payload, creator_id: creator, native_defaults: defaults, cls_names: matched };
   });
   return { status: 'cls_plan', groups };
 }

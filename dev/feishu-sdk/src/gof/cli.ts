@@ -7,7 +7,9 @@ import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
-import { Bridge, document, execute, login, planWithApi, probe, reconcile, recomputeApiPlan, takeSnapshot, addTagOption } from './feishu.ts';
+import { readBrief } from './brief.ts';
+import { context } from './context.ts';
+import { addOption, Bridge, execute, login, planSummary, planWithApi, probe, reconcile, recomputePlan, takeSnapshot } from './feishu.ts';
 import { makePlan } from './plan.ts';
 import { Snapshot } from './snapshot.ts';
 import { Blocked, checkTarget, isInside, need, readJson, writeJsonNew } from './util.ts';
@@ -122,24 +124,40 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
       return execute(bridge, mustHave(values.batch, 'batch'), str(values.receipt) || bundledReceipt());
     }
     case 'reconcile': return reconcile(bridge, mustHave(parse(args, { batch: { type: 'string' } }).values.batch, 'batch'));
-    case 'document': return document(bridge, mustHave(parse(args, { url: { type: 'string' } }).values.url, 'url'));
+    case 'document': {
+      const { values } = parse(args, { url: { type: 'string' }, sheet: { type: 'string' }, full: { type: 'boolean' } });
+      return readBrief(bridge, mustHave(values.url, 'url'), { ...(str(values.sheet) !== undefined ? { sheet: str(values.sheet)! } : {}), full: values.full === true });
+    }
+    case 'context': {
+      const { values } = parse(args, { snapshot: { type: 'string' }, worksheet: { type: 'string' }, supplier: { type: 'string' } });
+      const snap = new Snapshot(mustHave(values.snapshot, 'snapshot'));
+      try { return await context(bridge, snap, { worksheet: str(values.worksheet), supplier: str(values.supplier) }); } finally { snap.close(); }
+    }
     case 'dropdown-add': {
       const { values } = parse(args, { field: { type: 'string' }, option: { type: 'string' }, sheet: { type: 'string' }, color: { type: 'string' } });
-      return addTagOption(bridge, mustHave(values.field, 'field'), mustHave(values.option, 'option'), mustHave(values.sheet, 'sheet'), str(values.color));
+      return addOption(bridge, mustHave(values.field, 'field'), mustHave(values.option, 'option'), mustHave(values.sheet, 'sheet'), str(values.color));
     }
     case 'snapshot': return takeSnapshot(bridge, mustHave(parse(args, { output: { type: 'string' } }).values.output, 'output'));
     case 'plan': {
-      const { values } = parse(args, { snapshot: { type: 'string' }, request: { type: 'string' } });
+      const { values } = parse(args, { snapshot: { type: 'string' }, request: { type: 'string' }, output: { type: 'string' } });
       const snap = new Snapshot(mustHave(values.snapshot, 'snapshot'));
-      try { return await planWithApi(bridge, snap, readJson(mustHave(values.request, 'request'))); } finally { snap.close(); }
+      const output = str(values.output);
+      const file = output === undefined ? undefined : path.resolve(output);
+      need(file === undefined || !fs.existsSync(file), '计划文件已存在，不覆盖');
+      try {
+        const result = await planWithApi(bridge, snap, readJson(mustHave(values.request, 'request')));
+        if (file === undefined) return result;
+        writeJsonNew(file, result);
+        return planSummary(result, file);
+      } finally { snap.close(); }
     }
     case 'prepare': {
       const { values } = parse(args, { plan: { type: 'string' }, snapshot: { type: 'string' }, 'output-root': { type: 'string' }, workspace: { type: 'string' } });
       const snap = new Snapshot(mustHave(values.snapshot, 'snapshot'));
       try {
         const approved = readJson(mustHave(values.plan, 'plan'));
-        const recomputed = await recomputeApiPlan(bridge, snap, approved);
-        return prepare(approved.batch_plan, snap, { workspace: str(values.workspace), apiPlan: recomputed, outputRoot: str(values['output-root']) });
+        const fresh = await recomputePlan(bridge, snap, approved);
+        return prepare(fresh.batch_plan, snap, { workspace: str(values.workspace), apiPlan: fresh.api_plan, outputRoot: str(values['output-root']) });
       } finally { snap.close(); }
     }
     default: throw new Blocked(`未知的 feishu 子命令：${command}`);

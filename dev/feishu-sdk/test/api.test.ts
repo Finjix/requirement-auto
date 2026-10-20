@@ -152,6 +152,41 @@ test('the workbook is exported to a new XLSX and an existing file is never repla
   } finally { await done(); }
 });
 
+test('a new dropdown option keeps every rule its mode and colors: a multiple-choice column stays multiple choice', async () => {
+  const { api, mock, done } = await setup();
+  try {
+    const posted: any[] = [];
+    const rules = [
+      { dataValidationType: 'list', conditionValues: ['菲比', '丁杰'], ranges: ['s1!M2:M5000'],
+        options: { multipleValues: true, highlightValidData: true, colorValueMap: { 菲比: '#bacefd', 丁杰: '#A9EFE6' } } },
+      { dataValidationType: 'list', conditionValues: ['甲'], ranges: ['s1!M5001:M5002', 's1!M5005'], options: { multipleValues: false, highlightValidData: false } },
+      { dataValidationType: 'list', conditionValues: ['杨燃', '乙'], ranges: ['s1!M5003'], options: { highlightValidData: false } },
+    ];
+    const original = mock.server.listeners('request');
+    mock.server.removeAllListeners('request');
+    mock.server.on('request', async (req, res) => {
+      if (req.url?.startsWith('/open-apis/sheets/v2/spreadsheets/shtTEST123/dataValidation')) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        if (req.method === 'POST') posted.push(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return void res.end(JSON.stringify({ code: 0, data: req.method === 'GET' ? { sheetId: 's1', dataValidations: rules } : {} }));
+      }
+      (original[0] as (...args: unknown[]) => void)(req, res);
+    });
+    const result = await api.addDropdownOption('shtTEST123', 's1', 'M', 2, 5001, '杨燃', '#fed4a4');
+    assert.deepEqual(result.ranges, ['s1!M2:M5000', 's1!M5001:M5002', 's1!M5005']);
+    assert.deepEqual(posted[0], { range: 's1!M2:M5000', dataValidationType: 'list', dataValidation: { conditionValues: ['菲比', '丁杰', '杨燃'],
+      options: { multipleValues: true, highlightValidData: true, colors: ['#bacefd', '#A9EFE6', '#fed4a4'] } } });
+    assert.deepEqual(posted[1], { range: 's1!M5001:M5002', dataValidationType: 'list', dataValidation: { conditionValues: ['甲', '杨燃'],
+      options: { multipleValues: false, highlightValidData: false } } });
+    assert.equal(posted.length, 3, 'a rule that already has the option is left alone');
+    rules[0]!.options = { multipleValues: true, highlightValidData: true, colorValueMap: { 菲比: '#bacefd' } } as any;
+    await assert.rejects(() => api.addDropdownOption('shtTEST123', 's1', 'M', 2, 5001, '新', '#fed4a4'), (e: BridgeError) => /颜色无法可靠保留/.test(e.message));
+    assert.equal(posted.length, 3, 'nothing is sent when a rule cannot be kept as it is');
+  } finally { await done(); }
+});
+
 test('a new workbook is created only through the dedicated call', async () => {
   const { api, mock, done } = await setup();
   try {

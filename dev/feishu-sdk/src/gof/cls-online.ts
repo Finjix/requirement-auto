@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { events, loadBatch } from './batch.ts';
 import { ClsError, createClsAdapter } from './cls-adapter.ts';
+import { catalogChoices } from './cls.ts';
 import { attachBrowser } from './chromium.ts';
 import { guardOnline, pinState, writeQr } from './cls-guard.ts';
 import { captureAuthorization, captureLoginQr, clsAccountFile, clsProfileDir, clsQrFile, openSession, type Account, type Capture, type ConsentOptions } from './cls-session.ts';
@@ -120,7 +121,8 @@ export async function catalog(online: Online, output: string): Promise<Result> {
   const result = await adapterFor(session).readCatalog();
   rejectSecrets(result);
   writeJsonNew(file, result);
-  return { status: 'catalog_saved', catalog: file, account: account(session.account), can_create: result.can_create, can_import: result.can_import };
+  return { status: 'catalog_saved', catalog: file, account: account(session.account), can_create: result.can_create, can_import: result.can_import,
+    choices: catalogChoices(result) };
 }
 
 /**

@@ -2,12 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CellRange, columnLetter } from './a1.ts';
 import { BRIDGE_VERSION, runBridge, type BridgeContext, type BridgeReply } from '../bridge.ts';
-import { events, loadBatch, preflight, record, report, status, verify } from './batch.ts';
-import { makePlan, type Plan } from './plan.ts';
+import { events, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
+import { cellShown } from './brief.ts';
+import { requirementName } from './cls.ts';
+import { business, makePlan, type Plan } from './plan.ts';
+import { itemsOf } from './request.ts';
 import { acceptance, buildWrites, dropdowns, ruleProjection, ruleProof, type ApiRule } from './rules.ts';
 import { checkSeal, seal } from './seal.ts';
-import { Snapshot } from './snapshot.ts';
-import { Blocked, canonical, digest, feishuDocPath, NODE, need, readJson, TARGET, writeJsonNew } from './util.ts';
+import { FIELD_HEADERS, headerMatches, Snapshot } from './snapshot.ts';
+import { Blocked, canonical, digest, NODE, need, readJson, TARGET, writeJsonNew } from './util.ts';
 
 /**
  * The allowlisted Feishu transport: it calls the SDK bridge in this process (the same code the bridge command runs) and
@@ -159,7 +162,7 @@ export async function target(bridge: Bridge): Promise<string> {
   return token;
 }
 
-async function sheetsOf(bridge: Bridge, token: string): Promise<Obj[]> {
+export async function sheetsOf(bridge: Bridge, token: string): Promise<Obj[]> {
   const data = await bridge.apiRead(`/open-apis/sheets/v3/spreadsheets/${token}/sheets/query`);
   const found = data.sheets;
   need(Array.isArray(found) && found.length > 0, '无法列出完整工作表');
@@ -286,7 +289,7 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
       snapshot: fresh.path, snapshot_digest: fresh.fingerprint }, fresh);
     const reportPath = path.join(attempt, 'verification-report.json');
     writeJsonNew(reportPath, report(batchPath));
-    return { status: 'append_verified', batch: batchPath, worksheet: manifest.plan.worksheet, sheet_id: context.sheet_id,
+    return { status: 'append_verified', batch: batchPath, worksheet: manifest.plan.worksheet, sheet_id: context.sheet_id, sheet_url: sheetUrl(context.sheet_id),
       range: manifest.plan.range, report: reportPath, calls: bridge.calls };
   } catch (error) {
     if (started && !status(batchPath).blocked) {
@@ -382,38 +385,29 @@ export async function login(bridge: Bridge, action: string, options: { wait?: nu
   return bridge.call('auth-logout');
 }
 
-/** Raw text of a script document the user linked (a docx, or a wiki node that points at one). */
-export async function document(bridge: Bridge, url: string): Promise<any> {
-  const docPath = feishuDocPath(url, 'docx|wiki');
-  need(docPath, '不是本次飞书脚本文档链接');
-  let token = docPath.slice(docPath.lastIndexOf('/') + 1);
-  if (docPath.startsWith('/wiki/')) {
-    const node = (await bridge.apiRead('/open-apis/wiki/v2/spaces/get_node', { token, obj_type: 'wiki' })).node;
-    need(node?.obj_type === 'docx', '脚本知识库节点不是新版文档');
-    token = node.obj_token;
-  }
-  return bridge.apiRead(`/open-apis/docx/v1/documents/${token}/raw_content`);
-}
-
-const TAG_COLUMNS: Record<string, string> = { primary: '一级标签', secondary: '二级标签' };
+/** The progress columns whose dropdown may gain an option, by the name `dropdown-add --field` takes (the plan's field names work too). */
+export const OPTION_FIELDS: Record<string, string> = { primary: 'primary_tag', secondary: 'secondary_tag', form: 'creative_form', supplier: 'supplier', reviewer: 'creator' };
 const TAG_COLORS = ['#bacefd', '#d9f5d6', '#fed4a4', '#ece2fe', '#f8def8', '#b1e8fc', '#fbbfbc', '#f8e6ab'];
 const rowCap = 5000;
 
 /**
- * Adds a missing 一级标签/二级标签 option to the whole column of one sheet. Only for a tag the request needs and the dropdown lacks: the
- * caller (the agent) checks that and put it in the approved plan. Existing options, colors and cell values are not changed.
+ * Adds a missing option to the dropdown of a whole column of one sheet: 一级标签, 二级标签, 创意形式, 设计师供应商 or 创意者脚本审核人. Only
+ * for a value the request needs and the dropdown lacks: the caller (the agent) checks that and put it in the approved plan. Existing
+ * options, colors, modes and cell values are not changed.
  */
-export async function addTagOption(bridge: Bridge, field: string, option: string, sheetName: string, color?: string): Promise<Obj> {
-  need(field in TAG_COLUMNS, 'field 必须是 primary 或 secondary');
+export async function addOption(bridge: Bridge, fieldName: string, option: string, sheetName: string, color?: string): Promise<Obj> {
+  const field = OPTION_FIELDS[fieldName] ?? (Object.values(OPTION_FIELDS).includes(fieldName) ? fieldName : undefined);
+  need(field, '--field 必须是 primary、secondary、form、supplier 或 reviewer');
   await bridge.doctor();
   const token = await target(bridge);
   const sheet = (await sheetsOf(bridge, token)).find(s => s.title === sheetName);
   need(sheet, `找不到工作表：${sheetName}`);
   const sid = sheet.sheet_id as string;
-  const header = (await bridge.apiRead(`/open-apis/sheets/v2/spreadsheets/${token}/values_batch_get`, { ranges: `${sid}!A1:Z1` })).valueRanges?.[0]?.values?.[0];
+  const width = Math.min(Math.max(Number(sheet.grid_properties?.column_count) || 26, 1), 100);
+  const header = (await bridge.apiRead(`/open-apis/sheets/v2/spreadsheets/${token}/values_batch_get`, { ranges: `${sid}!A1:${columnLetter(width)}1` })).valueRanges?.[0]?.values?.[0];
   need(Array.isArray(header), '读不到表头');
-  const hits = (header as unknown[]).flatMap((cell, i) => typeof cell === 'string' && cell.trim().startsWith(TAG_COLUMNS[field]!) ? [i] : []);
-  need(hits.length === 1, `表头里找不到唯一的${TAG_COLUMNS[field]}列`);
+  const hits = (header as unknown[]).flatMap((cell, i) => headerMatches(field, cellShown(cell)) ? [i] : []);
+  need(hits.length === 1, `表头里找不到唯一的${FIELD_HEADERS[field]}列`);
   const column = columnLetter(hits[0]! + 1);
   const chosen = color ?? TAG_COLORS[[...option].reduce((n, c) => n + c.codePointAt(0)!, 0) % TAG_COLORS.length]!;
   const rows = Number(sheet.grid_properties?.row_count);
@@ -429,7 +423,7 @@ export async function addTagOption(bridge: Bridge, field: string, option: string
     }
   }
   need(updated.length > 0, '没有任何范围需要新增该选项（已存在，或该列没有下拉）');
-  return { sheet: sheetName, column, option, updated_ranges: updated.reduce((n, u) => n + Number(u.updated_ranges), 0) };
+  return { sheet: sheetName, field, column, option, updated_ranges: updated.reduce((n, u) => n + Number(u.updated_ranges), 0) };
 }
 
 export async function takeSnapshot(bridge: Bridge, output: string): Promise<Obj> {
@@ -454,4 +448,48 @@ export async function recomputeApiPlan(bridge: Bridge, snapshot: Snapshot, appro
   const recomputed = await apiPlan(bridge, snapshot, approved.batch_plan);
   need(canonical(recomputed) === canonical(approved.api_plan), '接口目标/版本/规则与获批计划变化');
   return recomputed;
+}
+
+/**
+ * The approved plan made again on a fresh snapshot, for the append. The rows, their numbers, values and names and the groups must be
+ * exactly the approved ones, or the user has to approve again; the revision and the rules are taken as they are now, since the approved
+ * dropdown additions (and anybody's edits elsewhere in the workbook) change them without changing what is written.
+ */
+export async function recomputePlan(bridge: Bridge, snapshot: Snapshot, approved: Obj): Promise<Obj> {
+  const plan = approved?.batch_plan;
+  need(plan && typeof plan === 'object' && approved.api_plan && typeof approved.api_plan === 'object', '获批计划不完整');
+  const { plan_id: id, ...unsealed } = plan;
+  need(digest(unsealed).slice(0, 24) === id, '获批计划被修改过');
+  checkSeal(approved.api_plan, 'api_plan_id');
+  await bridge.doctor();
+  const fresh = makePlan(snapshot, plan.request, plan.current_sheet);
+  need(canonical(business(fresh)) === canonical(business(plan)), '进度表新增行、素材编号或名称与获批计划不同（表格已有新变化），需更新计划并重新确认');
+  const api = await apiPlan(bridge, snapshot, fresh);
+  need(api.spreadsheet_token === approved.api_plan.spreadsheet_token && api.sheet_id === approved.api_plan.sheet_id, '接口目标与获批计划不同');
+  return { batch_plan: fresh, api_plan: api };
+}
+
+const OPTION_NAMES = Object.fromEntries(Object.entries(OPTION_FIELDS).map(([name, field]) => [field, name]));
+
+/** The few lines of a plan the agent shows the user: sheet, numbers, what each group's rows are called, and the dropdown options to add. */
+export function planSummary(result: Obj, file: string): Obj {
+  const plan = result.batch_plan;
+  const api = result.api_plan;
+  return {
+    status: 'plan_saved', plan: file, worksheet: plan.worksheet, sheet_id: api.sheet_id, range: plan.range, quantity: plan.quantity,
+    first_number: plan.first_number, last_number: plan.last_number,
+    groups: (plan.groups as Obj[]).map(g => {
+      let offset = 0;
+      const items = itemsOf(g.request).map(item => {
+        const names = (g.names as string[]).slice(offset, offset + item.quantity);
+        offset += item.quantity;
+        return { quantity: item.quantity, first: names[0], last: names[names.length - 1] };
+      });
+      return { group: g.id, quantity: g.request.quantity, requirement_name: requirementName(g.names), supplier: g.request.supplier,
+        reviewer: g.request.reviewer, script_url: g.request.script_url, items };
+    }),
+    // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.
+    new_options: (api.dropdowns as Obj[]).flatMap(d => (d.missing as string[]).map(option => ({ field: OPTION_NAMES[d.field] ?? d.field, option }))),
+    history_warnings: (plan.history_warnings as string[]).length,
+  };
 }

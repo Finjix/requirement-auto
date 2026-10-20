@@ -15,15 +15,15 @@ Feishu work goes through the [Feishu bridge](feishu-sdk-workflow.md). This file 
 | Command | Purpose |
 |---|---|
 | `cls login --qr <png>` / `cls session` | log in / check or take the session |
-| `cls catalog --output catalog.json` | read projects, people, directions, task types, currencies; saves a redacted catalog (no emails, tokens, full user list) |
+| `cls catalog --output catalog.json` | read projects, people, directions, task types, currencies; saves a redacted catalog (no emails, tokens, full user list) and prints `choices`: the GOFCN directions, creative task types, active suppliers and active people by name |
 | `cls observe --action save_draft\|import_scripts [--draft ID] --output observations.json` | facts read from CLS now: account, create/import permission, draft unpublished + editable + no scripts. Never hand-written |
 | `cls --batch … --group … --action … --catalog … --observations … --output …` | offline: build and seal this group's save/import operation file (in the batch dir, new file) |
-| `cls --preview --request request.json --catalog catalog.json` | offline: show each group's planned fields, IDs, creator, native defaults; creates nothing |
+| `cls --preview --request request.json --catalog catalog.json` | offline: show each group's planned fields, IDs, creator, native defaults and `cls_names` (the direction, task type, supplier and creator as matched in CLS); creates nothing |
 | `cls run --batch <batch> --operation <op> --output <new receipt>` | send the operation's write, read back, write the receipt |
 | `cls read-draft --id N` | read a draft |
 | `cls verify --batch … --operation … --draft N --output …` | read back an existing draft into a receipt (recovery after an unknown result) |
 
-Matching: read `cls catalog` first. Project code is GOFCN; direction by project and name; task type by the real options; supplier by full name or a unique bracket alias; creator strictly equal to the reviewer. Never hardcode earlier IDs (94/390/663/653). Quote/currency default to the observed native 0/cny, labelled "system default" in the plan; other optional fields are blank unless the user set them. Preview before the plan; optional fields, ambiguous matches and quote/date issues are settled there, not during execution.
+Matching: read `cls catalog` first. Project code is GOFCN; direction by project and name; task type by the real options. Supplier (active, outsource role) and creator (active) are the progress sheet's supplier and reviewer, which CLS spells in full: the exact name, else the one CLS name whose bracket or dash part is that name ("北京柒曦文化传媒有限公司（丁杰）", "…（个体工商户）-杨燃"), else the one CLS name containing it ("冯彦蓉-实习生"); several or none at that level is refused. When the spelling differs more ("廿十一" / "长沙廿拾一文化传媒有限公司"), the request names the CLS user exactly in `cls.supplier` / `cls.creator`. Never hardcode earlier IDs (94/390/663/653). Quote/currency default to the observed native 0/cny, labelled "system default" in the plan; other optional fields are blank unless the user set them. Preview before the plan; optional fields, ambiguous matches and quote/date issues are settled there, not during execution.
 
 ## Per group
 

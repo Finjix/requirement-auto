@@ -4,6 +4,7 @@ import { CellRange, columnLetter, coordOf } from './a1.ts';
 import { loadBatch } from './batch.ts';
 import { checkSeal, seal } from './seal.ts';
 import type { Plan } from './plan.ts';
+import { fieldValues } from './request.ts';
 import type { Snapshot } from './snapshot.ts';
 import { canonical, checkTarget, isInside, need, readJson, writeJsonNew } from './util.ts';
 
@@ -49,6 +50,23 @@ export function ruleProjection(records: ApiRule[], ownedSheet?: string, ownedRan
   return result;
 }
 
+/** The options a new row of a column would offer: those of the rule nearest above it (several equally near: all of them, in order). */
+export function columnOptions(records: ApiRule[], sheetId: string, col: number, lastRow: number): string[] {
+  const found: [number, ApiRule][] = [];
+  for (const rule of records) {
+    if (rule.sheet_id !== sheetId) continue;
+    for (const raw of rule.ranges) {
+      const rect = new CellRange(raw);
+      if (rect.minCol <= col && col <= rect.maxCol && rect.minRow <= lastRow) found.push([Math.min(rect.maxRow, lastRow), rule]);
+    }
+  }
+  if (found.length === 0) return [];
+  const nearest = Math.max(...found.map(([end]) => end));
+  const options: string[] = [];
+  for (const [end, rule] of found) if (end === nearest) for (const value of rule.options) if (!options.includes(value)) options.push(value);
+  return options;
+}
+
 /** The dropdown to write for each planned field: the nearest existing rule's mode and colors, plus the missing options. */
 export function dropdowns(plan: Plan, sheetId: string, records: ApiRule[]): Obj[] {
   const result: Obj[] = [];
@@ -71,7 +89,7 @@ export function dropdowns(plan: Plan, sheetId: string, records: ApiRule[]): Obj[
     const rule = [...choices.values()][0]!;
     // Only the values this request asks for are added to the rule being kept. The XLSX export is not a reliable source of a column's options
     // (it can attribute a stray rule on a few old cells to the whole column), so spec.options is not used here.
-    const wanted = [...new Set((plan.request.groups as Obj[]).map(g => g[spec.field as string] as string).filter(Boolean))];
+    const wanted = fieldValues(plan.request.groups as Obj[], spec.field as string);
     const options = [...rule.options, ...wanted.filter(v => !rule.options.includes(v))];
     const colors = options.map((v, i) => rule.colors[v] ?? PALETTE[i % PALETTE.length]!);
     // Existing highlighted options must have an actual color, never a guessed replacement.

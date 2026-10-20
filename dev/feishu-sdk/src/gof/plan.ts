@@ -1,5 +1,5 @@
 import { CellRange, columnLetter, coordOf, translateFormula } from './a1.ts';
-import { normalizeRequest, OPTIONAL_FIELDS } from './request.ts';
+import { fieldValues, ITEM_FIELDS, itemsOf, normalizeRequest, OPTIONAL_FIELDS, type Item } from './request.ts';
 import { chooseSheet, collectIds, concatenate, optionsFor, REQUIRED_HEADERS, type Snapshot } from './snapshot.ts';
 import { digest, need, safeFilename, TARGET } from './util.ts';
 
@@ -44,32 +44,36 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
     const id = String(index).padStart(2, '0');
     const names: string[] = [];
     const groupRows: number[] = [];
-    for (let n = 0; n < g.quantity; n++) {
-      const r = startRow + cursor;
-      const number = startNumber + cursor;
-      const values: Record<string, string | number | null> = {};
-      for (let c = left; c <= right; c++) values[coordOf(c, r)] = null;
-      for (const field of used) {
-        if (field === 'name') continue;
-        values[coordOf(cols[field]!, r)] = field === 'number' ? number : (g[field] !== '' ? (g[field] as string) : null);
+    for (const item of itemsOf(g)) {
+      for (let n = 0; n < item.quantity; n++) {
+        const r = startRow + cursor;
+        const number = startNumber + cursor;
+        const values: Record<string, string | number | null> = {};
+        for (let c = left; c <= right; c++) values[coordOf(c, r)] = null;
+        for (const field of used) {
+          if (field === 'name') continue;
+          const value = (ITEM_FIELDS.includes(field) ? item[field as keyof Item] : g[field]) as string;
+          values[coordOf(cols[field]!, r)] = field === 'number' ? number : (value !== '' ? value : null);
+        }
+        const nameCoord = coordOf(cols.name!, r);
+        const formula = translateFormula(formulaCell.value!, formulaCell.coord, nameCoord);
+        const name = concatenate(formula, values);
+        need(name.startsWith(`GOFCN${number}_`), '命名公式未产生正确 GOFCN 编号');
+        need(name === `GOFCN${number}_${item.material_name}`, '命名公式/推理标签与用户素材名称不一致，请澄清');
+        values[nameCoord] = formula;
+        rows.push({ row: r, number, name, values, group: id });
+        names.push(name);
+        groupRows.push(r);
+        cursor++;
       }
-      const nameCoord = coordOf(cols.name!, r);
-      const formula = translateFormula(formulaCell.value!, formulaCell.coord, nameCoord);
-      const name = concatenate(formula, values);
-      need(name.startsWith(`GOFCN${number}_`), '命名公式未产生正确 GOFCN 编号');
-      need(name === `GOFCN${number}_${g.material_name}`, '命名公式/推理标签与用户素材名称不一致，请澄清');
-      values[nameCoord] = formula;
-      rows.push({ row: r, number, name, values, group: id });
-      names.push(name);
-      groupRows.push(r);
-      cursor++;
     }
-    const filename = `创意脚本_${id}_${safeFilename(g.topic)}_${safeFilename(g.creative_form)}_${safeFilename(g.supplier)}.csv`;
+    const first = itemsOf(g)[0]!;
+    const filename = `创意脚本_${id}_${safeFilename(first.topic)}_${safeFilename(first.creative_form)}_${safeFilename(g.supplier)}.csv`;
     groups.push({ id, csv: filename, names, rows: groupRows, request: g });
   });
   const dropdowns: Plan[] = [];
   for (const field of ['primary_tag', 'secondary_tag', 'creative_form', 'client', 'supplier', 'creator', 'creative_expression']) {
-    const wanted = [...new Set(request.groups.map(g => g[field] as string).filter(Boolean))];
+    const wanted = fieldValues(request.groups, field);
     if (wanted.length === 0 || !(field in cols)) continue;
     const existing = optionsFor(ws, cols[field]!, startRow - 1);
     need(wanted.every(v => !v.includes(',') && !v.includes('"')), '下拉标签含逗号/引号，需人工核对规则');
@@ -85,4 +89,13 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
   };
   plan.plan_id = digest(plan).slice(0, 24);
   return plan;
+}
+
+/**
+ * What the user approved: the sheet, the rows with their numbers, values and names, and the groups. A plan made again on a newer
+ * snapshot may differ in everything else (the snapshot digest, the dropdown options read from it, warnings about old rows).
+ */
+export function business(plan: Plan): unknown {
+  const { schema, target, worksheet, current_sheet, request, columns, range, quantity, first_number, last_number, rows, groups } = plan;
+  return { schema, target, worksheet, current_sheet, request, columns, range, quantity, first_number, last_number, rows, groups };
 }

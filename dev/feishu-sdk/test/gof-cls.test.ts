@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepare, record, status, report, message } from '../src/gof/batch.ts';
 import { createClsAdapter } from '../src/gof/cls-adapter.ts';
-import { clsPreview, operation, requirementName } from '../src/gof/cls.ts';
+import { catalogChoices, clsPreview, operation, requirementName } from '../src/gof/cls.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { Blocked, readJson, writeJsonNew } from '../src/gof/util.ts';
@@ -23,7 +23,12 @@ const reason = (fn: () => unknown): string => {
 };
 
 test('the CLS preview builds the payloads the Python implementation built, and refuses what it refused', () => {
-  assert.deepEqual(clsPreview(request, catalog), golden.preview);
+  const preview = clsPreview(request, catalog);
+  // The CLS names everything was matched to are new since the port; the rest is unchanged.
+  assert.deepEqual(preview.groups.map((g: any) => g.cls_names), [
+    { direction: '方向一', task_type: 'creative_a', supplier: '丙公司（供应商丙）', creator: '张三' },
+    { direction: '方向一', task_type: 'creative_a', supplier: '供应商甲', creator: '李四' }]);
+  assert.deepEqual({ ...preview, groups: preview.groups.map(({ cls_names, ...g }: any) => g) }, golden.preview);
   const variants: Record<string, (c: any) => void> = {
     'no-create': c => { c.can_create = false; },
     'no-game-permission': c => { c.account.game_ids = [4]; },
@@ -105,6 +110,9 @@ test('an operation and its receipts are checked as strictly as before', () => {
   assert.ok((message(dir).message as string).includes('GOFCN20260100009（玩法_卖点 · 视频 * 2）'));
   const full = report(dir);
   assert.equal(full.groups[0].draft_saved.draft_id, 5001);
+  // The user is handed the progress sheet and each saved draft to look at.
+  assert.deepEqual(full.links, { progress_sheet: 'https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn',
+    cls: [{ group: '01', draft: 'https://creative.centurygames.cn/requirement/5001/edit-outer' }, { group: '02', draft: null }] });
   // The operation file is never replaced.
   assert.throws(() => writeJsonNew(opPath, op), /EEXIST/);
 });
@@ -140,4 +148,44 @@ test('the CLS requirement name is the first and last material number of the grou
   const given = structuredClone(request);
   given.groups[0].cls.requirement_name = '手填';
   assert.equal(reason(() => clsPreview(given, catalog)), 'CLS 需求名称由该组素材编号生成（GOFCN首号-GOFCN末号），不接受输入');
+});
+
+test('CLS names are found from the short names the progress sheet uses, and exactly one may match', () => {
+  const wide = structuredClone(catalog);
+  wide.users.push(
+    { id: 21, name: '北京柒曦文化传媒有限公司（丁杰）', roles: ['outsource'], status: 1 },
+    { id: 22, name: '某某工作室（个体工商户）-杨燃', roles: ['outsource'], status: 1 },
+    { id: 23, name: '达治（武汉）文化传媒有限公司', roles: ['outsource'], status: 1 },
+    { id: 24, name: '长沙廿拾一文化传媒有限公司', roles: ['outsource'], status: 1 },
+    { id: 25, name: '冯彦蓉-实习生', roles: ['creative_plan'], status: 1 },
+    { id: 26, name: '张三丰', roles: ['creative_plan'], status: 1 },
+    { id: 27, name: '李达甲', roles: ['creative_plan'], status: 1 },
+    { id: 28, name: '李达乙', roles: ['creative_plan'], status: 1 },
+    { id: 29, name: '丁杰-离职', roles: ['outsource'], status: 0 },
+  );
+  const names = (supplier: string, reviewer: string, cls: Record<string, string> = {}) => {
+    const r = structuredClone(request);
+    Object.assign(r.groups[0], { supplier, reviewer });
+    Object.assign(r.groups[0].cls, cls);
+    return clsPreview(r, wide).groups[0].cls_names;
+  };
+  assert.deepEqual(names('丁杰', '冯彦蓉'), { direction: '方向一', task_type: 'creative_a', supplier: '北京柒曦文化传媒有限公司（丁杰）', creator: '冯彦蓉-实习生' });
+  assert.equal(names('杨燃', '张三').supplier, '某某工作室（个体工商户）-杨燃');
+  assert.equal(names('达治', '张三').supplier, '达治（武汉）文化传媒有限公司');
+  // The exact name wins over a longer one that contains it.
+  assert.equal(names('供应商甲', '张三').creator, '张三');
+  assert.equal(reason(() => names('供应商甲', '李达')), '创意人 不存在或匹配不唯一，需在计划前澄清');
+  assert.equal(reason(() => names('廿十一', '张三')), '供应商 不存在或匹配不唯一，需在计划前澄清');
+  // When the spelling differs, the request names the CLS user exactly; then nothing else is tried.
+  assert.equal(names('廿十一', '李达', { supplier: '长沙廿拾一文化传媒有限公司', creator: '李达甲' }).creator, '李达甲');
+  assert.equal(reason(() => names('丁杰', '张三', { supplier: '丁杰' })), '供应商 不存在或匹配不唯一，需在计划前澄清');
+  const r = structuredClone(request);
+  r.groups[0].cls.supplier = '长沙廿拾一文化传媒有限公司';
+  const payload = clsPreview(r, wide).groups[0].payload;
+  assert.equal(payload.third_user_id, 24);
+  assert.ok(!('supplier' in payload) && !('creator' in payload));
+});
+
+test('the catalog choices are the GOFCN directions, creative task types, active suppliers and active people', () => {
+  assert.deepEqual(catalogChoices(catalog), { directions: ['方向一'], task_types: ['creative_a'], suppliers: ['丙公司（供应商丙）', '供应商甲'], people: ['张三', '李四'] });
 });

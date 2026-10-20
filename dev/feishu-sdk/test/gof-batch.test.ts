@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { makePlan, type Plan } from '../src/gof/plan.ts';
+import { normalizeRequest } from '../src/gof/request.ts';
 import { clsCheck, loadBatch, message, preflight, prepare, record, report, status, verify } from '../src/gof/batch.ts';
 import { Blocked, canonical, digest, readJson, writeJsonNew } from '../src/gof/util.ts';
 import { rejectSecrets } from '../src/gof/seal.ts';
@@ -25,6 +26,9 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'gof-batch-'));
 const MAIN = 'GOFCN创意进度 26年3月';
 // JSON.parse cannot tell 2.0 from 2, so the Python check for an integral float is not reproducible.
 const KNOWN_DIVERGENT = new Set(['base.xlsx|float-quantity|']);
+// Refusals whose rule changed after the port: 提炼词 defaults to 关键词 and the material name can be built from the tags, so only the
+// fields that are really missing are named.
+const CHANGED_REFUSALS: Record<string, string> = { 'base.xlsx|missing-field|': '第 1 组缺少需求字段：供应商' };
 
 function open(name: string): Snapshot { return new Snapshot(fx(name)); }
 
@@ -42,7 +46,7 @@ test('plans match what the Python implementation produced, including the refusal
     } else {
       assert.throws(() => makePlan(snapshot, request(req), current || null), (error: Error) => {
         assert.ok(error instanceof Blocked, `${key}: ${error.stack}`);
-        assert.equal(error.message, golden.plan_errors[key], key);
+        assert.equal(error.message, CHANGED_REFUSALS[key] ?? golden.plan_errors[key], key);
         return true;
       });
     }
@@ -255,4 +259,69 @@ test('a GOFCN sheet with an unusable header is never skipped silently: it stops 
       return true;
     }, fixture);
   }
+});
+
+// ---- requests the agent builds from a requirement document: 提炼词 by default, names built from the tags, rows of several kinds
+
+const derived = (over: Record<string, unknown> = {}) => ({
+  supplier: '供应商甲', reviewer: '张三', script_url: 'https://centurygames.feishu.cn/wiki/XYZ789?sheet=abc123',
+  cls: { direction: '方向一', task_type: 'creative_a' }, ...over,
+});
+
+test('提炼词 defaults to 关键词 and the material name is built from the tags, form and keyword', () => {
+  const plan = makePlan(open('base.xlsx'), { groups: [derived({ quantity: 2, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频' })] });
+  assert.deepEqual(plan.rows.map((r: Plan) => r.name), ['GOFCN1011_玩法_卖点_视频_关键词', 'GOFCN1012_玩法_卖点_视频_关键词']);
+  const g = plan.groups[0].request;
+  assert.deepEqual([g.keyword, g.material_name, g.topic, 'items' in g], ['关键词', '玩法_卖点_视频_关键词', '玩法_卖点', false]);
+  // Written out in full, the same request gives the same plan.
+  const same = makePlan(open('base.xlsx'), { groups: [derived({ quantity: 2, material_name: 'GOFCN1_玩法_卖点_视频_关键词', creative_form: '视频', keyword: '关键词' })] });
+  assert.deepEqual(same, plan);
+  // A one-item list is the same group too.
+  const listed = makePlan(open('base.xlsx'), { groups: [derived({ items: [{ quantity: 2, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频' }] })] });
+  assert.deepEqual(listed, plan);
+});
+
+test('a group can hold rows of several kinds: they keep their order, share one CSV and one CLS ticket, and are counted by kind', () => {
+  const request = { groups: [derived({
+    primary_tag: '玩法', creative_form: '视频',
+    items: [{ quantity: 2, secondary_tag: '卖点' }, { quantity: 1, secondary_tag: '体验', keyword: '新词' }, { quantity: 1, secondary_tag: '卖点' },
+      { quantity: 1, primary_tag: '画面', secondary_tag: '体验', creative_form: '图文' }],
+  })] };
+  const snapshot = open('base.xlsx');
+  const plan = makePlan(snapshot, request);
+  assert.equal(plan.range, 'A6:I10');
+  assert.deepEqual(plan.rows.map((r: Plan) => r.name), ['GOFCN1011_玩法_卖点_视频_关键词', 'GOFCN1012_玩法_卖点_视频_关键词',
+    'GOFCN1013_玩法_体验_视频_新词', 'GOFCN1014_玩法_卖点_视频_关键词', 'GOFCN1015_画面_体验_图文_关键词']);
+  assert.deepEqual(plan.rows.map((r: Plan) => [r.values[`B${r.row}`], r.values[`E${r.row}`], r.values[`H${r.row}`], r.values[`I${r.row}`]]),
+    [['关键词', '卖点', '供应商甲', '张三'], ['关键词', '卖点', '供应商甲', '张三'], ['新词', '体验', '供应商甲', '张三'],
+      ['关键词', '卖点', '供应商甲', '张三'], ['关键词', '体验', '供应商甲', '张三']]);
+  assert.equal(plan.groups.length, 1);
+  assert.equal(plan.groups[0].request.quantity, 5);
+  // prepare makes the plan again from the normalized request, which must come out the same.
+  assert.deepEqual(normalizeRequest(plan.request), plan.request);
+  assert.deepEqual(plan.dropdowns.find((d: Plan) => d.field === 'secondary_tag').missing, []);
+  const dir = prepare(plan, snapshot, { outputRoot: tmp() }).batch as string;
+  const csv = fs.readFileSync(path.join(dir, plan.groups[0].csv), 'utf8');
+  assert.equal(csv.split('\r\n').length, 7);
+  assert.ok(csv.includes('GOFCN1011_玩法_卖点_视频_关键词,https://centurygames.feishu.cn/wiki/XYZ789?sheet=abc123,'));
+  assert.ok(csv.includes('GOFCN1015_画面_体验_图文_关键词,同上,'));
+  assert.ok((message(dir).message as string).includes('（玩法_卖点 · 视频 * 3，玩法_体验 · 视频 * 1，画面_体验 · 图文 * 1）'));
+});
+
+test('a request with rows of several kinds is refused when an item is incomplete or the group also counts its own rows', () => {
+  const refused = (group: Record<string, unknown>) => {
+    try { makePlan(open('base.xlsx'), { groups: [derived(group)] }); } catch (error) { assert.ok(error instanceof Blocked); return error.message; }
+    return 'no error';
+  };
+  const item = { quantity: 1, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频' };
+  assert.equal(refused({ quantity: 2, items: [item] }), '第 1 组的 quantity 与各项数量之和不一致');
+  assert.equal(refused({ material_name: '玩法_卖点_视频_关键词', items: [item] }), '第 1 组已按 items 分行，素材名称写在各项里');
+  assert.equal(refused({ items: [] }), '第 1 组的 items 需要至少一项');
+  assert.equal(refused({ items: [item, { ...item, extra: 1 }] }), '第 1 组第 2 项有未知字段');
+  assert.equal(refused({ items: [item, { quantity: 1, primary_tag: '玩法', creative_form: '视频' }] }), '第 1 组第 2 项缺少一级/二级标签');
+  assert.equal(refused({ items: [item, { quantity: 1, primary_tag: '玩法', secondary_tag: '卖点' }] }), '第 1 组第 2 项缺少创意形式');
+  assert.equal(refused({ items: [{ ...item, quantity: 0 }] }), 'quantity 必须是正整数');
+  assert.equal(refused({ items: [{ ...item, material_name: '玩法_卖点_图文_关键词' }] }), '素材名称与创意形式/提炼词不一致，请澄清');
+  assert.equal(refused({ quantity: 1, creative_form: '视频' }), '第 1 组缺少一级/二级标签');
+  assert.equal(refused({ ...item, script_url: 'https://centurygames.feishu.cn/sheets/shtABC123?sheet=x' }), 'no error');
 });

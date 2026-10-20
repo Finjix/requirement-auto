@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CellRange, columnLetter, coordOf } from './a1.ts';
 import { makePlan, type Plan } from './plan.ts';
+import { itemsOf } from './request.ts';
 import { resolveDataPaths } from '../paths.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { hasContent, inlineOptions, plainRules, Snapshot, validationProjection, holds } from './snapshot.ts';
@@ -412,10 +413,28 @@ export function message(dir: string): Record<string, any> {
     const found = [...records].reverse().find(e => e.group === group.id && e.evidence.requirement_number);
     const number = found ? found.evidence.requirement_number : '【发布后补填需求编号】';
     const g = group.request;
-    lines.push(`需求编号：${number}（${g.topic} · ${g.creative_form} * ${g.quantity}）`, `供应商：${g.supplier}`, `创意人：${g.creator}`, '');
+    // Rows of the same name body count together, in the order they first appear.
+    const kinds = new Map<string, number>();
+    for (const item of itemsOf(g)) {
+      const kind = `${item.topic} · ${item.creative_form}`;
+      kinds.set(kind, (kinds.get(kind) ?? 0) + item.quantity);
+    }
+    const what = [...kinds].map(([kind, quantity]) => `${kind} * ${quantity}`).join('，');
+    lines.push(`需求编号：${number}（${what}）`, `供应商：${g.supplier}`, `创意人：${g.creator}`, '');
   }
   lines.push('辛苦安排一下~');
   return { status: 'message_ready', message: lines.join('\n') };
+}
+
+/** The progress sheet's tab of `sheetId` (the sheet itself without one). */
+export function sheetUrl(sheetId?: string | null): string {
+  return sheetId ? `${TARGET}?sheet=${encodeURIComponent(sheetId)}` : TARGET;
+}
+
+/** What the user is handed to look at the result: the progress sheet's tab and each group's CLS draft, once saved. */
+function links(sheetId: string | undefined, groups: Record<string, any>[]): Record<string, any> {
+  return { progress_sheet: sheetUrl(sheetId),
+    cls: groups.map(g => ({ group: g.group, draft: g.scripts_imported?.url ?? g.draft_saved?.url ?? null })) };
 }
 
 /** Local audit report, derived from immutable events and validated receipts; no network. */
@@ -444,6 +463,7 @@ export function report(dir: string): Record<string, any> {
     schema: 1, status: 'report_ready', plan_id: plan.plan_id, target: TARGET, worksheet: plan.worksheet, sheet_id: context.sheet_id ?? null,
     range: plan.range, state, groups, message: message(batchPath).message,
     evidence_time: '各阶段保存的回读时间；本报告不重新查询线上当前状态',
+    links: links(context.sheet_id, groups),
   };
   if (verified) {
     const evidence = verified.evidence;

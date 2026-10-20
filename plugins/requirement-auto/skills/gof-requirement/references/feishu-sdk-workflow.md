@@ -1,6 +1,6 @@
 # Feishu SDK bridge
 
-Covers reading Feishu docs, exporting the full test progress sheet, approved appends and dropdown-rule verification. All of it goes through `gof feishu …` (`gof` = `node <skill>/../../server/dist/gof.mjs`), which calls the in-plugin bridge (official `@larksuiteoapi/node-sdk`, allow-listed operations only) in the same process. No generic write API, browser fallback or lark-cli.
+Covers reading requirement documents, the progress sheet's context, exporting the full test progress sheet, approved dropdown additions and appends, and dropdown-rule verification. All of it goes through `gof feishu …` (`gof` = `node <skill>/../../server/dist/gof.mjs`), which calls the in-plugin bridge (official `@larksuiteoapi/node-sdk`, allow-listed operations only) in the same process. No generic write API, browser fallback or lark-cli.
 
 ## Runtime
 
@@ -30,13 +30,15 @@ gof feishu login logout
 - If the host declares the user's Open ID, any other authorized account is rejected and nothing is stored.
 - Denied, expired, missing scope or approval needed: report it and leave it to the user/admin. No bot identity, no borrowed login.
 
-## Snapshot, plan, append
+## Requirement, context, snapshot, plan, append
 
 ```text
+gof feishu document --url <requirement link> [--sheet <tab id or title>] [--full]
 gof feishu snapshot --output <new>.xlsx
-gof feishu document --url <script doc link>
-gof feishu plan --request request.json --snapshot <snapshot>.xlsx
-gof feishu prepare --plan approved-api-plan.json --snapshot <fresh>.xlsx
+gof feishu context --snapshot <snapshot>.xlsx [--supplier <name>] [--worksheet <name>]
+gof feishu plan --request request.json --snapshot <snapshot>.xlsx [--output <new plan>.json]
+gof feishu dropdown-add --field primary|secondary|form|supplier|reviewer --option <value> --sheet <sheet name>
+gof feishu prepare --plan <approved plan>.json --snapshot <fresh>.xlsx
 gof feishu append --batch <batch>                  # uses the shipped assets/overwrite-receipt.json; --receipt <file> only to override
 gof feishu reconcile --batch <batch>
 ```
@@ -45,13 +47,17 @@ The target is fixed: test Wiki node `YFyywzwLsiT07EkpBaecr8nIncn`. The bridge re
 
 | Operation | API |
 |---|---|
-| Read | Wiki `get_node`; sheets v3 `sheets/query`; sheets v2 `dataValidation`, `values_batch_get`, `metainfo`; docx `raw_content` |
+| Read | Wiki `get_node`; sheets v3 spreadsheet info, `sheets/query`; sheets v2 `dataValidation`, `values_batch_get`, `metainfo`; docx `raw_content` |
 | Export | `drive/v1/export_tasks`: create, poll, download to a new XLSX file |
-| Write | `sheet_ai/v2/spreadsheets/{token}/tools/invoke_write`, `batch_update` + `set_cell_range`, each range `allow_overwrite:false` |
+| Write | `sheet_ai/v2/spreadsheets/{token}/tools/invoke_write`, `batch_update` + `set_cell_range`, each range `allow_overwrite:false`; sheets v2 `dataValidation` (only `dropdown-add`) |
 | Create | isolation probe only: `sheets/v3/spreadsheets` |
 
+- `document` reads any company `wiki`, `docx` or `sheets` link (read-only, never the progress sheet's rules): `title` (a wiki node's or spreadsheet's title, a docx's first line), and for a sheet the tab of the link's `?sheet=` (else the last visible tab, `chosen_by: last`; `--sheet` picks another), `tabs`, `columns`, `header` and the non-empty `rows` (`row` is the sheet row) as text: attachments as `[附件:<file name>]`, images as `[图片]`, cells clipped at 300 characters unless `--full`; up to 300 rows (`more_rows` when there are more). For a docx: `text` (clipped at 30,000 characters unless `--full`). Other document kinds are refused.
+- `context` (read-only): the target sheet (as `plan` picks it), its sheet ID, `next_number`, the current dropdown `options` of 一级标签, 二级标签, 创意形式, 设计师供应商 and 创意者脚本审核人 (from the rules through the API: the options the XLSX lists are not reliable), `recent` runs of rows newest first (consecutive rows filled alike: sheet, rows, count, numbers, supplier, tags, form, reviewer, `keywords`; `--supplier` keeps that supplier's), and `past_requests`, this user's earlier batches newest first (supplier, reviewer, script link, CLS fields, requirement name, items, steps reached).
 - `snapshot` exports the full XLSX and compares `metainfo.revision` before and after. Export not finished: stop, no CSV substitute, no blind re-submit. In system plan mode only read existing snapshots; do not export.
-- `plan` prints JSON only: `batch_plan` and `api_plan` (real target, sheet ID, revision, whole-workbook rules, final dropdown options/colors/modes for this batch). Save the complete JSON only after approval. `prepare` recomputes both and writes the immutable `api-plan.json`; any change stops it, never silent renumbering.
+- `plan` builds `batch_plan` and `api_plan` (real target, sheet ID, revision, whole-workbook rules, final dropdown options/colors/modes for this batch). Without `--output` it prints both; with it, it saves both to a new file and prints a summary: sheet, sheet ID, range, numbers, per group the requirement name, supplier, reviewer, link and each item's first and last name, and `new_options` (`field` as `dropdown-add` takes it, `option`): values this request needs that the column's dropdown lacks.
+- `dropdown-add` (only for an approved `new_options` entry): finds the field's column by its header and adds the option to every dropdown rule of that whole column, 5,000 rows at a time; each rule keeps its own options, colors and single/multiple mode, cell values are not touched, ranges that already have the option are skipped, and no dropdown is created where there is none. Running it again is harmless.
+- `prepare` makes the approved plan again on the fresh snapshot and writes the immutable `api-plan.json`. The rows, numbers, values, names and groups must be exactly the approved ones (otherwise it stops: plan again and get a new approval; never silent renumbering); the revision and rules are those read now, so the approved dropdown additions and edits elsewhere in the workbook do not stop it.
 - `append` checks the probe receipt, user identity, revision, fresh XLSX, hidden columns, empty formulas, merges, numbers and whole-workbook rules, then makes a **single** `invoke_write`: `formula` for formulas, `multiple_values` for multi-select, no null for blank fields. Writes are never retried: no result = "unknown result": read back, never resend. Dropdowns are written only for this batch's range and keep every original option, color, highlight and mode; reference-type or incomplete rules that cannot be preserved reliably stop the run.
 - After the write: full export + whole-workbook rule read-back; `rule-proof.json` binds `api_plan` to the current snapshot. Verification protects old values, formulas, styles and rules; a wrong rule present in the XLSX cannot be proven away. On success it records `append_verified` and writes `api-attempt-*/verification-report.json`. Reports and receipts are evidence from the time of collection, not an atomic web+API transaction.
 

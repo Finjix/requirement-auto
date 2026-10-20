@@ -19,6 +19,7 @@ const MAX_WRITES = 100;
 /** The only read endpoints the workflow uses. Anything else is refused before it is sent. */
 const READ_ALLOWLIST: readonly RegExp[] = [
   /^\/open-apis\/wiki\/v2\/spaces\/get_node$/,
+  /^\/open-apis\/sheets\/v3\/spreadsheets\/[A-Za-z0-9]+$/,
   /^\/open-apis\/sheets\/v3\/spreadsheets\/[A-Za-z0-9]+\/sheets\/query$/,
   /^\/open-apis\/sheets\/v2\/spreadsheets\/[A-Za-z0-9]+\/(dataValidation|values_batch_get|metainfo)$/,
   /^\/open-apis\/docx\/v1\/documents\/[A-Za-z0-9]+\/raw_content$/,
@@ -189,9 +190,10 @@ export class FeishuApi {
   }
 
   /**
-   * Adds one option to the existing dropdown of a column span. Every rule variant found there keeps its own options and colors and only
-   * gains the new option, range by range, so no cell changes its look and nothing is merged. Cell values are not touched. Never creates a
-   * dropdown where there is none. A range whose rule already has the option is left alone. Returns what was sent, for a read-back.
+   * Adds one option to the existing dropdown of a column span. Every rule variant found there keeps its own options, colors and mode
+   * (single or multiple choice) and only gains the new option, range by range, so no cell changes its look and nothing is merged. Cell
+   * values are not touched. Never creates a dropdown where there is none. A range whose rule already has the option is left alone.
+   * Returns what was sent, for a read-back.
    */
   async addDropdownOption(token: string, sheetId: string, column: string, firstRow: number, lastRow: number, option: string, color: string): Promise<any> {
     this.checkToken(token);
@@ -206,29 +208,33 @@ export class FeishuApi {
     const before = await this.send({ method: 'GET', url, params: { range, dataValidationType: 'list' } });
     const rules: any[] = Array.isArray(before?.dataValidations) ? before.dataValidations : [];
     if (!rules.length) throw new BridgeError('invalid_request', '该范围没有现有下拉，拒绝新建');
-    const plan: { range: string; options: string[]; colors: string[] }[] = [];
+    const plan: { range: string; options: string[]; multiple: boolean; highlight: boolean; colors: string[] }[] = [];
     for (const rule of rules) {
       const values = rule?.conditionValues;
-      const map = rule?.options?.colorValueMap;
-      if (rule?.dataValidationType !== 'list' || !Array.isArray(values) || !values.every((v: unknown) => typeof v === 'string') || !Array.isArray(rule.ranges) || !map) {
+      const mode = rule?.options ?? {};
+      const map = mode.colorValueMap ?? {};
+      if (rule?.dataValidationType !== 'list' || !Array.isArray(values) || !values.every((v: unknown) => typeof v === 'string') || !Array.isArray(rule.ranges)
+        || typeof map !== 'object' || Array.isArray(map)) {
         throw new BridgeError('api', '下拉规则格式不支持');
       }
-      if (rule.options?.multipleValues !== false || rule.options?.highlightValidData !== true) throw new BridgeError('api', '下拉模式不支持（仅支持单选且带颜色）');
-      if (!values.every((v: string) => typeof map[v] === 'string' && /^#[0-9a-fA-F]{6}$/.test(map[v]))) throw new BridgeError('api', '下拉颜色无法可靠保留');
+      if (typeof (mode.multipleValues ?? false) !== 'boolean' || typeof (mode.highlightValidData ?? false) !== 'boolean') throw new BridgeError('api', '下拉模式无法可靠保留');
+      const highlight = mode.highlightValidData === true;
+      if (highlight && !values.every((v: string) => typeof map[v] === 'string' && /^#[0-9a-fA-F]{6}$/.test(map[v]))) throw new BridgeError('api', '下拉颜色无法可靠保留');
       if (values.includes(option)) continue;
       const options = [...values, option];
-      const colors = [...values.map((v: string) => map[v] as string), color];
+      const colors = highlight ? [...values.map((v: string) => map[v] as string), color] : [];
       for (const r of rule.ranges as unknown[]) {
         if (typeof r !== 'string' || !r.startsWith(`${sheetId}!`)) throw new BridgeError('api', '下拉范围无法解析');
-        plan.push({ range: r, options, colors });
+        plan.push({ range: r, options, multiple: mode.multipleValues === true, highlight, colors });
       }
     }
     if (!plan.length) throw new BridgeError('invalid_request', '该范围内所有下拉都已包含此选项');
     const done: string[] = [];
     for (const item of plan) {
+      const options = { multipleValues: item.multiple, highlightValidData: item.highlight, ...(item.highlight ? { colors: item.colors } : {}) };
       await this.send({
         method: 'POST', write: true, url,
-        data: { range: item.range, dataValidationType: 'list', dataValidation: { conditionValues: item.options, options: { multipleValues: false, highlightValidData: true, colors: item.colors } } },
+        data: { range: item.range, dataValidationType: 'list', dataValidation: { conditionValues: item.options, options } },
       });
       done.push(item.range);
     }

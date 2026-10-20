@@ -4,31 +4,46 @@
 
 ## Request (`request.json`)
 
-The default full flow needs every field below except the optional ones. Values are placeholders; the link is a format example only, never a real requirement link.
+The default full flow needs every field below except the optional ones. Values are placeholders; the links are format examples only, never real requirement links.
 
 ```json
 {
   "worksheet": "26年1月-GOFCN",
   "groups": [{
-    "quantity": 60,
-    "material_name": "多明星04_2min_混剪_关键词",
-    "creative_form": "混剪",
-    "keyword": "关键词",
     "supplier": "丁杰",
     "reviewer": "张天伟",
-    "script_url": "https://centurygames.feishu.cn/wiki/CurrentScript123",
+    "script_url": "https://centurygames.feishu.cn/wiki/CurrentScript123?sheet=abc123",
+    "primary_tag": "AI生成",
+    "creative_form": "2D",
+    "items": [
+      { "quantity": 3, "secondary_tag": "设定3.0" },
+      { "quantity": 1, "secondary_tag": "设定2.0" },
+      { "quantity": 10, "secondary_tag": "设定3.0" }
+    ],
     "cls": { "direction": "<direction>", "task_type": "<task type>" }
+  }, {
+    "supplier": "杨燃",
+    "reviewer": "雷佳威",
+    "script_url": "https://centurygames.feishu.cn/docx/CurrentScript456",
+    "quantity": 15,
+    "primary_tag": "AI迭代",
+    "secondary_tag": "题材片头",
+    "creative_form": "2D",
+    "keyword": "关键词",
+    "cls": { "direction": "<direction>", "task_type": "<task type>", "supplier": "<CLS supplier name, only when needed>" }
   }]
 }
 ```
 
-- `worksheet` is optional: default is the latest year-month GOFCN sheet with valid columns; ambiguity fails. The bridge never reads the browser's current tab; tell the user the sheet name and `api_plan.sheet_id`. A group is one CSV/CLS sub-batch, split at least by supplier and topic.
-- `quantity`: positive integer from the request.
-- Required inputs and who provides them: see SKILL.md section 1. `keyword`, `supplier`, `reviewer`, `creative_form` come from the user; `script_url` must be the user's confirmed Feishu doc HTTPS link (CSV only, no progress column). `cls.direction` and `cls.task_type` come from the user and are required in the full flow; they are never defaulted from `creative_form`. `cls.requirement_name` must not appear in the request (rejected): `gof cls` builds it from the group's real names as `GOFCN<first>-GOFCN<last>` (one item: `GOFCN<number>`), and receipt validation checks the draft name against it. They must be gathered before the plan, never after the sheet append. Only when the user excluded the ticket may `cls` be omitted; a non-empty `cls` requires its three required fields. The program accepts such partial requests but validates only static fields; the agent still checks the live pages and must never skip the ticket or ask about scope because the program allows it.
-- Optional CLS keys: `subject`, `department`, `market_contact`, `currency`, `quotation`, `expected_completion`, `storyboard_time`, `first_draft_time`, `final_cut_time` (dates `YYYY-MM-DD`; fill from what the user said, otherwise blank; never guess, never ask during execution).
-- `material_name`: body following the existing naming formula, e.g. `多明星04_2min_混剪_关键词`; for natural-language names the agent arranges it and shows it in the plan. Old numbers in samples are stripped and consecutive new numbers are assigned; the material number and the script number in the name are equal. The name must end with `_<creative_form>_<keyword>`.
-- `primary_tag` / `secondary_tag`: inferred by the agent, or by default from the topic split at the first underscore (here 多明星04 / 2min). Ambiguous: clarify, never guess. The program checks the final formula name matches the confirmed name body. `topic` defaults from the name (CSV grouping); if given, it must match.
-- `reviewer` is the one person field; `creator` defaults to `reviewer` and can never differ. It fills the progress column, the CLS import creator and the message creator. The user gives it once.
+- `worksheet` is optional: default is the latest year-month GOFCN sheet with valid columns; ambiguity fails. The bridge never reads the browser's current tab; tell the user the sheet name and `api_plan.sheet_id`.
+- A **group** is one CSV and one CLS ticket: one supplier, one reviewer, one script link, one set of CLS fields. One requirement document is normally one group.
+- A group's rows are either all alike (`quantity` plus the fields below on the group) or listed as `items`, runs of rows in order, each with its own `quantity` and whatever differs (`primary_tag`, `secondary_tag`, `creative_form`, `keyword`; the group's values are the defaults). With `items`, the group has no `material_name`; a group `quantity` is allowed only as the items' sum (as in a normalized request). One item is the same as a group without `items`.
+- Per row: `primary_tag`, `secondary_tag`, `creative_form` (required, non-empty), `keyword` (提炼词, default `关键词`). The material name is built from them as `<一级>_<二级>_<创意形式>_<提炼词>` and the sheet's naming formula must produce exactly `GOFCN<number>_<that>`. Instead of the tags, an older request may give `material_name` (a body, or a sample with an old number, which is stripped); it must end with `_<creative_form>_<keyword>`, and unless given, the tags come from the part before it, split at the first underscore. `topic` (`<一级>_<二级>`) is derived; if given, it must match.
+- `quantity`: positive integer.
+- `supplier`, `reviewer`, `script_url` are required. `script_url` is the user's requirement link as given (a `wiki`, `docx` or `sheets` link on the company host, a `?sheet=` tab included; CSV only, no progress column, never a historical link). `cls.direction` and `cls.task_type` are required in the full flow. `cls.requirement_name` must not appear in the request (rejected): `gof cls` builds it from the group's real names as `GOFCN<first>-GOFCN<last>` (one item: `GOFCN<number>`), and receipt validation checks the draft name against it. All of it is settled before the plan, never after the sheet append. Only when the user excluded the ticket may `cls` be omitted; a non-empty `cls` requires its two required fields. The program accepts such partial requests but validates only static fields; the agent still checks the live pages and must never skip the ticket or ask about scope because the program allows it.
+- Optional CLS keys: `subject`, `department`, `market_contact`, `currency`, `quotation`, `expected_completion`, `storyboard_time`, `first_draft_time`, `final_cut_time` (dates `YYYY-MM-DD`; fill from what the user said, otherwise blank; never guess, never ask during execution). `supplier` and `creator` give the CLS spelling of the group's supplier and reviewer when the program cannot match them itself; they must be exact CLS names.
+- CLS matching of `supplier` / `reviewer` without those keys: the exact name, else the one CLS name whose bracket or dash part is the name ("北京柒曦文化传媒有限公司（丁杰）", "…（个体工商户）-杨燃"), else the one CLS name containing it ("冯彦蓉-实习生"). Several at that level, or none: refused before the plan.
+- `reviewer` is the one person field; `creator` defaults to `reviewer` and can never differ. It fills the progress column, the CLS import creator and the message creator.
 - `client`, `creative_expression`, `creative_batch`, `head_reference`, `creative_reference` must be empty (non-empty input is rejected); no other progress fields are filled.
 - After the approved plan completes, a later ticket request is a new task: clarify everything, approve a separate ticket plan, reuse the original CSV; do not re-run `prepare` or append the original batch again.
 
