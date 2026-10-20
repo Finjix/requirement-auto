@@ -138,7 +138,7 @@
       "status": "blocked"
     },
     "message_after_number": {
-      "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：GOFCN20260100009（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n需求说明：测试需求一\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n需求说明：测试需求二\n\n辛苦安排一下~",
+      "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：GOFCN20260100009（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n\n辛苦安排一下~",
       "status": "message_ready"
     },
     "operation_exists": {
@@ -192,7 +192,7 @@
         "marketing_user_id": "",
         "name": "GOFCN1011-GOFCN1012",
         "price": 0,
-        "price_reason": "测试需求一",
+        "price_reason": "",
         "status": -2,
         "storyboard_attaches": [],
         "storyboard_end_date": "",
@@ -225,7 +225,7 @@
             "marketing_user_id": "",
             "name": "GOFCN<首号>-GOFCN<末号>",
             "price": 0,
-            "price_reason": "测试需求一",
+            "price_reason": "",
             "status": -2,
             "storyboard_attaches": [],
             "storyboard_end_date": "",
@@ -252,7 +252,7 @@
             "marketing_user_id": "",
             "name": "GOFCN<首号>-GOFCN<末号>",
             "price": 100.5,
-            "price_reason": "测试需求二",
+            "price_reason": "",
             "status": -2,
             "storyboard_attaches": [],
             "storyboard_end_date": "",
@@ -672,7 +672,7 @@
     {
       "name": "message",
       "result": {
-        "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：【发布后补填需求编号】（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n需求说明：测试需求一\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n需求说明：测试需求二\n\n辛苦安排一下~",
+        "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：【发布后补填需求编号】（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n\n辛苦安排一下~",
         "status": "message_ready"
       }
     },
@@ -692,7 +692,7 @@
     {
       "name": "report body",
       "result": {
-        "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：【发布后补填需求编号】（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n需求说明：测试需求一\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n需求说明：测试需求二\n\n辛苦安排一下~",
+        "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：【发布后补填需求编号】（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n\n辛苦安排一下~",
         "range": "A6:I8",
         "status": "report_ready",
         "target": "https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn",

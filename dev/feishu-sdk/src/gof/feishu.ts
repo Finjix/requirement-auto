@@ -162,6 +162,19 @@ async function sheetsOf(bridge: Bridge, token: string): Promise<Obj[]> {
   return found;
 }
 
+/** Names and types only, never values: enough to see how a reply differs from the documented one without echoing an untrusted body. */
+function shapeOf(data: any, sid: string): string {
+  if (data === null || typeof data !== 'object') return `返回 ${data === null ? 'null' : typeof data}`;
+  const keys = Object.keys(data).slice(0, 12).map(k => `${k.replace(/[^A-Za-z0-9_]/g, '?').slice(0, 24)}:${Array.isArray(data[k]) ? 'array' : data[k] === null ? 'null' : typeof data[k]}`);
+  const sheet = data.sheetId === undefined ? 'sheetId 缺失' : data.sheetId === sid ? 'sheetId 一致' : 'sheetId 与请求不同';
+  return `${sheet}；字段 ${keys.join(',') || '无'}`;
+}
+
+/** Feishu reports a color in the case it likes (the ones just written come back upper case, old ones lower case); a color is the same color either way. */
+function lowerColors(colors: Obj): Record<string, string> {
+  return Object.fromEntries(Object.entries(colors).map(([option, color]) => [option, String(color).toLowerCase()]));
+}
+
 export async function readRules(bridge: Bridge, token: string, metadata: Obj[]): Promise<ApiRule[]> {
   const result: ApiRule[] = [];
   for (const sheet of metadata) {
@@ -174,8 +187,12 @@ export async function readRules(bridge: Bridge, token: string, metadata: Obj[]):
         const rect = `${columnLetter(c)}${r}:${columnLetter(Math.min(c + 99, cols))}${Math.min(r + 4999, rows)}`;
         const data = await bridge.apiRead(`/open-apis/sheets/v2/spreadsheets/${token}/dataValidation`,
           { range: `${sid}!${rect}`, dataValidationType: 'list' });
-        need(data.sheetId === sid && Array.isArray(data.dataValidations), '下拉规则返回结构不匹配');
-        for (const rule of data.dataValidations as Obj[]) {
+        // Feishu omits `dataValidations` when the range holds no dropdown (the docs say an empty array), so absent means none. The reply
+        // must still be this sheet's own and carry the workbook's revision, so a reply of some other shape never reads as "no rules".
+        const none = data?.dataValidations === undefined && typeof data?.revision === 'number' && typeof data?.spreadsheetToken === 'string';
+        need(data !== null && typeof data === 'object' && data.sheetId === sid && (none || Array.isArray(data.dataValidations)),
+          `下拉规则返回结构不匹配（${shapeOf(data, sid)}）`);
+        for (const rule of (none ? [] : data.dataValidations) as Obj[]) {
           const opts: Obj = rule.options ?? {};
           const values = rule.conditionValues;
           need(rule.dataValidationType === 'list' && Array.isArray(values) && values.every((v: unknown) => typeof v === 'string')
@@ -192,7 +209,7 @@ export async function readRules(bridge: Bridge, token: string, metadata: Obj[]):
           }
           need(ranges.length > 0, '下拉范围为空');
           result.push({ sheet_id: sid, ranges, type: 'list', options: values, multiple: opts.multipleValues ?? false,
-            highlight: opts.highlightValidData ?? false, colors: colors as Record<string, string> });
+            highlight: opts.highlightValidData ?? false, colors: lowerColors(colors) });
         }
       }
     }

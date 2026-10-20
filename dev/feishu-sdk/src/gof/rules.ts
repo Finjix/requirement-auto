@@ -69,7 +69,10 @@ export function dropdowns(plan: Plan, sheetId: string, records: ApiRule[]): Obj[
     for (const [end, r] of found) if (end === nearest) choices.set(canonical(ruleBody(r)), r);
     need(choices.size === 1, '最近下拉规则冲突，需要澄清');
     const rule = [...choices.values()][0]!;
-    const options = [...rule.options, ...(spec.options as string[]).filter(v => !rule.options.includes(v))];
+    // Only the values this request asks for are added to the rule being kept. The XLSX export is not a reliable source of a column's options
+    // (it can attribute a stray rule on a few old cells to the whole column), so spec.options is not used here.
+    const wanted = [...new Set((plan.request.groups as Obj[]).map(g => g[spec.field as string] as string).filter(Boolean))];
+    const options = [...rule.options, ...wanted.filter(v => !rule.options.includes(v))];
     const colors = options.map((v, i) => rule.colors[v] ?? PALETTE[i % PALETTE.length]!);
     // Existing highlighted options must have an actual color, never a guessed replacement.
     need(!rule.highlight || rule.options.every(v => v in rule.colors), '原下拉配色未完整读取');

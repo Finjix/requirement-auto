@@ -37,7 +37,7 @@ gof feishu snapshot --output <new>.xlsx
 gof feishu document --url <script doc link>
 gof feishu plan --request request.json --snapshot <snapshot>.xlsx
 gof feishu prepare --plan approved-api-plan.json --snapshot <fresh>.xlsx
-gof feishu append --batch <batch> --receipt <probe receipt>.json
+gof feishu append --batch <batch>                  # uses the shipped assets/overwrite-receipt.json; --receipt <file> only to override
 gof feishu reconcile --batch <batch>
 ```
 
@@ -55,7 +55,9 @@ The target is fixed: test Wiki node `YFyywzwLsiT07EkpBaecr8nIncn`. The bridge re
 - `append` checks the probe receipt, user identity, revision, fresh XLSX, hidden columns, empty formulas, merges, numbers and whole-workbook rules, then makes a **single** `invoke_write`: `formula` for formulas, `multiple_values` for multi-select, no null for blank fields. Writes are never retried: no result = "unknown result": read back, never resend. Dropdowns are written only for this batch's range and keep every original option, color, highlight and mode; reference-type or incomplete rules that cannot be preserved reliably stop the run.
 - After the write: full export + whole-workbook rule read-back; `rule-proof.json` binds `api_plan` to the current snapshot. Verification protects old values, formulas, styles and rules; a wrong rule present in the XLSX cannot be proven away. On success it records `append_verified` and writes `api-attempt-*/verification-report.json`. Reports and receipts are evidence from the time of collection, not an atomic web+API transaction.
 
-## First overwrite probe
+## First overwrite probe (maintainers only, never part of a user task)
+
+The receipt of the 2026-10-20 probe ships as `assets/overwrite-receipt.json`, bound to `feishu-sdk-bridge/1`. Re-run the probe only after a bridge version change, then replace that file.
 
 Receipts from the lark-cli era (`cli_version`, schema 1) are void. A probe needs its own approved online-verification plan: create one new `GOFCN_API_SAFETY_*` workbook, write a sentinel and a formula returning an empty string, try three occupied writes and read back. Never use old progress cells; never delete the probe sheet.
 

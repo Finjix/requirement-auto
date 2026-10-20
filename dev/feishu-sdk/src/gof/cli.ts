@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { clsCheck, message, preflight, prepare, record, report, status, verify } from './batch.ts';
 import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
@@ -20,6 +21,13 @@ type Result = Record<string, any>;
 type Values = Record<string, string | boolean | undefined>;
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
 const mustHave = (v: unknown, flag: string): string => { need(typeof v === 'string' && v !== '', `缺少 --${flag}`); return v as string; };
+
+/** The overwrite-protection receipt that ships with the plugin (next to the skill's assets); the bundle sits in server/dist, the sources in dev/feishu-sdk/src/gof. */
+function bundledReceipt(): string {
+  const rel = 'skills/gof-requirement/assets/overwrite-receipt.json';
+  const candidates = ['../../', '../../../../plugins/requirement-auto/'].map(base => fileURLToPath(new URL(base + rel, import.meta.url)));
+  return candidates.find(file => fs.existsSync(file)) ?? candidates[0]!;
+}
 
 function parse(args: string[], options: Record<string, { type: 'string' | 'boolean' }>, positionals = false): { values: Values; positionals: string[] } {
   try {
@@ -111,7 +119,7 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
     case 'probe': return probe(bridge, mustHave(parse(args, { receipt: { type: 'string' } }).values.receipt, 'receipt'));
     case 'append': {
       const { values } = parse(args, { batch: { type: 'string' }, receipt: { type: 'string' } });
-      return execute(bridge, mustHave(values.batch, 'batch'), mustHave(values.receipt, 'receipt'));
+      return execute(bridge, mustHave(values.batch, 'batch'), str(values.receipt) || bundledReceipt());
     }
     case 'reconcile': return reconcile(bridge, mustHave(parse(args, { batch: { type: 'string' } }).values.batch, 'batch'));
     case 'document': return document(bridge, mustHave(parse(args, { url: { type: 'string' } }).values.url, 'url'));

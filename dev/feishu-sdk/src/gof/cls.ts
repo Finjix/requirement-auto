@@ -47,7 +47,7 @@ export function requirementName(names: string[]): string {
 
 export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj, number, Obj] {
   const cls = group.cls;
-  need(Object.keys(cls).length > 0 && group.brief.trim() !== '', '全流程 CLS 字段/备注未收齐');
+  need(Object.keys(cls).length > 0, '全流程 CLS 字段未收齐');
   const game = unique<Obj>(catalog.games, x => x.code === 'GOFCN', 'GOFCN 项目');
   const userGames = catalog.account?.game_ids;
   need(Array.isArray(userGames) && userGames.includes(game.id), '当前账号未证明有 GOFCN 权限');
@@ -57,7 +57,7 @@ export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj
   const task = unique<Obj>(catalog.types, x => x.type === 'creative' && x.key === cls.task_type, '任务类型');
   const payload: Obj = {
     game_id: game.id, direct_id: direction.id, asset_data: '', name: names ? requirementName(names) : 'GOFCN<首号>-GOFCN<末号>', type: task.value, company: '',
-    departments: [], marketing_user_id: '', third_user_id: supplier.id, currency: 'cny', price: 0, price_reason: group.brief,
+    departments: [], marketing_user_id: '', third_user_id: supplier.id, currency: 'cny', price: 0, price_reason: '',
     expect_end_date: '', storyboard_end_date: '', storyboard_attaches: [], draft_end_date: '', draft_attaches: [],
     film_end_date: '', film_attaches: [], status: -2,
   };
@@ -192,7 +192,7 @@ export function validateBatchReceipt(dir: string, groupId: string, evidence: Obj
   const attempts = events(batchPath).filter(e => e.group === groupId && e.step === 'cls_api_attempt' && e.evidence.operation_id === op.operation_id);
   need(attempts.length === 1, '必须先记录本次接口尝试；不可重复请求');
   const group = groupFor(manifest.plan, groupId);
-  need(op.payload.name === requirementName(group.names) && op.payload.price_reason === group.request.brief, '需求名称/备注与获批需求不符');
+  need(op.payload.name === requirementName(group.names), '需求名称与获批需求不符');
   need(canonical(op.expected.names) === canonical(group.names) && op.expected.creator_id > 0 && op.expected.link === group.request.script_url,
     '请求与获批需求不匹配');
   validateParent(receipt.parent, op.payload);

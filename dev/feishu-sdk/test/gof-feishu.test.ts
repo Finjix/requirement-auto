@@ -6,10 +6,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BRIDGE_VERSION, type BridgeReply } from '../src/bridge.ts';
 import { status } from '../src/gof/batch.ts';
-import { Bridge, OccupiedRefusal, SCOPES, apiPlan, document, execute, login, planWithApi, probe, reconcile, recomputeApiPlan } from '../src/gof/feishu.ts';
+import { Bridge, OccupiedRefusal, SCOPES, apiPlan, document, execute, login, planWithApi, probe, readRules, reconcile, recomputeApiPlan } from '../src/gof/feishu.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { prepare, record } from '../src/gof/batch.ts';
-import { acceptance } from '../src/gof/rules.ts';
+import { acceptance, dropdowns } from '../src/gof/rules.ts';
 import { seal } from '../src/gof/seal.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { Blocked, NODE, readJson } from '../src/gof/util.ts';
@@ -199,6 +199,36 @@ test('the in-process bridge answers local commands and enforces its own allowlis
   assert.deepEqual([(await bridge.call('auth-status')).logged_in], [false]);
   await failsWith(bridge.doctor(), /尚未授权/);
   await failsWith(bridge.call('api-get', { path: '/open-apis/im/v1/messages' }), /invalid_request/);
+});
+
+test('a dropdown keeps the options of the rule it follows and adds only what the request asks for', () => {
+  const rule = { sheet_id: 's1', ranges: ['E2:E5'], type: 'list' as const, options: ['a', 'b'], multiple: false, highlight: true, colors: { a: '#111111', b: '#222222' } };
+  // `spec.options` comes from the XLSX export, which can carry the options of a stray rule on a few old cells; none of that may be written.
+  const plan: any = { range: 'E6:E8', request: { groups: [{ secondary_tag: '2min' }, { secondary_tag: 'a' }, {}] },
+    dropdowns: [{ field: 'secondary_tag', range: 'E6:E8', options: ['stray1', 'stray2', 'a', '2min'], missing: ['stray1', 'stray2', '2min'] }] };
+  const [d] = dropdowns(plan, 's1', [rule]);
+  assert.deepEqual([d.options, d.missing, d.colors.slice(0, 2)], [['a', 'b', '2min'], ['2min'], ['#111111', '#222222']]);
+});
+
+test('dropdown colors are the same color in either letter case', async () => {
+  const sheet = [{ sheet_id: 's1', grid_properties: { row_count: 10, column_count: 5 } }];
+  const rule = (color: string) => ({ dataValidationType: 'list', conditionValues: ['a'], ranges: ['s1!A2:A5'], options: { colorValueMap: { a: color }, highlightValidData: true } });
+  const read = async (color: string) => (await readRules(new Bridge(async () => reply({ sheetId: 's1', dataValidations: [rule(color)] })), 'tok', sheet))[0]!.colors;
+  assert.deepEqual(await read('#BACEFD'), { a: '#bacefd' });
+  assert.deepEqual(await read('#bacefd'), { a: '#bacefd' });
+});
+
+test('a dropdown-rule reply of the wrong shape is refused with its field names and types, never its values', async () => {
+  const sheet = [{ sheet_id: 's1', grid_properties: { row_count: 10, column_count: 5 } }];
+  const read = (data: unknown) => readRules(new Bridge(async () => reply(data)), 'tok', sheet);
+  assert.deepEqual(await read({ sheetId: 's1', dataValidations: [] }), []);
+  // The real reply for a sheet without dropdowns leaves `dataValidations` out entirely.
+  assert.deepEqual(await read({ sheetId: 's1', revision: 7, spreadsheetToken: 'tok' }), []);
+  await failsWith(read({ sheetId: 's1', secret: 'hunter2' }), /sheetId 一致；字段 sheetId:string,secret:string(?!.*hunter2)/);
+  await failsWith(read({ dataValidations: [] }), /sheetId 缺失；字段 dataValidations:array/);
+  await failsWith(read({ sheetId: 'other', dataValidations: [] }), /sheetId 与请求不同/);
+  await failsWith(read({ sheetId: 's1', dataValidations: null }), /dataValidations:null/);
+  await failsWith(read([]), /sheetId 缺失/);
 });
 
 // ---- a whole append against a fake Feishu: plan → prepare → probe receipt → append → read back → reconcile

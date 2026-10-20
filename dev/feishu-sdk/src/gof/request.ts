@@ -55,7 +55,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
       need(pick(raw, key, '') === '', `进度表阶段 ${key} 应留空`);
       g[key] = '';
     }
-    g.brief = pick(raw, 'brief', '');
+    g.brief = pick(raw, 'brief', ''); // Only still accepted so older requests load; it is not used anywhere.
     need(typeof g.brief === 'string', 'brief 必须是文本');
     need(feishuDocPath(g.script_url, 'wiki|docx', true) !== undefined, '脚本链接必须是当前确认的飞书文档');
     const cls = pick(raw, 'cls', {});

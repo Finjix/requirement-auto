@@ -412,8 +412,7 @@ export function message(dir: string): Record<string, any> {
     const found = [...records].reverse().find(e => e.group === group.id && e.evidence.requirement_number);
     const number = found ? found.evidence.requirement_number : '【发布后补填需求编号】';
     const g = group.request;
-    lines.push(`需求编号：${number}（${g.topic} · ${g.creative_form} * ${g.quantity}）`, `供应商：${g.supplier}`, `创意人：${g.creator}`,
-      `需求说明：${g.brief}`, '');
+    lines.push(`需求编号：${number}（${g.topic} · ${g.creative_form} * ${g.quantity}）`, `供应商：${g.supplier}`, `创意人：${g.creator}`, '');
   }
   lines.push('辛苦安排一下~');
   return { status: 'message_ready', message: lines.join('\n') };
