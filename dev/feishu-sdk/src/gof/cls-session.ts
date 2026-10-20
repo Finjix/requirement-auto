@@ -53,6 +53,8 @@ export interface ConsentOptions {
   app: string;
   /** The account the login is pinned to, if any; the page has to name it too. */
   account?: string | undefined;
+  /** The login is pinned to an account whose name is not known: the page cannot be checked, so nothing is clicked. */
+  unnamedPin?: boolean;
   /** Is this address a page that may hold the consent? Defaults to Feishu's authorize page. */
   isConsentPage?: (url: URL) => boolean;
 }
@@ -70,20 +72,39 @@ const CONSENT_PROBE = `(() => {
     return r.width > 0 && r.height > 0 && !e.disabled && e.getAttribute('aria-disabled') !== 'true';
   });
   let button = null;
-  if (element) { element.scrollIntoView({ block: 'center' }); const r = element.getBoundingClientRect(); button = { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
-  return { text: document.body ? document.body.innerText : '', button };
+  if (element) {
+    element.scrollIntoView({ block: 'center' });
+    const r = element.getBoundingClientRect();
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    // Only a button that really is under the pointer: a banner or dialog over it would take the click.
+    if (hit && (element === hit || element.contains(hit))) button = { x, y };
+  }
+  return { href: location.href, text: document.body ? document.body.innerText : '', button };
 })()`;
 
-async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptions): Promise<ConsentAttempt> {
-  const probe = await cdp.send<{ result: { value?: { text: string; button: { x: number; y: number } | null } } }>(
+/** The names a company account may be shown under: the whole name, and the parts of "name（alias）". */
+export function accountNames(name: string): string[] {
+  const parts = [name, ...name.split(/[（()）]/).map(part => part.trim())];
+  return [...new Set(parts.filter(part => part.length >= 2))];
+}
+
+async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptions, beforeClick: () => void = () => undefined): Promise<ConsentAttempt> {
+  const probe = await cdp.send<{ result: { value?: { href: string; text: string; button: { x: number; y: number } | null } } }>(
     'Runtime.evaluate', { expression: CONSENT_PROBE, returnByValue: true }, sessionId);
   const page = probe.result.value;
   if (!page?.button) return { state: 'not_ready' }; // not a consent page (it also shows the sign-in code), or not drawn yet
+  // The page may have moved on since the targets were listed: look at where it is now.
+  let here: URL;
+  try { here = new URL(page.href); } catch { return { state: 'not_ready' }; }
+  if (!(options.isConsentPage ?? feishuConsentPage)(here)) return { state: 'not_ready' };
   if (!page.text.includes(options.app)) return { state: 'refused', reason: `飞书授权页请求的不是 ${options.app}，没有点击；请用户自己查看这个授权请求` };
-  if (options.account && !page.text.includes(options.account)) {
+  if (options.unnamedPin) return { state: 'refused', reason: '已绑定的 CLS 账号没有名称，无法核对授权页上的账号，没有点击；请管理员处理账号绑定' };
+  if (options.account && !accountNames(options.account).some(name => page.text.includes(name))) {
     return { state: 'refused', reason: `飞书授权页上的账号不是已绑定的“${options.account}”，没有点击；请用绑定的账号扫码` };
   }
   const { x, y } = page.button;
+  beforeClick(); // from here on this login counts as approved once, whatever the click does
   await cdp.send('Page.bringToFront', {}, sessionId).catch(() => undefined);
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }, sessionId);
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, sessionId);
@@ -93,16 +114,23 @@ async function approveConsent(cdp: Cdp, sessionId: string, options: ConsentOptio
 
 /** Asks CLS who the token belongs to; undefined when it is not (or no longer) accepted. */
 export async function whoAmI(origin: string, authorization: string, fetcher: typeof fetch = fetch): Promise<Account | undefined> {
+  const result = await checkToken(origin, authorization, fetcher);
+  return 'account' in result ? result.account : undefined;
+}
+
+/** Like whoAmI, but says whether the server turned the token down or simply could not be asked (network, proxy, 5xx, timeout). */
+export async function checkToken(origin: string, authorization: string, fetcher: typeof fetch = fetch): Promise<{ account: Account } | { rejected: true } | { unreachable: true }> {
   try {
     const response = await fetcher(`${origin}/api/userinfo`, {
       headers: { Authorization: authorization }, redirect: 'error', signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) return undefined;
-    const body = await response.json() as { code?: number; data?: { id?: unknown; name?: unknown; status?: unknown } };
-    const data = body.data;
-    if (body.code !== 0 || !data || data.status !== 1 || !Number.isSafeInteger(data.id)) return undefined;
-    return { id: data.id as number, name: String(data.name ?? '') };
-  } catch { return undefined; }
+    if (response.status >= 500 || response.status === 429 || response.status === 408) return { unreachable: true };
+    if (!response.ok) return { rejected: true };
+    const body = await response.json() as { code?: number; data?: { id?: unknown; name?: unknown; status?: unknown } } | null;
+    const data = body?.data;
+    if (body?.code !== 0 || !data || data.status !== 1 || !Number.isSafeInteger(data.id)) return { rejected: true };
+    return { account: { id: data.id as number, name: String(data.name ?? '') } };
+  } catch { return { unreachable: true }; }
 }
 
 const lower = (headers: Record<string, string> | undefined, name: string): string | undefined =>
@@ -145,8 +173,9 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
     tried.add(authorization);
     // One at a time, so the first token that is good wins and a stale one that the page sent before it noticed it was logged out is only skipped.
     validating = validating.then(async () => {
-      const account = await whoAmI(origin, authorization);
-      if (account) accepted?.({ authorization, account });
+      const checked = await checkToken(origin, authorization);
+      if ('account' in checked) accepted?.({ authorization, account: checked.account });
+      else if ('unreachable' in checked) tried.delete(authorization); // not the server's no: the next request with this token asks again
     });
   };
 
@@ -193,30 +222,30 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
         let url: URL;
         try { url = new URL(target.url); } catch { continue; }
         if (!(consent.isConsentPage ?? feishuConsentPage)(url)) continue;
-        const result = await approveConsent(cdp, await attach(target.targetId), consent);
-        if (result.state === 'clicked') { clicked.add(target.targetId); break; }
+        const result = await approveConsent(cdp, await attach(target.targetId), consent, () => clicked.add(target.targetId));
+        if (result.state === 'clicked') break;
         if (result.state === 'refused') refuse?.(result.reason);
       }
     } catch { /* the next look tries again */ } finally { looking = false; }
   };
-  const looker = options.consent ? setInterval(() => void lookForConsent(), 700) : undefined;
-
-  const closed = new Promise<'closed'>(resolve => cdp.onClose(() => resolve('closed')));
-  await cdp.send('Target.setDiscoverTargets', { discover: true });
-  const { targetInfos } = await cdp.send<{ targetInfos: { type: string; targetId: string; url: string }[] }>('Target.getTargets');
-  const pages = targetInfos.filter(t => t.type === 'page');
-  for (const page of pages) await attach(page.targetId).catch(() => undefined);
-
-  const open = pages.find(page => page.url.startsWith(origin));
-  const blank = pages.find(page => page.url === 'about:blank' || page.url.startsWith('chrome://newtab') || page.url.startsWith('edge://newtab'));
-  const entry = `${origin}${ENTRY}`;
-  if (open) await attach(open.targetId).then(session => cdp.send('Page.reload', {}, session)).catch(() => undefined);
-  else if (blank) await attach(blank.targetId).then(session => cdp.send('Page.navigate', { url: entry }, session)).catch(() => undefined);
-  else if (!pages.some(page => /sso|login|oauth|auth/i.test(page.url))) await cdp.send('Target.createTarget', { url: entry }).catch(() => undefined);
-
+  let looker: NodeJS.Timeout | undefined;
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), options.waitMs); });
+  const closed = new Promise<'closed'>(resolve => cdp.onClose(() => resolve('closed')));
   try {
+    looker = options.consent ? setInterval(() => void lookForConsent(), 700) : undefined;
+    await cdp.send('Target.setDiscoverTargets', { discover: true });
+    const { targetInfos } = await cdp.send<{ targetInfos: { type: string; targetId: string; url: string }[] }>('Target.getTargets');
+    const pages = targetInfos.filter(t => t.type === 'page');
+    for (const page of pages) await attach(page.targetId).catch(() => undefined);
+
+    const open = pages.find(page => page.url.startsWith(origin));
+    const blank = pages.find(page => page.url === 'about:blank' || page.url.startsWith('chrome://newtab') || page.url.startsWith('edge://newtab'));
+    const entry = `${origin}${ENTRY}`;
+    if (open) await attach(open.targetId).then(session => cdp.send('Page.reload', {}, session)).catch(() => undefined);
+    else if (blank) await attach(blank.targetId).then(session => cdp.send('Page.navigate', { url: entry }, session)).catch(() => undefined);
+    else if (!pages.some(page => /sso|login|oauth|auth/i.test(page.url))) await cdp.send('Target.createTarget', { url: entry }).catch(() => undefined);
+
+    const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), options.waitMs); });
     const outcome = await Promise.race([found, closed, timeout, refused]);
     if (outcome === 'closed') return { state: 'closed' };
     if (outcome === 'timeout') return { state: 'login_required' };
@@ -293,7 +322,10 @@ export async function captureLoginQr(options: QrOptions): Promise<QrCapture> {
     }
     await pause(options.settleMs ?? 2_500);
     const now = await where();
-    if (!now || !isLoginPage(now)) return { state: 'not_login_page', where: now ? `${now.host}${now.pathname}` : '' };
+    if (!now || !isLoginPage(now)) {
+      if (browser.launched) leaveRunning = false;
+      return { state: 'not_login_page', where: now ? `${now.host}${now.pathname}` : '' };
+    }
     const shot = await cdp.send<{ data: string }>('Page.captureScreenshot', { format: 'png' }, sessionId);
     return { state: 'qr', png: Buffer.from(shot.data, 'base64') };
   } catch (error) {

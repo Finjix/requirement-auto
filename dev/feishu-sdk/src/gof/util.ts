@@ -52,9 +52,14 @@ export function readJson<T = any>(file: string): T {
   return JSON.parse(text) as T;
 }
 
-/** Exclusive create: an existing file is an error, never overwritten. */
+/**
+ * Exclusive create: an existing file is an error, never overwritten. The content is written to a side file first and linked into
+ * place, so a process that dies half-way leaves no truncated file under the real name (an event log with one cannot be read at all).
+ */
 export function writeJsonNew(file: string, data: unknown): void {
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+  const side = `${file}.${process.pid}.${createHash('sha256').update(String(Math.random())).digest('hex').slice(0, 8)}.tmp`;
+  fs.writeFileSync(side, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+  try { fs.linkSync(side, file); } finally { fs.rmSync(side, { force: true }); }
 }
 
 /** Is `file` somewhere below `dir`? */

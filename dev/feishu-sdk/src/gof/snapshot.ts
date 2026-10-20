@@ -132,14 +132,23 @@ export function columns(ws: SheetData): Columns {
   return result;
 }
 
-export function candidates(snapshot: Snapshot): Record<string, Columns> {
-  const result: Record<string, Columns> = {};
+/** The GOFCN progress sheets with a usable header, and the GOFCN-named sheets that were turned down (with the reason). */
+export function scanSheets(snapshot: Snapshot): { tables: Record<string, Columns>; rejected: { name: string; reason: string }[] } {
+  const tables: Record<string, Columns> = {};
+  const rejected: { name: string; reason: string }[] = [];
   for (const ws of snapshot.book.sheets) {
     if (!ws.name.toUpperCase().includes('GOFCN')) continue;
-    try { result[ws.name] = columns(ws); } catch (error) { if (!(error instanceof Blocked)) throw error; }
+    try { tables[ws.name] = columns(ws); } catch (error) {
+      if (!(error instanceof Blocked)) throw error;
+      rejected.push({ name: ws.name, reason: error.message });
+    }
   }
-  need(Object.keys(result).length > 0, '找不到完整 GOFCN 进度工作表');
-  return result;
+  need(Object.keys(tables).length > 0, '找不到完整 GOFCN 进度工作表');
+  return { tables, rejected };
+}
+
+export function candidates(snapshot: Snapshot): Record<string, Columns> {
+  return scanSheets(snapshot).tables;
 }
 
 export function sheetPeriod(name: string): [number, number] | undefined {
@@ -151,20 +160,32 @@ export function sheetPeriod(name: string): [number, number] | undefined {
   return month >= 1 && month <= 12 ? [year, month] : undefined;
 }
 
-export function chooseSheet(snapshot: Snapshot, request: { worksheet?: string }, current: string | null | undefined): [string, Record<string, Columns>] {
-  const tables = candidates(snapshot);
+/**
+ * Picks the sheet to append to. A GOFCN-named sheet whose header is not usable is never skipped silently: if it is as new as the chosen
+ * sheet (or has no readable month), it may be the real target or hold higher numbers, so planning stops. Older ones are returned as
+ * `ignored` so that the plan can warn about them.
+ */
+export function chooseSheet(snapshot: Snapshot, request: { worksheet?: string }, current: string | null | undefined): [string, Record<string, Columns>, string[]] {
+  const { tables, rejected } = scanSheets(snapshot);
+  const key = (p: [number, number]) => p[0] * 100 + p[1];
   const explicit = request.worksheet || current;
+  let chosen: string;
   if (explicit) {
     need(explicit in tables, '指定/当前工作表不存在或列结构不匹配，请澄清');
-    return [explicit, tables];
+    chosen = explicit;
+  } else {
+    const dated = Object.keys(tables).flatMap(name => { const p = sheetPeriod(name); return p ? [{ p, name }] : []; });
+    need(dated.length > 0, '没有可识别年月的工作表，请指定');
+    const latest = Math.max(...dated.map(d => key(d.p)));
+    const names = dated.filter(d => key(d.p) === latest).map(d => d.name);
+    need(names.length === 1, '最新工作表有并列，请指定');
+    chosen = names[0]!;
   }
-  const dated = Object.keys(tables).flatMap(name => { const p = sheetPeriod(name); return p ? [{ p, name }] : []; });
-  need(dated.length > 0, '没有可识别年月的工作表，请指定');
-  const key = (p: [number, number]) => p[0] * 100 + p[1];
-  const latest = Math.max(...dated.map(d => key(d.p)));
-  const names = dated.filter(d => key(d.p) === latest).map(d => d.name);
-  need(names.length === 1, '最新工作表有并列，请指定');
-  return [names[0]!, tables];
+  const chosenPeriod = sheetPeriod(chosen);
+  const blocking = rejected.filter(r => { const p = sheetPeriod(r.name); return !p || !chosenPeriod || key(p) >= key(chosenPeriod); });
+  need(blocking.length === 0,
+    `GOFCN 工作表“${blocking[0]?.name}”不是可用的进度表（${blocking[0]?.reason}），它可能才是目标表或含有更大的编号，不能静默跳过；请先修正该表后再规划`);
+  return [chosen, tables, rejected.map(r => r.name)];
 }
 
 export function collectIds(snapshot: Snapshot, tables: Record<string, Columns>, warnings: string[] = []): Map<number, [string, number]> {

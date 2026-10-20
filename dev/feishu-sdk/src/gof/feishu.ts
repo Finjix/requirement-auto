@@ -249,8 +249,10 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
     started = true;
     await bridge.cellsSet(token, writes);
     fresh.close();
+    const writtenRevision = await revisionOf(bridge, token); // the export and the rules below must be of this very revision
     fresh = await exportSnapshot(bridge, token, path.join(attempt, 'after.xlsx'));
     const postRevision = await revisionOf(bridge, token);
+    need(postRevision === writtenRevision, '导出期间出现并发变化');
     const afterRules = await readRules(bridge, token, await sheetsOf(bridge, token));
     need(postRevision === await revisionOf(bridge, token), '验收期间出现并发变化');
     ruleProof(path.join(attempt, 'rule-proof.json'), fresh, afterRules, context, manifest.plan);
@@ -270,6 +272,8 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
     throw error;
   } finally {
     fresh?.close();
+    // Nothing was sent: the attempt directory holds only a preflight export, and a retry must be able to use its name again.
+    if (!started) fs.rmSync(attempt, { recursive: true, force: true });
   }
 }
 

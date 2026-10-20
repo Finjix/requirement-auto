@@ -31,7 +31,7 @@ export function loadApp(env: NodeJS.ProcessEnv = process.env, paths?: Pick<DataP
   let appSecret = (env.FEISHU_APP_SECRET ?? '').trim();
   if ((!appId || !appSecret) && paths && paths.mode !== 'host') {
     try {
-      const file = JSON.parse(fs.readFileSync(path.join(paths.root, 'app.json'), 'utf8'));
+      const file = JSON.parse(fs.readFileSync(path.join(paths.root, 'app.json'), 'utf8').replace(/^\uFEFF/, ''));
       appId = appId || String(file.appId ?? '').trim();
       appSecret = appSecret || String(file.appSecret ?? '').trim();
     } catch { /* not there, or not readable: reported below */ }

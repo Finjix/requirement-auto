@@ -71,6 +71,7 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   fs.mkdirSync(base, { recursive: true });
   const dir = path.join(base, plan.plan_id);
   fs.mkdirSync(dir);
+  try {
   // No in-place rewrite or rollback of a partially generated batch.
   fs.copyFileSync(snapshot.path, path.join(dir, 'baseline.xlsx'), fs.constants.COPYFILE_EXCL);
   // Browser clipboard TSV is not CSV: quoting formulas makes them literal text.
@@ -92,6 +93,11 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   writeJsonNew(path.join(dir, 'manifest.json'), { plan, baseline_sha256: sha256(fs.readFileSync(path.join(dir, 'baseline.xlsx'))), artifacts });
   fs.mkdirSync(path.join(dir, 'events'));
   return { status: 'prepared', batch: dir, range: plan.range, csv: plan.groups.map((g: Plan) => g.csv) };
+  } catch (error) {
+    // This call made the directory a moment ago and nothing has been recorded in it: a half-made batch would block the plan for good.
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 export function events(dir: string): BatchEvent[] {
@@ -308,9 +314,11 @@ export function clsCheck(dir: string, groupId: string, action: string, ui: Evide
   return { status: 'allowed', action, group: groupId };
 }
 
-function clsEvidence(evidence: Evidence): void {
+function clsEvidence(evidence: Evidence, apiBatch: boolean): void {
   need(evidence.confirmed === true && evidence.unpublished === true, '没有确认成功及未发布状态');
   checkClsUrl(evidence.url ?? '');
+  // A batch made through the bridge (it has an api-plan) only accepts receipts of the CLS API: a screenshot path proves nothing about CLS.
+  need(!apiBatch || evidence.transport === 'cls_api', '接口批次的 CLS 证据必须是 transport=cls_api 的接口记录');
   if (evidence.transport === 'cls_api') validateReceipt(evidence);
   else {
     // Historical UI receipts retain their original evidence requirements.
@@ -349,6 +357,7 @@ export function record(dir: string, step: string, groupId?: string | null, evide
   } else if (step === 'append_started') {
     need(canStartAppend(records) && group === null, '已有写入尝试，禁止重复记录/自动重贴');
   } else if (step === 'append_verified') {
+    need(group === null, '追加验证不属于某个组');
     need(records.some(e => e.step === 'append_started') && !state.append_verified, '追加验证顺序不正确');
     need(fresh !== undefined && verify(batchPath, fresh, evidence.validations).status === 'complete', '追加未完整通过校验');
   } else if (step === 'blocked') {
@@ -367,11 +376,11 @@ export function record(dir: string, step: string, groupId?: string | null, evide
       clsCheck(batchPath, group as string, action, evidence.observations ?? {});
     } else if (step === 'draft_saved') {
       need(JSON.stringify(stages.filter(s => s !== 'cls_api_attempt')) === JSON.stringify(['cls_started']), '已有草稿或记录顺序错误');
-      clsEvidence(evidence);
+      clsEvidence(evidence, 'api-plan.json' in manifest.artifacts);
       if (evidence.transport === 'cls_api') validateBatchReceipt(batchPath, group as string, evidence, 'draft_saved');
     } else if (step === 'scripts_imported') {
       need(stages.includes('draft_saved') && !stages.includes('scripts_imported'), '导入顺序不正确或重复');
-      clsEvidence(evidence);
+      clsEvidence(evidence, 'api-plan.json' in manifest.artifacts);
       if (evidence.transport === 'cls_api') validateBatchReceipt(batchPath, group as string, evidence, 'scripts_imported');
       need(Number.isInteger(evidence.quantity) && evidence.quantity === planGroup.request.quantity
         && canonical(evidence.names) === canonical(planGroup.names), '导入数量/名称不符');

@@ -8,11 +8,11 @@ export type Plan = Record<string, any>;
 /** Plans the rows to append: the next material numbers, the naming formula copied down, the dropdown options to extend. */
 export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: string | null): Plan {
   const request = normalizeRequest(requestInput);
-  const [sheet, tables] = chooseSheet(snapshot, request, current);
+  const [sheet, tables, ignored] = chooseSheet(snapshot, request, current);
   const ws = snapshot.sheet(sheet);
   const cols = tables[sheet]!;
   need(!ws.protectedSheet, '导出工作表受保护，请核对实际编辑权限');
-  const warnings: string[] = [];
+  const warnings: string[] = ignored.map(name => `较早的 GOFCN 工作表“${name}”表头不可用，未参与编号避让`);
   const identifiers = collectIds(snapshot, tables, warnings);
   const startNumber = [...identifiers.keys()].reduce((a, b) => Math.max(a, b), 0) + 1;
   const startRow = snapshot.last[sheet]! + 1;

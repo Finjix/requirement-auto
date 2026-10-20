@@ -47,6 +47,15 @@ function id(value: unknown): number {
 }
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 
+/** The draft ID of a save response: a positive integer, bare or as a digit string, at the top or under `script` (as the read-back has it). */
+export function draftIdOf(created: any): number | undefined {
+  for (const raw of [created?.id, created?.script?.id]) {
+    const value = typeof raw === 'string' && /^[1-9]\d*$/.test(raw) ? Number(raw) : raw;
+    if (Number.isSafeInteger(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
 export function createClsAdapter(config: ClsAdapterConfig) {
   if (!config.origin || !config.authorization) throw new ClsError('必须使用 CLS 当前登录会话');
   const fetcher = config.fetch ?? fetch;
@@ -63,16 +72,20 @@ export function createClsAdapter(config: ClsAdapterConfig) {
     if (body instanceof FormData) init.body = body;
     else if (body !== undefined) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     let response: Response;
-    let json: Obj;
+    let json: Obj | null;
     try {
       response = await fetcher(`${config.origin}${path}`, init);
-      json = await response.json() as Obj;
+      json = await response.json() as Obj | null;
     } catch {
       throw new ClsError(method === 'POST' ? '写入结果未知；先回读，不重试' : 'CLS 读取失败', method === 'POST' ? 'unknown' : 'blocked');
     }
-    calls.push({ method, path, http_status: response.status, business_code: json.code, elapsed_ms: Date.now() - start });
-    assert(response.status >= 200 && response.status < 300 && json.code === 0, 'CLS HTTP/业务码失败；停止并核对现状');
-    return json.data;
+    calls.push({ method, path, http_status: response.status, business_code: json?.code, elapsed_ms: Date.now() - start });
+    // A gateway or server failure after a write was sent says nothing about whether the write took effect.
+    if (method === 'POST' && (response.status >= 500 || response.status === 408 || response.status === 429)) {
+      throw new ClsError('写入结果未知（服务端或网关错误）；先回读，不重试', 'unknown');
+    }
+    assert(response.status >= 200 && response.status < 300 && json?.code === 0, 'CLS HTTP/业务码失败；停止并核对现状');
+    return json!.data;
   }
 
   async function readCatalog(): Promise<Obj> {
@@ -171,10 +184,11 @@ export function createClsAdapter(config: ClsAdapterConfig) {
     const start = calls.length;
     const created = await write(op, '/api/workflow/script/save', op.payload);
     // The server accepted the request but did not say which draft it made: one may exist, so this is an unknown result, not a refusal.
-    if (!Number.isSafeInteger(created?.id) || created.id <= 0) throw withOperation(new ClsError('创建响应没有草稿 ID；草稿可能已创建，先回读核对，不重试', 'unknown'), op);
-    const draftId: number = created.id;
+    const draftId = draftIdOf(created);
+    if (draftId === undefined) throw withOperation(new ClsError('创建响应没有草稿 ID；草稿可能已创建，先回读核对，不重试', 'unknown'), op);
     try {
-      assert(created.status === -2, '创建结果不是草稿，停止');
+      const status = created?.status ?? created?.script?.status; // the read-back below is the real check; this only stops on a plain contradiction
+      assert(status === undefined || status === -2, '创建结果不是草稿，停止');
       return await verify(op, draftId, start);
     } catch (error) { return afterWrite(error, draftId, op); }
   }

@@ -23,9 +23,20 @@ export function readPin(file: string): Pin | undefined {
   } catch { return undefined; }
 }
 
+const CORRUPT_PIN = '这个用户的 CLS 账号绑定记录损坏（文件存在但读不出），已拒绝登录；需要管理员核对或清除 cls/account.json 后重新登录。';
+
+/** The pin as it is on disk: absent, good, or present but unreadable (which must never count as "no pin"). */
+export function pinState(file: string): { state: 'none' } | { state: 'ok'; pin: Pin } | { state: 'corrupt' } {
+  if (!fs.existsSync(file)) return { state: 'none' };
+  const pin = readPin(file);
+  return pin ? { state: 'ok', pin } : { state: 'corrupt' };
+}
+
 /** Remembers the first account seen on this profile, and refuses a different one afterwards. */
 export function checkPin(file: string, account: Account, now: () => Date = () => new Date()): void {
-  let pin = readPin(file);
+  const present = pinState(file);
+  if (present.state === 'corrupt') throw new Blocked(CORRUPT_PIN);
+  let pin = present.state === 'ok' ? present.pin : undefined;
   if (!pin) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     try {
@@ -33,7 +44,9 @@ export function checkPin(file: string, account: Account, now: () => Date = () =>
       return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      pin = readPin(file); // another command of this user pinned it a moment ago
+      const again = pinState(file); // another command of this user pinned it a moment ago
+      if (again.state !== 'ok') throw new Blocked(CORRUPT_PIN);
+      pin = again.pin;
     }
   }
   if (pin && pin.id !== account.id) {

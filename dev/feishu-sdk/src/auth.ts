@@ -261,12 +261,14 @@ export class FeishuAuth {
         await this.sleep(wait);
         continue;
       }
-      let reply: { status: number; body: any };
+      let reply: { status: number; body: any } | undefined;
       try {
         reply = await this.postForm(`${this.endpoints.accounts}${TOKEN_PATH}`,
           { grant_type: DEVICE_GRANT, device_code: pending.device_code, client_id: app.appId, client_secret: app.appSecret });
-      } catch {
-        // No answer: ask again a little later, within the allowed wait.
+      } catch { reply = undefined; }
+      // No answer, or one that is not an answer to the question (a gateway error, a rate limit, a page): the user may well have
+      // confirmed already, so the request is kept and asked again a little later, within the allowed wait.
+      if (!reply || reply.status >= 500 || reply.status === 429 || (reply.status >= 400 && typeof reply.body?.error !== 'string')) {
         pending.interval_s = Math.min(MAX_INTERVAL_S, pending.interval_s + 1);
         pending.next_poll_at = this.now() + pending.interval_s * 1000;
         await writeJsonAtomic(this.paths.login, pending);
@@ -306,11 +308,18 @@ export class FeishuAuth {
     const accessLife = (Number(body.expires_in) || 7200) * 1000;
     const refreshLife = refresh ? (Number(body.refresh_token_expires_in) || 604_800) * 1000 : accessLife;
     let info: any;
-    try {
-      info = await this.client.request({ method: 'GET', url: '/open-apis/authen/v1/user_info' }, lark.withUserAccessToken(access));
-    } catch {
-      await removeFile(this.paths.login);
-      throw new BridgeError('api', '授权已完成，但无法读取授权账号信息，请重新发起授权');
+    // The tokens exist only in this process until they are written; a hiccup of the network must not cost the user their confirmation.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        info = await this.client.request({ method: 'GET', url: '/open-apis/authen/v1/user_info' }, lark.withUserAccessToken(access));
+        break;
+      } catch {
+        if (attempt >= 3) {
+          await removeFile(this.paths.login);
+          throw new BridgeError('api', '授权已完成，但无法读取授权账号信息，请重新发起授权');
+        }
+        await this.sleep(500 * (attempt + 1));
+      }
     }
     const user = info?.data ?? info;
     const openId = typeof user?.open_id === 'string' ? user.open_id : '';
@@ -352,6 +361,8 @@ export class FeishuAuth {
       // Somebody else renewed it while this process waited for the lock.
       if (!force && current.access_expires_at - SKEW_MS > this.now()) return current.access_token;
       if (!current.refresh_token || current.refresh_expires_at <= this.now()) {
+        // A login that cannot be renewed is good until its access token really ends, not until it is nearly there.
+        if (!force && !current.refresh_token && current.access_expires_at > this.now()) return current.access_token;
         await removeFile(this.paths.auth);
         throw new BridgeError('auth_required', '飞书登录已过期，请重新授权');
       }
@@ -380,7 +391,13 @@ export class FeishuAuth {
         next.refresh_token = reply.refreshToken;
         next.refresh_expires_at = now + (Number(reply.refreshTokenExpiresIn) || 604_800) * 1000;
       }
-      await writeJsonAtomic(this.paths.auth, next);
+      // The old refresh token is spent as of the server's answer, so the new one must reach the disk: a failed write is tried again.
+      for (let attempt = 0; ; attempt++) {
+        try { await writeJsonAtomic(this.paths.auth, next); break; } catch (error) {
+          if (attempt >= 4) throw new BridgeError('api', `飞书登录已续期但没能保存（${(error as Error).message}）；旧的刷新凭据已作废，需要重新授权`);
+          await this.sleep(200 * (attempt + 1));
+        }
+      }
       return next.access_token;
     });
   }

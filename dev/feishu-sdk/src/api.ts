@@ -154,7 +154,8 @@ export class FeishuApi {
       if (size < 22 || head.toString('latin1') !== 'PK') throw new BridgeError('api', '导出的文件不是有效的 XLSX');
       return { path: output, bytes: size };
     } catch (e) {
-      await fs.rm(output, { force: true });
+      // EEXIST: another run made this file in the meantime; it is not ours to delete.
+      if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') await fs.rm(output, { force: true });
       throw e;
     }
   }

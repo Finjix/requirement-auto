@@ -9,9 +9,9 @@ export const SERVER_NAME = 'feishu-auth';
 export const TOOL_NAMES = ['feishu_auth_status', 'feishu_auth_login', 'feishu_auth_poll', 'feishu_auth_logout'] as const;
 
 const INSTRUCTIONS = [
-  '飞书用户登录。登录属于当前对话的用户本人：工具不接受任何用户标识参数，令牌只保存在本进程所服务用户的目录里，不会出现在工具结果中。',
-  '流程：feishu_auth_status 查看是否已登录 → 未登录则 feishu_auth_login 取得授权链接和验证码 → 把链接和验证码原样发给用户，请用户在自己的浏览器打开并确认，然后结束本轮等待用户回复 → 用户回复已授权后调用 feishu_auth_poll。',
-  '不要改写、缩短或猜测授权链接；不要替用户点击或登录；不要索要用户的飞书密码。',
+  'Feishu user login. The login belongs to the user of the current conversation: no tool takes a user identifier, and tokens stay in the directory of the user this process serves and never appear in results.',
+  'Flow: feishu_auth_status to see if logged in -> if not, feishu_auth_login for an authorization link and code -> send both to the user verbatim, ask them to open the link in their own browser and confirm, then end the turn and wait for their reply -> after they reply, feishu_auth_poll.',
+  'Never rewrite, shorten or guess the link; never click or log in for the user; never ask for their Feishu password.',
 ].join('\n');
 
 export interface ServerContext {
@@ -24,32 +24,35 @@ type ToolResult = { content: { type: 'text'; text: string }[]; structuredContent
 const ok = (text: string, data: Record<string, unknown>): ToolResult => ({ content: [{ type: 'text', text }], structuredContent: data });
 
 function when(ms: number | undefined): string {
-  return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '未知';
+  return ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : 'unknown';
 }
 
 function summary(status: AuthStatus): string {
-  if (!status.app_configured) return '飞书应用凭证未配置（FEISHU_APP_ID / FEISHU_APP_SECRET），无法登录；请联系管理员。';
+  if (!status.app_configured) return 'The Feishu app credentials are not configured (FEISHU_APP_ID / FEISHU_APP_SECRET), so login is impossible. Tell the user to contact an admin.';
   const lines: string[] = [];
   if (status.logged_in) {
-    lines.push(`已登录飞书：${status.name ?? '（未取得姓名）'}（${status.open_id}）`);
-    lines.push(status.refreshable ? `登录有效至 ${when(status.refresh_expires_at)}，到期前会自动续期。` : `这次登录无法续期，约在 ${when(status.access_expires_at)} 失效。`);
-    lines.push(status.missing_scopes?.length ? `缺少权限：${status.missing_scopes.join('、')}，需要重新授权。` : '本流程所需权限齐全。');
+    lines.push(`Logged in to Feishu: ${status.name ?? '(name unknown)'} (${status.open_id})`);
+    lines.push(status.refreshable ? `Login valid until ${when(status.refresh_expires_at)}; renewed automatically before then.` : `This login cannot be renewed and expires around ${when(status.access_expires_at)}.`);
+    lines.push(status.missing_scopes?.length ? `Missing scopes: ${status.missing_scopes.join(', ')}; the user must authorize again.` : 'All scopes this flow needs are granted.');
   } else {
-    lines.push('尚未登录飞书。');
+    lines.push('Not logged in to Feishu.');
   }
-  if (status.pending_login) lines.push(`有一次授权尚未完成（验证码 ${status.pending_login.user_code}，${when(status.pending_login.expires_at)} 前有效）。`);
+  if (status.pending_login) lines.push(`An authorization is pending (code ${status.pending_login.user_code}, valid until ${when(status.pending_login.expires_at)}).`);
   return lines.join('\n');
 }
 
 export function createServer(context: ServerContext = {}): McpServer {
   const env = context.env ?? process.env;
   let auth: FeishuAuth | undefined;
+  let withoutApp = false;
   // Built on first use, so a configuration problem is reported by the tool that hits it instead of stopping the server.
+  // One built without the app credentials is not kept: once they are written (app.json) the next call picks them up.
   const current = (): FeishuAuth => {
-    if (!auth) {
+    if (!auth || withoutApp) {
       const paths = resolveDataPaths(env);
       let app, missingApp;
       try { app = loadApp(env, paths); } catch (e) { missingApp = (e as Error).message; /* status still works without it */ }
+      withoutApp = missingApp !== undefined;
       auth = new FeishuAuth({ paths, app, missingApp, expectedOpenId: expectedOpenId(env), ...(context.endpoints ? { endpoints: context.endpoints } : {}) });
     }
     return auth;
@@ -57,15 +60,15 @@ export function createServer(context: ServerContext = {}): McpServer {
   const guard = async (body: (auth: FeishuAuth) => Promise<ToolResult>): Promise<ToolResult> => {
     try { return await body(current()); } catch (error) {
       const payload = toPayload(error, await auth?.secrets().catch(() => []) ?? []);
-      return { content: [{ type: 'text', text: `失败（${payload.kind}）：${payload.message}` }], structuredContent: { ok: false, error: payload }, isError: true };
+      return { content: [{ type: 'text', text: `Failed (${payload.kind}): ${payload.message}` }], structuredContent: { ok: false, error: payload }, isError: true };
     }
   };
 
   const server = new McpServer({ name: SERVER_NAME, version: '1.0.0' }, { instructions: INSTRUCTIONS });
 
   server.registerTool('feishu_auth_status', {
-    title: '飞书登录状态',
-    description: '查看本地记录里当前用户是否已登录飞书、授权了哪些权限、登录何时到期。只读本地记录，不联网，不向飞书验证，所以不能用来判断登录现在是否还有效（要验证用 gof.mjs login check）；不返回令牌。',
+    title: 'Feishu login status',
+    description: 'Show from the local record whether the current user is logged in to Feishu, which scopes were granted and when the login expires. Reads only the local record, no network and no check with Feishu, so it cannot tell whether the login still works (use `gof.mjs login check` for that). Returns no token.',
     annotations: { readOnlyHint: true, openWorldHint: false },
   }, () => guard(async a => {
     const status = await a.status(REQUIRED_SCOPES);
@@ -73,52 +76,52 @@ export function createServer(context: ServerContext = {}): McpServer {
   }));
 
   server.registerTool('feishu_auth_login', {
-    title: '发起飞书授权',
-    description: '为当前用户发起飞书设备授权，返回授权链接和验证码。把它们原样发给用户，让用户在自己的浏览器里打开并确认；确认后再调用 feishu_auth_poll。已有未过期的授权请求时返回同一个。',
-    inputSchema: { force: z.boolean().optional().describe('已登录且权限齐全时默认不重复授权；传 true 强制重新授权（例如要换账号）') },
+    title: 'Start Feishu authorization',
+    description: 'Start a Feishu device authorization for the current user and return the authorization link and code. Send both to the user verbatim, have them open the link in their own browser and confirm, then call feishu_auth_poll. Returns the same request while an unexpired one exists.',
+    inputSchema: { force: z.boolean().optional().describe('By default no new authorization starts when already logged in with all scopes; pass true to force one (e.g. to switch accounts)') },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, ({ force }) => guard(async a => {
     const status = await a.status(REQUIRED_SCOPES);
     if (status.logged_in && !status.missing_scopes?.length && !force) {
-      return ok(`${summary(status)}\n无需重新授权。`, { ...status, already_logged_in: true });
+      return ok(`${summary(status)}\nNo new authorization needed.`, { ...status, already_logged_in: true });
     }
     const prompt = await a.startLogin();
     const minutes = Math.max(1, Math.round(prompt.expires_in_s / 60));
     return ok([
-      '请把下面的内容原样发给用户（链接不要改写或缩短），请用户在自己的浏览器打开链接并点击确认授权：',
-      `授权链接：${prompt.verification_uri_complete}`,
-      `验证码：${prompt.user_code}（如页面要求输入）`,
-      `有效期约 ${minutes} 分钟。`,
-      '发完后结束本轮，等用户回复已授权，再调用 feishu_auth_poll。',
+      'Send the following to the user verbatim (do not rewrite or shorten the link) and ask them to open it in their own browser and confirm the authorization:',
+      `Authorization link: ${prompt.verification_uri_complete}`,
+      `Code: ${prompt.user_code} (if the page asks for it)`,
+      `Valid for about ${minutes} minutes.`,
+      'Then end the turn, wait for the user to say they authorized, and call feishu_auth_poll.',
     ].join('\n'), { ...prompt });
   }));
 
   server.registerTool('feishu_auth_poll', {
-    title: '确认飞书授权结果',
-    description: '用户确认授权后调用，最多等待 wait_seconds 秒，授权完成时保存登录。返回 authorized / pending / denied / expired。',
-    inputSchema: { wait_seconds: z.number().int().min(0).max(50).optional().describe('最长等待秒数，默认 40，最大 50') },
+    title: 'Confirm Feishu authorization',
+    description: 'Call after the user says they confirmed. Waits up to wait_seconds and saves the login once authorized. Returns authorized / pending / denied / expired.',
+    inputSchema: { wait_seconds: z.number().int().min(0).max(50).optional().describe('Longest wait in seconds; default 40, max 50') },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   }, ({ wait_seconds }) => guard(async a => {
     const result = await a.pollLogin((wait_seconds ?? 40) * 1000);
     switch (result.state) {
       case 'authorized':
-        return ok(`授权完成：${result.name ?? ''}（${result.open_id}）。${result.refreshable ? '' : '注意：这次没有取得续期凭据，登录约两小时后失效。'}`.trim(), { ...result });
+        return ok(`Authorized: ${result.name ?? ''} (${result.open_id}). ${result.refreshable ? '' : 'Note: no renewal credential was granted, so this login expires in about two hours.'}`.trim(), { ...result });
       case 'pending':
-        return ok(`用户还没有确认授权。请提醒用户打开授权链接并点击确认，${result.retry_after_s} 秒后可再次调用本工具（授权还剩约 ${Math.round(result.expires_in_s / 60)} 分钟有效）。`, { ...result });
+        return ok(`The user has not confirmed yet. Remind them to open the authorization link and confirm; call this tool again in ${result.retry_after_s} s (the authorization stays valid for about ${Math.round(result.expires_in_s / 60)} more minutes).`, { ...result });
       case 'denied':
-        return ok('用户拒绝了授权。不要重试；询问用户是否要重新发起授权。', { ...result });
+        return ok('The user denied the authorization. Do not retry; ask whether they want to start a new one.', { ...result });
       case 'expired':
-        return ok('授权已过期。需要重新调用 feishu_auth_login 发起授权。', { ...result });
+        return ok('The authorization expired. Call feishu_auth_login to start a new one.', { ...result });
     }
   }));
 
   server.registerTool('feishu_auth_logout', {
-    title: '退出飞书登录',
-    description: '删除当前用户在本机保存的飞书登录。用户明确要求退出或要换账号时才调用。',
+    title: 'Log out of Feishu',
+    description: "Delete the current user's Feishu login stored on this machine. Call only when the user explicitly asks to log out or switch accounts.",
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   }, () => guard(async a => {
     await a.logout();
-    return ok('已退出飞书登录，本机不再保存该用户的登录信息。', { logged_in: false });
+    return ok('Logged out of Feishu; this machine no longer stores the user\'s login.', { logged_in: false });
   }));
 
   return server;

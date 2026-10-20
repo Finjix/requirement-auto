@@ -90,6 +90,8 @@ export function parseXml(source: string): XmlNode {
       const attrs: Record<string, string> = {};
       if (space >= 0) {
         const attributeText = inner.slice(space);
+        // The attribute pattern is quadratic on one endless token: no real tag of a workbook is anywhere near this long.
+        need(attributeText.length <= 100_000, 'XML 标签过长');
         ATTRIBUTE.lastIndex = 0;
         for (let m = ATTRIBUTE.exec(attributeText); m; m = ATTRIBUTE.exec(attributeText)) {
           if (m[1] === 'xmlns' || m[1]!.startsWith('xmlns:')) continue;

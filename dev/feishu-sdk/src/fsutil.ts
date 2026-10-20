@@ -21,8 +21,11 @@ export async function readJson<T>(file: string): Promise<T | undefined> {
 async function restrictToCurrentAccount(file: string): Promise<void> {
   if (process.platform !== 'win32') return;
   try {
-    const { stdout } = await run('whoami.exe', [], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-    await run('icacls.exe', [file, '/inheritance:r', '/grant:r', `${stdout.trim()}:(F)`, '*S-1-5-18:(F)'], { windowsHide: true, timeout: 5000 });
+    // The account comes from the environment: whoami prints in the console's code page, which garbles a non-ASCII name.
+    const user = process.env.USERNAME;
+    if (!user) return;
+    const account = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${user}` : user;
+    await run('icacls.exe', [file, '/inheritance:r', '/grant:r', `${account}:(F)`, '*S-1-5-18:(F)'], { windowsHide: true, timeout: 5000 });
   } catch { /* the directory's own permissions still apply */ }
 }
 
@@ -60,25 +63,37 @@ export async function withLock<T>(file: string, body: () => Promise<T>, options:
   const { timeoutMs = 30_000, staleMs = 60_000, pollMs = 40 } = options;
   await fs.mkdir(path.dirname(file), { recursive: true });
   const deadline = Date.now() + timeoutMs;
+  const owner = randomBytes(8).toString('hex');
   for (;;) {
     try {
       const handle = await fs.open(file, 'wx');
-      await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+      await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now(), owner }));
       await handle.close();
       break;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      // On Windows a file that is just being deleted or is open elsewhere refuses with these instead of EEXIST: somebody holds it.
+      if (!['EEXIST', 'EPERM', 'EBUSY', 'EACCES'].includes((e as NodeJS.ErrnoException).code ?? '')) throw e;
     }
     try {
       const age = Date.now() - (await fs.stat(file)).mtimeMs;
       if (age > staleMs) {
         const claimed = `${file}.stale-${process.pid}-${randomBytes(4).toString('hex')}`;
-        await fs.rename(file, claimed).then(() => fs.rm(claimed, { force: true }), () => {});
+        const taken = await fs.rename(file, claimed).then(() => true, () => false);
+        if (taken) {
+          // The lock may have been renewed by its holder between the check and the rename: then it is not ours to take.
+          const live = Date.now() - (await fs.stat(claimed).then(s => s.mtimeMs, () => 0)) <= staleMs;
+          if (live) await fs.rename(claimed, file).catch(() => fs.rm(claimed, { force: true }).catch(() => {}));
+          else await fs.rm(claimed, { force: true }).catch(() => {});
+        }
         continue;
       }
     } catch { continue; } // released between the two checks
     if (Date.now() > deadline) throw new BridgeError('network', '另一个进程正在刷新飞书登录，等待超时，请稍后重试');
     await sleep(pollMs);
   }
-  try { return await body(); } finally { await fs.rm(file, { force: true }).catch(() => {}); }
+  try { return await body(); } finally {
+    // Only the lock this call made: one that was taken over as stale belongs to somebody else by now.
+    const mine = await fs.readFile(file, 'utf8').then(text => (JSON.parse(text) as { owner?: string }).owner === owner, () => false);
+    if (mine) await fs.rm(file, { force: true }).catch(() => {});
+  }
 }

@@ -33,7 +33,7 @@ test('the server offers exactly the four login tools, and none of them takes a u
     }
     const info = client.getServerVersion();
     assert.equal(info?.name, 'feishu-auth');
-    assert.match(client.getInstructions() ?? '', /不接受任何用户标识参数/);
+    assert.match(client.getInstructions() ?? '', /no tool takes a user identifier/);
   } finally { await close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -52,12 +52,12 @@ test('the login runs through the tools: link out, confirmation in, and no token 
   try {
     const before = await call('feishu_auth_status');
     assert.equal((before.structuredContent as any).logged_in, false);
-    assert.match(text(before), /尚未登录/);
+    assert.match(text(before), /Not logged in/);
 
     const login = await call('feishu_auth_login');
     assert.equal(login.isError, undefined);
-    assert.match(text(login), /授权链接：http:\/\/127\.0\.0\.1:\d+\/verify\?user_code=ABCD-1234/);
-    assert.match(text(login), /验证码：ABCD-1234/);
+    assert.match(text(login), /Authorization link: http:\/\/127\.0\.0\.1:\d+\/verify\?user_code=ABCD-1234/);
+    assert.match(text(login), /Code: ABCD-1234/);
     assert.ok(!seen.join('').includes('dev-code-1'), 'the device code stays inside');
 
     const waiting = await call('feishu_auth_poll', { wait_seconds: 0 });

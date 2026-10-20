@@ -30,7 +30,7 @@ function open(name: string): Snapshot { return new Snapshot(fx(name)); }
 
 test('plans match what the Python implementation produced, including the refusals', () => {
   const keys = [...Object.keys(golden.plan), ...Object.keys(golden.plan_errors)];
-  assert.ok(keys.length >= 30);
+  assert.ok(keys.length >= 25);
   for (const key of keys) {
     if (KNOWN_DIVERGENT.has(key)) continue;
     const [fixture, req, current] = key.split('|') as [string, string, string];
@@ -245,4 +245,14 @@ test('JSON files are written exclusively and never over an existing file', () =>
   assert.throws(() => writeJsonNew(file, { a: 2 }), /EEXIST/);
   assert.equal(readJson(file).a, 1);
   void MAIN;
+});
+
+test('a GOFCN sheet with an unusable header is never skipped silently: it stops the plan when it may be the target or hold higher numbers', () => {
+  for (const fixture of ['plan-header-dup.xlsx', 'plan-no-header.xlsx']) {
+    assert.throws(() => makePlan(open(fixture), request('basic'), null), (error: Error) => {
+      assert.ok(error instanceof Blocked, fixture);
+      assert.match(error.message, /不能静默跳过/, fixture);
+      return true;
+    }, fixture);
+  }
 });

@@ -8,7 +8,7 @@ import { BRIDGE_VERSION, type BridgeReply } from '../src/bridge.ts';
 import { status } from '../src/gof/batch.ts';
 import { Bridge, OccupiedRefusal, SCOPES, apiPlan, document, execute, login, planWithApi, probe, reconcile, recomputeApiPlan } from '../src/gof/feishu.ts';
 import { makePlan } from '../src/gof/plan.ts';
-import { prepare } from '../src/gof/batch.ts';
+import { prepare, record } from '../src/gof/batch.ts';
 import { acceptance } from '../src/gof/rules.ts';
 import { seal } from '../src/gof/seal.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
@@ -303,6 +303,21 @@ test('an append is refused when the spreadsheet changed since the approved plan'
   const changing = new Bridge(async (name, payload) => name === 'sheets-revision' ? reply({ revision: 43 }) : (bridge as any).run(name, payload));
   await failsWith(execute(changing, dir, receipt), /表格版本变化/);
   assert.equal(status(dir).events.length, 0);
+  // A refusal before anything was sent leaves no attempt directory behind, so the same batch can try again.
+  assert.deepEqual(fs.readdirSync(dir).filter(name => name.startsWith('api-attempt-')), []);
+  assert.equal((await execute(bridge, dir, receipt)).status, 'append_verified');
+});
+
+test('a batch made through the bridge takes CLS evidence only as API receipts, whatever the evidence says about itself', async () => {
+  const { bridge, dir, receipt } = await approvedBatch();
+  await execute(bridge, dir, receipt);
+  record(dir, 'cls_started', '01');
+  const shot = path.join(tmp(), 'shot.png');
+  fs.writeFileSync(shot, 'x');
+  const forged = { confirmed: true, unpublished: true, url: 'https://creative.centurygames.cn/requirement/1/edit-outer', screenshot: shot };
+  assert.throws(() => record(dir, 'draft_saved', '01', forged), /transport=cls_api/);
+  assert.throws(() => record(dir, 'draft_saved', '01', { ...forged, transport: 'ui' }), /transport=cls_api/);
+  assert.throws(() => record(dir, 'append_verified', '01', {}), /不属于某个组|追加验证/);
 });
 
 test('the command line reports a refusal as blocked JSON with exit code 2', async () => {

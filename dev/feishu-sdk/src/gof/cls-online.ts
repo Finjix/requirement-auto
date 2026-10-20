@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { events, loadBatch } from './batch.ts';
 import { ClsError, createClsAdapter } from './cls-adapter.ts';
-import { guardOnline, readPin, writeQr } from './cls-guard.ts';
+import { attachBrowser } from './chromium.ts';
+import { guardOnline, pinState, writeQr } from './cls-guard.ts';
 import { captureAuthorization, captureLoginQr, clsAccountFile, clsProfileDir, clsQrFile, openSession, type Account, type Capture, type ConsentOptions } from './cls-session.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { Blocked, isInside, need, readJson, writeJsonNew } from './util.ts';
@@ -33,7 +34,10 @@ export type QrOutcome = { state: 'qr'; file: string } | { state: 'not_login_page
 /** The one consent page that is approved after a scan: the CLS application's own, for the account this login is pinned to. */
 export const CONSENT_APP = 'dsc_admin';
 function consentOptions(): ConsentOptions {
-  return { app: CONSENT_APP, account: readPin(clsAccountFile())?.name || undefined };
+  const pin = pinState(clsAccountFile());
+  if (pin.state === 'corrupt') throw new Blocked('这个用户的 CLS 账号绑定记录损坏（文件存在但读不出），已拒绝登录；需要管理员核对或清除 cls/account.json 后重新登录。');
+  if (pin.state === 'none') return { app: CONSENT_APP };
+  return pin.pin.name ? { app: CONSENT_APP, account: pin.pin.name } : { app: CONSENT_APP, unnamedPin: true };
 }
 
 const rawOnline: Online = {
@@ -41,7 +45,12 @@ const rawOnline: Online = {
   capture: waitMs => captureAuthorization({ profileDir: clsProfileDir(), waitMs, consent: consentOptions() }),
   loginQr: async file => {
     const result = await captureLoginQr({ profileDir: clsProfileDir() });
-    return result.state === 'qr' ? { state: 'qr', file: writeQr(clsQrFile(), file, result.png) } : result;
+    if (result.state !== 'qr') return result;
+    try { return { state: 'qr', file: writeQr(clsQrFile(), file, result.png) }; } catch (error) {
+      // No picture, no record: nobody would ever close the browser that is now waiting for a scan nobody can make.
+      await (await attachBrowser(clsProfileDir()))?.close().catch(() => undefined);
+      throw error;
+    }
   },
 };
 
@@ -162,6 +171,7 @@ export async function run(online: Online, batchDir: string, operationFile: strin
   const { batchPath, op } = loadOperation(batchDir, operationFile);
   const receiptPath = path.resolve(output);
   need(isInside(batchPath, receiptPath) && !fs.existsSync(receiptPath), '接口记录须新建于本批目录内');
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true }); // before the write: a failure to save the receipt must not come after it
   const attempts = events(batchPath).filter(e => e.group === op.group && e.step === 'cls_api_attempt' && e.evidence.operation_id === op.operation_id);
   need(attempts.length === 1, '先用 batch record --step cls_api_attempt 记录本次尝试');
   const marker = path.join(batchPath, `cls-sent-${String(op.operation_id).slice(0, 16)}.json`);
@@ -174,7 +184,11 @@ export async function run(online: Online, batchDir: string, operationFile: strin
     },
   });
   const receipt = op.action === 'save_draft' ? await api.createDraft(op) : await api.importScripts(op);
-  writeJsonNew(receiptPath, receipt);
+  try { writeJsonNew(receiptPath, receipt); } catch (error) {
+    const lost = new ClsError(`写请求已成功，但接口记录没能保存：${(error as Error).message}；先用 cls read-draft / cls verify 回读核对，不重发`, 'unknown');
+    lost.draftId = receipt.parent.id; lost.operationId = op.operation_id;
+    throw lost;
+  }
   return {
     status: 'receipt_saved', receipt: receiptPath, action: op.action, draft_id: receipt.parent.id,
     requirement_number: receipt.parent.number ?? null, url: `${session.origin}/requirement/${receipt.parent.id}/edit-outer`,

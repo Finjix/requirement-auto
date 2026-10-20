@@ -191,8 +191,8 @@ async function loginCheck(bridge: Bridge, via: online.Online): Promise<Result> {
   const status = sides.every(s => s === 'ok') ? 'ok' : sides.some(s => s === 'blocked' || s === 'identity_mismatch') ? 'blocked'
     : sides.some(s => s === 'login_required' || s === 'scopes_missing') ? 'login_required' : 'unknown';
   const todo: string[] = [];
-  if (feishu.status === 'login_required' || feishu.status === 'scopes_missing') todo.push('飞书：调用 feishu_auth_login，把授权链接和验证码原样发给用户');
-  if (cls.status === 'login_required') todo.push('CLS：运行 gof.mjs cls login --qr cls-login.png，把二维码图片发给用户本人扫码');
+  if (feishu.status === 'login_required' || feishu.status === 'scopes_missing') todo.push('Feishu: call feishu_auth_login and send the user the link and code verbatim');
+  if (cls.status === 'login_required') todo.push('CLS: run gof.mjs cls login --qr cls-login.png and send the QR image to the user only, to scan with the Feishu phone app');
   return { status, feishu, cls, ...(todo.length ? { todo } : {}) };
 }
 
@@ -205,7 +205,7 @@ export async function main(argv: string[], bridge: Bridge = new Bridge(), via: o
     else if (group === 'login' && command === 'check') result = await loginCheck(bridge, via);
     else if (group === 'cls') result = CLS_ONLINE.includes(command ?? '') ? await clsOnlineCommand(command!, rest, via) : clsCommand(argv.slice(1));
     else throw new Blocked('用法：gof.mjs <batch|feishu|cls|login> <命令> [参数]');
-    const blocked = ['conflict', 'partial'].includes(result.status) || (group === 'feishu' && result.status === 'blocked') || (group === 'login' && result.status !== 'ok');
+    const blocked = ['conflict', 'partial', 'not_applied'].includes(result.status) || (group === 'feishu' && result.status === 'blocked') || (group === 'login' && result.status !== 'ok');
     return { result, code: blocked ? 2 : 0 };
   } catch (error) {
     if (error instanceof ClsError) {

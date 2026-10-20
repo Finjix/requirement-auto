@@ -16,9 +16,9 @@ const MARKETPLACE = path.join(ROOT, '.agents', 'plugins', 'marketplace.json');
 const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 // What a stdio entry of the portable mcp.json may contain (Agent Plugins schema); anything else makes Codex drop the server.
 const STDIO_KEYS = new Set(['type', 'command', 'args', 'env', 'cwd']);
-const FORBIDDEN_PARTS = new Set(['__pycache__', 'node_modules', '.state', '.git', '.codex']);
-const FORBIDDEN_NAMES = new Set(['auth.json', 'login.json', 'app.json', 'refresh.lock', '.env']);
-const FORBIDDEN_EXTENSIONS = ['.py', '.pyc', '.pyd', '.dll', '.exe'];
+const FORBIDDEN_PARTS = new Set(['__pycache__', 'node_modules', '.state', '.git', '.codex', 'browser-profile']);
+const FORBIDDEN_NAMES = new Set(['auth.json', 'login.json', 'app.json', 'refresh.lock', '.env', 'account.json', 'login-qr.json']);
+const FORBIDDEN_EXTENSIONS = ['.py', '.pyc', '.pyd', '.dll', '.exe', '.png'];
 const ENTRY_POINTS = ['bridge', 'mcp', 'gof'].map(name => `server/dist/${name}.mjs`);
 const REQUIRED_FILES = [
   'plugin.json', 'mcp.json', ...ENTRY_POINTS,
@@ -45,6 +45,8 @@ export function problems() {
     const manifest = readJson(path.join(PLUGIN, 'plugin.json'));
     if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(manifest.name ?? '')) found.push('plugin.json: name must be kebab-case');
     if (!manifest.version || !manifest.description) found.push('plugin.json: version and description are required');
+    // Without $schema, Codex reports "missing plugin.json" for a root plugin.json.
+    if (typeof manifest.$schema !== 'string' || !manifest.$schema.startsWith('https://agent-plugins.org/schemas/')) found.push('plugin.json: needs the Agent Plugins $schema');
     const entries = (readJson(MARKETPLACE).plugins ?? []).filter(p => p.name === manifest.name);
     if (entries.length !== 1 || entries[0].source?.path !== './plugins/requirement-auto') found.push('marketplace.json does not point at plugins/requirement-auto');
   } catch (error) {
@@ -56,7 +58,7 @@ export function problems() {
     if (mcp.$schema !== MCP_SCHEMA || keys.join() !== ['$schema', 'mcpServers'].join()) found.push('mcp.json: needs exactly $schema and mcpServers');
     for (const [name, server] of Object.entries(mcp.mcpServers ?? {})) {
       const extra = Object.keys(server).filter(k => !STDIO_KEYS.has(k));
-      if (server.type === 'stdio' && extra.length) found.push(`mcp.json: ${name} has keys Codex does not accept: ${extra.sort()}`);
+      if ((server.type === 'stdio' || server.type === undefined) && extra.length) found.push(`mcp.json: ${name} has keys Codex does not accept: ${extra.sort()}`);
     }
   } catch (error) {
     found.push(`mcp.json unreadable: ${error.message}`);
