@@ -1,53 +1,49 @@
-# CLS 登录与会话
+# CLS login and session
 
-CLS 在公司单点登录之后，没有设备授权或本地回调可用，登录只能在网页上完成；而公司的单点登录就是飞书网页扫码。所以登录由**用户用自己的手机扫码**完成，浏览器全程是无头的，不弹任何窗口。本技能不依赖 Codex 的内置浏览器或电脑控制：`gof.mjs cls login --qr` 用本机已安装的 Chrome 或 Edge（也可用环境变量 `REQUIREMENT_AUTO_BROWSER` 指定浏览器的绝对路径）以无头模式打开 CLS，把飞书扫码页的二维码截图成图片交给用户。命令只观察页面自己发出的 CLS API 请求里的 Authorization，用 `/api/userinfo` 确认服务端接受它，然后关闭浏览器。之后的建单、导入、回读全部是 HTTP 接口请求，不再需要浏览器。
+CLS sits behind company SSO, which is Feishu web QR login; there is no device flow or local callback. So **the user logs in by scanning a QR code with their own phone**, and the browser is always headless (no window, no desktop, nobody at the machine). `gof cls login --qr` opens CLS in the installed Chrome or Edge (override with env `REQUIREMENT_AUTO_BROWSER` = absolute path) through a minimal built-in DevTools client, and screenshots the Feishu QR page. It only observes the `Authorization` header of the page's own CLS API requests, confirms it with `/api/userinfo`, then closes the browser. All later work is plain HTTP; no browser needed. Does not use Codex's built-in browser or computer use.
 
-## 命令
-
-每个任务开始时，以及等待批准、进度表追加等长时间步骤之后，先用 `gof.mjs login check` 同时检查飞书和 CLS 是否还有效（见 SKILL.md 第 0 步）；它只读，不弹窗、不要任何用户操作。下面的命令用于登录本身。
+`gof` = `node <skill>/../../server/dist/gof.mjs`. Check both logins with `gof login check` (SKILL.md section 0); the commands below do the logging in.
 
 ```text
-node <skill>/../../server/dist/gof.mjs cls login --qr cls-login.png    # 在当前工作目录生成二维码图片
-node <skill>/../../server/dist/gof.mjs cls session                      # 检查登录；扫码确认后，用它取得登录并关闭浏览器
+gof cls login --qr cls-login.png    # write the QR image into the working directory
+gof cls session                     # check; after the scan, take the login and close the browser
 ```
 
-- 所有联网的 `cls` 子命令（`catalog`、`observe`、`run`、`read-draft`、`verify`）都会自己静默取得登录，不需要事先运行 `session`。没有可用登录时它们停止并提示运行 `cls login --qr`。
-- `cls login` 必须带 `--qr <png文件>`，不带则拒绝；没有弹窗口登录的方式。
-- `cls login --qr <png>`：先静默检查（最多 12 秒）；已登录就返回 `logged_in`，不生成图片。否则用无头浏览器打开 CLS，停在飞书扫码页，把页面截图写成这个 PNG，返回 `qr_ready`。浏览器留在后台等扫码，命令本身约 20 秒内结束。
-- 图片写在当前工作目录里，lark-agent 会随本轮回复发给用户（工作目录就是交付目录）。把图片发给用户本人，请其用飞书手机端扫码，并在手机上确认。
-- 用户说已确认后运行 `cls session`（最多约 25 秒）：接上那个无头浏览器，取得登录，正常关闭浏览器（会话 Cookie 因此保留）。随后图片和它的记录自动删除。
-- 二维码几分钟后失效（实测不到 4 分钟）。重新运行同一条命令换一张新的，同名文件会被替换；不是它自己生成的文件不会被覆盖。
-- 15 分钟没人扫码，下一个命令会把等待的浏览器关掉并删除图片。
-- 返回 `no_qr` 表示页面没有停在二维码上（可能已经登录或正在跳转），先运行 `cls session`。
-- **二维码谁扫谁登录**：只发给用户本人，不要发到群里。这个用户第一次登录的账号会被绑定，之后换账号会被拒绝。
-- **扫码之后的授权页（自动点【授权】）**：扫码登录飞书后，浏览器会停在飞书对 CLS 应用 `dsc_admin` 的授权页（“请求以下飞书账号进行授权”，有【拒绝】和【授权】），这一步在浏览器里，无头浏览器没人点就会一直停在这里。`cls session` 在等待登录期间每 0.7 秒看一次，遇到这个页面就自动点【授权】，用户不需要再确认。范围很窄：页面文字里必须写明应用 `dsc_admin`；这个用户已经绑定了 CLS 账号时，页面还必须写明这个账号；只点文字正好是“授权”的按钮，绝不点【拒绝】；一次登录只点一次。不符合时不点，`cls session` 以阻塞退出并说明原因（应用不对、账号不对），浏览器留在原处。页面文字只在命令进程里比对，不打印、不保存。
-- Agent 不能代扫码、不能代填密码、不能自动完成单点登录授权，也不通过 API Key 或其他账号绕过。
+- Every online `cls` command (`catalog`, `observe`, `run`, `read-draft`, `verify`) obtains the login silently itself; no prior `session` needed. Without a usable login it stops and says to run `cls login --qr`.
+- `cls login` requires `--qr <png>`; there is no windowed login.
+- `cls login --qr`: silent check first (up to 12 s); logged in -> `logged_in`, no image. Otherwise opens CLS headless, stops on the Feishu QR page, writes the PNG, returns `qr_ready`; the browser keeps waiting in the background. The command ends in ~20 s.
+- The image lands in the working directory; lark-agent sends it with the reply. Send it to the user only, ask them to scan with the Feishu mobile app and confirm on the phone.
+- After the user confirms, run `cls session` (up to ~25 s): it attaches to the waiting browser, takes the login, closes the browser normally (so session cookies persist), then deletes the image and its record.
+- The QR expires in a few minutes (under 4 in practice). Run the same command for a fresh one; the same file name is replaced, but a file it did not create is never overwritten.
+- After 15 minutes without a scan, the next command closes the waiting browser and deletes the image.
+- `no_qr`: the page is not on a QR code (maybe logged in or redirecting); run `cls session` first.
+- **Whoever scans is who logs in.** Send the QR to the user only, never to a group. The first account logged in for a user is bound; another account is refused afterwards.
+- **Consent page (auto-click of 【授权】):** after the scan, Feishu stops at the consent page of CLS app `dsc_admin` ("请求以下飞书账号进行授权", with 【拒绝】 and 【授权】). Nobody clicks in a headless browser, so while waiting `cls session` checks every 0.7 s and clicks 【授权】 itself; the user needn't confirm again. Narrow rules: the page text must name `dsc_admin`; if an account is bound, the page must name that account; only a button whose text is exactly "授权", never 【拒绝】, once per login. Otherwise it does not click, exits as blocked with the reason (wrong app / wrong account) and leaves the browser. Page text is compared in memory only, never printed or stored.
+- The agent never scans, types passwords, completes SSO, uses an API key or another account.
 
-## 登录的保持
+## Keeping the login
 
-- 登录保存在浏览器资料里，之后的需求通常第 0 步一检查就通过，不再需要扫码（实测：登录后连续静默检查都成功，约 1 秒）。
-- 这依赖浏览器以“继续上次浏览”（`--restore-last-session`）启动：CLS 的单点登录会留下会话级 Cookie，浏览器正常退出时默认会丢掉它们，下一次静默检查就变成未登录。不要去掉这个参数。
-- 等待扫码的浏览器以 `detached` 方式启动，命令返回后它仍在运行，下一个命令接上它；其他（只做静默检查的）浏览器随命令结束而结束，不会留下孤儿进程。
-- 浏览器每次启动都会恢复上次的标签，启动时会把多余的空白标签关掉，标签数不会越攒越多。
+- It lives in the browser profile, so later tasks normally pass `login check` without a scan (a silent check takes ~1 s).
+- This depends on starting the browser with `--restore-last-session`: SSO leaves session-only cookies that a normal exit drops. Do not remove this flag.
+- The browser waiting for a scan is started `detached` so it outlives the command; silent-check browsers end with their command, leaving no orphans.
+- Each start restores the previous tabs and closes spare blank ones.
 
-## 多个用户共用一台电脑
+## Several users on one computer
 
-- **账号绑定**：某个用户在自己的资料里第一次登录成功的 CLS 账号（只记 id 和名称）保存在 `<用户目录>/requirement-auto/cls/account.json`。之后这个用户的每次登录、每个联网命令都会核对：账号不同就拒绝，并提示应使用的账号，不泄露另一个账号是谁。这只能防止错误的账号悄悄顶替，不能证明第一次登录的就是本人。确要换账号，由管理员清除该用户的 `cls/browser-profile` 和 `cls/account.json` 后重新登录；Agent 不做这件事。
-- 各用户的浏览器是各自资料目录下独立的进程，可以同时等待扫码，互不相通。
-- 宿主给了 `LARK_AGENT_USER_OPEN_ID` 却没给 `LARK_AGENT_USER_DIR` 时，所有命令直接拒绝，而不是回落到所有用户共用的目录。
+- **Account binding:** the CLS account (id and name only) of a user's first successful login is stored in `<user dir>/requirement-auto/cls/account.json`. Later logins and online commands compare it and refuse another account, naming the one to use but not leaking who the other account is. An unreadable `account.json` is a refusal, never "no pin yet", and nothing is clicked on the consent page without a readable pin name. It stops a wrong account from silently taking over; it does not prove the first login was the right person. Changing accounts: an admin clears that user's `cls/browser-profile` and `cls/account.json`, then the user logs in again. The agent never does this.
+- Each user's browser is a separate process on its own profile; they can wait for scans at the same time without interfering.
+- With `LARK_AGENT_USER_OPEN_ID` but no `LARK_AGENT_USER_DIR`, all commands refuse instead of falling back to a shared dir.
 
-## 令牌和浏览器的边界
+## Token and browser boundaries
 
-- 令牌只在命令进程内存里，不写盘、不打印、不进批次记录或日志；记录里出现认证字段会被拒绝。每个命令结束即丢弃，下一个命令重新从浏览器取。
-- 浏览器的数据放在用户自己目录下的 `cls/browser-profile`（宿主设置了 `LARK_AGENT_USER_DIR` 时是 `<用户目录>/requirement-auto/cls/browser-profile`），登录保存在这里，各用户互不相通。这是浏览器自己的存储，本技能不读取其中的 Cookie、本地存储或任何文件。
-- 只观察 `https://creative.centurygames.cn/api/` 的请求头，不修改页面、不点击、不输入、不读取页面内容。唯一的截图是 `cls login --qr` 对飞书扫码页的那一张：它是登录挑战本身，目的就是交给用户扫码，不读取页面里的任何内容。
-- 同一个用户的 `cls` 命令按顺序执行，不要并行：同一份浏览器资料同一时间只能有一个浏览器。
-- 登录失效时命令停止并要求重新 `cls login --qr`；不切换其他浏览器、账号或绕过权限。
+- The token lives only in the command's memory: never on disk, in output, batch records or logs (a record with an auth field is rejected). Each command discards it and gets a new one from the browser.
+- Browser data is under `<user dir>/requirement-auto/cls/browser-profile` (per user). It is the browser's own storage; this skill never reads its cookies, local storage or files.
+- It watches request headers to `https://creative.centurygames.cn/api/` only; it never modifies, clicks, types into or reads the page. The one screenshot is the Feishu QR page, taken to be handed to the user.
+- Run one user's `cls` commands one after another, never in parallel: one browser per profile at a time.
+- Lost login: the command stops and requires a new `cls login --qr`. No other browser, account or permission workaround.
 
-## 环境
+## Environment
 
-- 不需要桌面会话，也不需要有人在运行机器人的电脑前：远程用户在自己的手机上扫码即可。只需要这台电脑装有 Chrome 或 Edge。
-- 用户所在的渠道必须能显示图片；看不到图片就无法登录，此时如实告诉用户，不改用别的方式。
-- 接口请求由 Node 发出，不走浏览器的网络设置。公司网络要求代理时，在运行环境里设置 `NODE_USE_ENV_PROXY=1` 和 `HTTPS_PROXY`。
-
-只读调查确认：CLS 未登录时依次跳转到 DSC Admin 和飞书网页扫码登录页（`accounts.feishu.cn/accounts/page/login`，登录后再经 `open.feishu.cn/open-apis/authen/v1/authorize` 回到 DSC Admin），即公司 SSO 是飞书网页登录；公开前端没有已验证的 CLI/device flow/localhost 回调支持，因此本技能不实现替代登录。未来如有正式接入文档和批准配置再评估。
+- No desktop session or person at the bot's machine; the remote user scans on their own phone. The machine needs Chrome or Edge.
+- The user's channel must be able to show images; if not, tell the user and stop. No other login method.
+- HTTP requests come from Node, not the browser. Behind a corporate proxy, set `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY` in the runtime environment.
