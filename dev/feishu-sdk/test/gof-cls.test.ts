@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepare, record, status, report, message } from '../src/gof/batch.ts';
 import { createClsAdapter } from '../src/gof/cls-adapter.ts';
-import { clsPreview, operation } from '../src/gof/cls.ts';
+import { clsPreview, operation, requirementName } from '../src/gof/cls.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { Blocked, readJson, writeJsonNew } from '../src/gof/util.ts';
@@ -131,4 +131,13 @@ test('the cls command line builds and saves an operation file', async () => {
   const again = await main(['cls', '--batch', dir, '--group', '01', '--action', 'save_draft', '--catalog', path.join(fixtures, 'catalog.json'),
     '--observations', obs, '--output', out]);
   assert.deepEqual([again.code, again.result.reason], [2, golden.operation_exists.reason]);
+});
+
+test('the CLS requirement name is the first and last material number of the group, and is never taken from the request', () => {
+  assert.equal(requirementName(['GOFCN67294_a', 'GOFCN67295_a', 'GOFCN67299_a']), 'GOFCN67294-GOFCN67299');
+  assert.equal(requirementName(['GOFCN67294_a']), 'GOFCN67294');
+  assert.equal(reason(() => requirementName(['无编号'])), '素材名称缺少 GOFCN 编号，无法生成需求名称');
+  const given = structuredClone(request);
+  given.groups[0].cls.requirement_name = '手填';
+  assert.equal(reason(() => clsPreview(given, catalog)), 'CLS 需求名称由该组素材编号生成（GOFCN首号-GOFCN末号），不接受输入');
 });

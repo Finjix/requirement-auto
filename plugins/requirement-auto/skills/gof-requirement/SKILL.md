@@ -31,7 +31,7 @@ Work in two phases:
 
 ## Local files
 
-Batches live in the current user's own directory (`<LARK_AGENT_USER_DIR>/requirement-auto/batches`, or the plugin data dir standalone). Use a separate temp working dir for snapshots, requests and observations; after `prepare` returns the batch path, keep everything in the batch. Remember the batch path for the session; after an interruption find the original batch, never rebuild or resend. Never clean up automatically. Do not mention temp paths, CSV, reports or read-back files to the user unless asked.
+Batches live in the current user's own directory (`<LARK_AGENT_USER_DIR>/requirement-auto/batches`, or the plugin data dir standalone). Put every intermediate file (catalog, snapshots, requests, observations) in `<LARK_AGENT_USER_DIR>/requirement-auto/tmp`, never in the current working directory: lark-agent sends the user whatever new files appear in the working directory when a task ends, so only a file meant for the user (e.g. the final plan or result) may be written there; after `prepare` returns the batch path, keep everything in the batch. Remember the batch path for the session; after an interruption find the original batch, never rebuild or resend. Never clean up automatically. Do not mention temp paths, CSV, reports or read-back files to the user unless asked.
 
 ## 0. Logins (start of every task, and again later)
 
@@ -81,13 +81,13 @@ Read [feishu-sdk-workflow.md](references/feishu-sdk-workflow.md), [api-workflow.
 | Script content: the user's confirmed Feishu doc link (CSV only; no empty value, no historical link) | `script_url` |
 | CLS 创意方向 direction | `cls.direction` |
 | CLS 任务类型 task type (do not default from the creative form) | `cls.task_type` |
-| CLS requirement name | `cls.requirement_name` |
 | CLS requirement description | `brief` |
 
 Also ask for quantity when it is not given or derivable; otherwise append exactly the stated count. Other required CLS fields found in the live system must be gathered in the same round. Without a ticket (user excluded it), only the first six are needed.
 
 Rules:
 - **The reviewer and the creator are the same person:** one person fills the progress column 创意者／脚本审核人, the CLS import creator and the message creator. Ask once; never ask whether they are the same or for a separate CLS creator.
+- **CLS requirement name is never asked and never put in `request.json`** (the program rejects it). The CLS stage runs after the sheet append, so it builds the name per group from that group's real material numbers: `GOFCN<first>-GOFCN<last>`, e.g. `GOFCN67294-GOFCN67299` (a one-item group: just `GOFCN<number>`). The plan shows it as derived from the proposed numbers.
 - Numbering: script and material numbers continue the sheet's existing sequence, identical in both places per row; the user never picks them. Primary/secondary tags are inferred from the name and listed in the plan; ask only if ambiguous or in conflict with the naming formula.
 - Leave blank: client, creative expression, creative batch, head reference, creative reference and all other progress fields. Never copy old rows.
 - Optional CLS fields: fill from what the user gave, otherwise blank, decided in the plan, never during execution. Unspecified quote/currency use the native defaults 0 / cny; label them "system default" in the plan, not as user-confirmed amounts.
@@ -99,7 +99,7 @@ Rules:
 Steps:
 1. `gof feishu snapshot --output <new>.xlsx`: a full XLSX with formulas (CSV cannot prove there are no formulas). If the full snapshot cannot be exported, stop; no CSV or browser download substitute.
 2. Build `request.json` per [data-contract.md](references/data-contract.md); run `gof feishu plan` (offline `batch_plan` + real `api_plan`) and `gof cls --preview` (CLS fields, person IDs, native defaults). Both only print JSON.
-3. Present the **full plan**: target link, sheet name and ID, total and groups, proposed numbers and append range (proposed only, not reserved), name samples, the clarified values (including script link, direction, task type), inferred tags, new dropdown options, blank fields, CSV groups, other CLS fields, import creator, draft/import boundary, group-message items to fill in later. Nothing may remain to be decided at execution; only values produced by the run itself (draft URL, read-backs, official number) are open.
+3. Present the **full plan**: target link, sheet name and ID, total and groups, proposed numbers and append range (proposed only, not reserved), the derived CLS requirement name per group, name samples, the clarified values (including script link, direction, task type), inferred tags, new dropdown options, blank fields, CSV groups, other CLS fields, import creator, draft/import boundary, group-message items to fill in later. Nothing may remain to be decided at execution; only values produced by the run itself (draft URL, read-backs, official number) are open.
 
 ## 2. Execute: append and CSV
 

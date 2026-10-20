@@ -5,7 +5,6 @@
       "cls": {
         "direction": "方向一",
         "foo": 1,
-        "requirement_name": "需求一",
         "task_type": "creative_a"
       },
       "creative_form": "视频",
@@ -22,7 +21,6 @@
         "currency": "USD",
         "direction": "方向一",
         "quotation": "100.50",
-        "requirement_name": "需求二",
         "task_type": "creative_a"
       },
       "creative_form": "图文",

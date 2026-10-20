@@ -36,7 +36,16 @@ function amount(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-export function buildPayload(group: Group, catalog: Obj): [Obj, number, Obj] {
+/** CLS requirement name: the group's first and last material number, e.g. GOFCN67294-GOFCN67299 (one item: GOFCN67294). */
+export function requirementName(names: string[]): string {
+  const numbers = names.map(n => /^GOFCN(\d+)_/.exec(n)?.[1]);
+  need(numbers.length > 0 && numbers.every(n => n !== undefined), '素材名称缺少 GOFCN 编号，无法生成需求名称');
+  const first = `GOFCN${numbers[0]}`;
+  const last = `GOFCN${numbers[numbers.length - 1]}`;
+  return first === last ? first : `${first}-${last}`;
+}
+
+export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj, number, Obj] {
   const cls = group.cls;
   need(Object.keys(cls).length > 0 && group.brief.trim() !== '', '全流程 CLS 字段/备注未收齐');
   const game = unique<Obj>(catalog.games, x => x.code === 'GOFCN', 'GOFCN 项目');
@@ -47,7 +56,7 @@ export function buildPayload(group: Group, catalog: Obj): [Obj, number, Obj] {
   const creator = unique<Obj>(catalog.users, x => x.status === 1 && x.name === group.reviewer, '创意人');
   const task = unique<Obj>(catalog.types, x => x.type === 'creative' && x.key === cls.task_type, '任务类型');
   const payload: Obj = {
-    game_id: game.id, direct_id: direction.id, asset_data: '', name: cls.requirement_name, type: task.value, company: '',
+    game_id: game.id, direct_id: direction.id, asset_data: '', name: names ? requirementName(names) : 'GOFCN<首号>-GOFCN<末号>', type: task.value, company: '',
     departments: [], marketing_user_id: '', third_user_id: supplier.id, currency: 'cny', price: 0, price_reason: group.brief,
     expect_end_date: '', storyboard_end_date: '', storyboard_attaches: [], draft_end_date: '', draft_attaches: [],
     film_end_date: '', film_attaches: [], status: -2,
@@ -114,7 +123,7 @@ export function operation(dir: string, groupId: string, action: string, catalog:
   const group = groupFor(manifest.plan, groupId);
   need(catalog.can_create === true && catalog.account?.status === 1, '未证明当前 CLS 登录及建单权限');
   clsCheck(batchPath, groupId, action, observations);
-  const [payload, creatorId, defaults] = buildPayload(group.request, catalog);
+  const [payload, creatorId, defaults] = buildPayload(group.request, catalog, group.names);
   const expected = { names: group.names, quantity: group.request.quantity, creator_id: creatorId, link: group.request.script_url,
     tag_names: [...TAG_NAMES].sort() };
   const result: Obj = { schema: 1, action, plan_id: manifest.plan.plan_id, group: groupId, account_id: catalog.account.id, payload,
@@ -183,7 +192,7 @@ export function validateBatchReceipt(dir: string, groupId: string, evidence: Obj
   const attempts = events(batchPath).filter(e => e.group === groupId && e.step === 'cls_api_attempt' && e.evidence.operation_id === op.operation_id);
   need(attempts.length === 1, '必须先记录本次接口尝试；不可重复请求');
   const group = groupFor(manifest.plan, groupId);
-  need(op.payload.name === group.request.cls.requirement_name && op.payload.price_reason === group.request.brief, '需求名称/备注与获批需求不符');
+  need(op.payload.name === requirementName(group.names) && op.payload.price_reason === group.request.brief, '需求名称/备注与获批需求不符');
   need(canonical(op.expected.names) === canonical(group.names) && op.expected.creator_id > 0 && op.expected.link === group.request.script_url,
     '请求与获批需求不匹配');
   validateParent(receipt.parent, op.payload);

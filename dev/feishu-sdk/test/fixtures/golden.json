@@ -190,7 +190,7 @@
         "film_end_date": "",
         "game_id": 3,
         "marketing_user_id": "",
-        "name": "需求一",
+        "name": "GOFCN1011-GOFCN1012",
         "price": 0,
         "price_reason": "测试需求一",
         "status": -2,
@@ -223,7 +223,7 @@
             "film_end_date": "",
             "game_id": 3,
             "marketing_user_id": "",
-            "name": "需求一",
+            "name": "GOFCN<首号>-GOFCN<末号>",
             "price": 0,
             "price_reason": "测试需求一",
             "status": -2,
@@ -250,7 +250,7 @@
             "film_end_date": "",
             "game_id": 3,
             "marketing_user_id": "",
-            "name": "需求二",
+            "name": "GOFCN<首号>-GOFCN<末号>",
             "price": 100.5,
             "price_reason": "测试需求二",
             "status": -2,
@@ -814,7 +814,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -851,7 +850,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -889,7 +887,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -915,7 +912,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1089,7 +1085,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1126,7 +1121,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1164,7 +1158,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1190,7 +1183,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1353,7 +1345,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1390,7 +1381,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1428,7 +1418,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1454,7 +1443,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1617,7 +1605,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1654,7 +1641,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1692,7 +1678,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1718,7 +1703,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1881,7 +1865,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1918,7 +1901,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1956,7 +1938,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -1982,7 +1963,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2146,7 +2126,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2183,7 +2162,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2221,7 +2199,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2247,7 +2224,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2410,7 +2386,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2447,7 +2422,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2485,7 +2459,6 @@
             "client": "",
             "cls": {
               "direction": "方向一",
-              "requirement_name": "需求一",
               "task_type": "creative_a"
             },
             "creative_batch": "",
@@ -2511,7 +2484,6 @@
               "currency": "USD",
               "direction": "方向一",
               "quotation": "100.50",
-              "requirement_name": "需求二",
               "task_type": "creative_a"
             },
             "creative_batch": "",

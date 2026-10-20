@@ -2,7 +2,7 @@ import { cellText, feishuDocPath, isObject, need } from './util.ts';
 
 export const REQUIRED_TEXT = ['material_name', 'keyword', 'creative_form', 'supplier', 'reviewer', 'script_url'];
 export const OPTIONAL_FIELDS = ['creative_expression', 'creative_batch', 'head_reference', 'creative_reference'];
-export const CLS_REQUIRED = ['direction', 'task_type', 'requirement_name'];
+export const CLS_REQUIRED = ['direction', 'task_type'];
 export const CLS_OPTIONAL = ['subject', 'department', 'market_contact', 'currency', 'quotation',
   'expected_completion', 'storyboard_time', 'first_draft_time', 'final_cut_time'];
 
@@ -59,6 +59,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     need(typeof g.brief === 'string', 'brief 必须是文本');
     need(feishuDocPath(g.script_url, 'wiki|docx', true) !== undefined, '脚本链接必须是当前确认的飞书文档');
     const cls = pick(raw, 'cls', {});
+    need(!(isObject(cls) && 'requirement_name' in cls), 'CLS 需求名称由该组素材编号生成（GOFCN首号-GOFCN末号），不接受输入');
     need(isObject(cls) && subset(Object.keys(cls), [...CLS_REQUIRED, ...CLS_OPTIONAL]), 'CLS 字段未知');
     if (Object.keys(cls).length > 0) {
       for (const key of CLS_REQUIRED) need(typeof cls[key] === 'string' && cls[key].trim() !== '', `缺少 CLS ${key}`);
