@@ -107,7 +107,10 @@ test('an operation and its receipts are checked as strictly as before', () => {
   }), /ENOENT/);
   assert.equal(draft('ok', receiptFor(op), { requirement_number: 'GOFCN20260100009' }), 'no error');
   assert.deepEqual(status(dir).groups['01'], golden.steps_group_01);
-  assert.ok((message(dir).message as string).includes('GOFCN20260100009（玩法_卖点 · 视频 * 2）'));
+  // The group with the saved draft is in the message with its official number; the other one has no ticket yet and is left out.
+  const sent = message(dir);
+  assert.ok((sent.message as string).includes('需求编号：GOFCN20260100009（玩法*2）\n供应商：供应商丙\n创意人：张三\n辛苦安排一下~'));
+  assert.deepEqual([sent.skipped_groups, sent.missing_numbers], [['02'], []]);
   const full = report(dir);
   assert.equal(full.groups[0].draft_saved.draft_id, 5001);
   // The user is handed the progress sheet and each saved draft to look at.

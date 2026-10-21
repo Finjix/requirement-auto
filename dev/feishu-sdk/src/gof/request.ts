@@ -23,6 +23,8 @@ export interface Group {
   topic: string; primary_tag: string; secondary_tag: string; creator: string; client: string; brief: string;
   creative_expression: string; creative_batch: string; head_reference: string; creative_reference: string;
   cls: Record<string, string | number>;
+  /** The short name of this kind of requirement in the group message ("素人剧情"); only present when given, otherwise the message uses the 一级标签. */
+  label?: string;
   /** Only when the rows of the group differ; a group of one kind of row keeps its fields on itself. */
   items?: Item[];
   [key: string]: unknown;
@@ -93,7 +95,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
   need(isObject(request) && subset(Object.keys(request), ['worksheet', 'groups']), '请求有未知字段/目标覆盖');
   const groups = request.groups;
   need(Array.isArray(groups) && groups.length > 0, '需要至少一个供应商/题材组');
-  const allowed = [...REQUIRED_TEXT, ...OPTIONAL_FIELDS, 'quantity', 'topic', 'primary_tag', 'secondary_tag', 'creator', 'client', 'brief', 'cls', 'items'];
+  const allowed = [...REQUIRED_TEXT, ...OPTIONAL_FIELDS, 'quantity', 'topic', 'primary_tag', 'secondary_tag', 'creator', 'client', 'brief', 'cls', 'items', 'label'];
   const normalized: Group[] = [];
   groups.forEach((raw: unknown, offset: number) => {
     const index = offset + 1;
@@ -128,6 +130,12 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     for (const key of ['client', ...OPTIONAL_FIELDS]) {
       need(pick(raw, key, '') === '', `进度表阶段 ${key} 应留空`);
       g[key] = '';
+    }
+    if ('label' in raw) {
+      // Only in the group message, where it stands in front of "*数量" inside brackets: no brackets, stars or line breaks of its own.
+      const label = cellText(raw.label, 'label').trim();
+      need(label !== '' && label.length <= 20 && !/[()（）*＊]/.test(label), `第 ${index} 组的 label 需要 1-20 个字，且不含括号和星号`);
+      g.label = label;
     }
     g.brief = pick(raw, 'brief', ''); // Only still accepted so older requests load; it is not used anywhere.
     need(typeof g.brief === 'string', 'brief 必须是文本');

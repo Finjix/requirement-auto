@@ -521,7 +521,8 @@ test('plan --output saves the whole plan and prints only what the user is shown,
   assert.deepEqual([result.status, result.worksheet, result.sheet_id, result.range, result.first_number, result.last_number],
     ['plan_saved', 'GOFCN创意进度 26年3月', 's3', 'A6:I8', 1011, 1013]);
   assert.deepEqual(result.groups[0], { group: '01', quantity: 2, requirement_name: 'GOFCN1011-GOFCN1012', supplier: '供应商丙', reviewer: '张三',
-    script_url: 'https://centurygames.feishu.cn/docx/ABC123def', items: [{ quantity: 2, first: 'GOFCN1011_玩法_卖点_视频_新爆点', last: 'GOFCN1012_玩法_卖点_视频_新爆点' }] });
+    script_url: 'https://centurygames.feishu.cn/docx/ABC123def', message_kind: '玩法*2',
+    items: [{ quantity: 2, first: 'GOFCN1011_玩法_卖点_视频_新爆点', last: 'GOFCN1012_玩法_卖点_视频_新爆点' }] });
   assert.deepEqual(result.new_options, [{ field: 'supplier', option: '供应商丙' }]);
   const again = await main(args, bridge);
   assert.deepEqual([again.code, again.result.reason], [2, '计划文件已存在，不覆盖']);

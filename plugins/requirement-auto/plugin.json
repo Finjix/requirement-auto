@@ -9,12 +9,12 @@
       "interface": {
         "displayName": "GOFCN 需求自动化",
         "shortDescription": "追加创意进度表并验收，生成 CSV，保存 CLS 草稿，飞书登录按用户隔离",
-        "longDescription": "处理 GOFCN 素材需求：用户给出飞书需求链接后，自动整理条数、标签、供应商、审核人和 CLS 字段，推不出的才问；确认完整计划后通过飞书 SDK 防覆盖追加创意进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 未发布草稿、导入脚本并给出可复制群消息。飞书用户授权通过设备授权完成，登录信息只保存在当前用户自己的目录里。",
+        "longDescription": "处理 GOFCN 素材需求：用户给出一份或多份飞书需求链接后（多份文档一次完成），自动整理条数、标签、供应商、审核人和 CLS 字段，推不出的才问；确认完整计划后通过飞书 SDK 防覆盖追加创意进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 未发布草稿、导入脚本并给出一条汇总所有需求的可复制群消息。飞书用户授权通过设备授权完成，登录信息只保存在当前用户自己的目录里。",
         "developerName": "requirement-auto",
         "category": "Productivity",
         "capabilities": ["Read", "Write"],
         "defaultPrompt": [
-          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with script import, copyable group message. Don't ask about scope. Work out the rows, tags, supplier, reviewer and CLS fields from my requirement link and the progress sheet's history, ask only what cannot be worked out, show one complete plan, and once I approve it run everything without further questions unless blocked."
+          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with script import, one copyable group message for all of them. Don't ask about scope. Work out the rows, tags, supplier, reviewer and CLS fields from my requirement link (or several links at once, one ticket each) and the progress sheet's history, ask only what cannot be worked out, show one complete plan, and once I approve it run everything without further questions unless blocked."
         ]
       }
     }

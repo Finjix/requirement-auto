@@ -43,4 +43,4 @@ Writes are never retried automatically; `cls_api_attempt` plus the `cls-sent-*.j
 
 ## Handover
 
-Deliver the progress range, the real draft URL and the copyable message. CSV, read-backs and reports stay internal (system temp), no auto cleanup, shown only on request. Use the official GOFCN number the system returned; without it keep the placeholder and say so. Never say "published". Reports carry evidence times and do not claim a fresh online check. Do not claim speed from mock tests; mark unapproved or untested steps as such.
+Deliver the progress range, the real draft URL of each group and the one copyable message of the batch. CSV, read-backs and reports stay internal (the user's own batch directory; `gof` removes batches untouched for 7 days), shown only on request. Use the official GOFCN number the system returned; without it keep the placeholder and say so. Never say "published". Reports carry evidence times and do not claim a fresh online check. Do not claim speed from mock tests; mark unapproved or untested steps as such.

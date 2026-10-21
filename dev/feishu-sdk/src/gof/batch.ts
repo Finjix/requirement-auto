@@ -405,25 +405,45 @@ export function record(dir: string, step: string, groupId?: string | null, evide
   return { status: 'recorded', step, group };
 }
 
+const NUMBER_PLACEHOLDER = '【发布后补填需求编号】';
+/** Steps after which a group has a CLS ticket (or one the user is making by hand): only such groups belong in the group message. */
+const TICKET_STEPS = ['draft_saved', 'scripts_imported', 'handoff', 'requirement_number'];
+
+/** What a group asks for: its label and quantity ("素人剧情*25"); without a label, its rows counted by 一级标签 in the order they first appear. */
+export function kindOf(g: Record<string, any>): string {
+  if (typeof g.label === 'string' && g.label !== '') return `${g.label}*${g.quantity}`;
+  const kinds = new Map<string, number>();
+  for (const item of itemsOf(g)) kinds.set(item.primary_tag, (kinds.get(item.primary_tag) ?? 0) + item.quantity);
+  return [...kinds].map(([kind, quantity]) => `${kind}*${quantity}`).join('，');
+}
+
+/**
+ * The copyable group message of the whole batch: every requirement (one per group, in the order of the plan) with its number and
+ * supplier, then the creators of all of them once, each person once. A group without a ticket is left out and named in `skipped_groups`;
+ * `missing_numbers` names the groups that still carry the placeholder instead of the official number.
+ */
 export function message(dir: string): Record<string, any> {
   const { path: batchPath, manifest } = loadBatch(dir);
-  const records = events(batchPath);
-  const lines = ['请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。', '', '@cici cici老师好，本批需求如下：'];
-  for (const group of manifest.plan.groups as Plan[]) {
+  return composeMessage(manifest.plan.groups as Plan[], events(batchPath));
+}
+
+/** The group message from the plan's groups and the batch's events; the part of `message` that needs no batch on disk. */
+export function composeMessage(groups: Plan[], records: Pick<BatchEvent, 'group' | 'step' | 'evidence'>[]): Record<string, any> {
+  const lines = ['@李聪（Cici）老师好 刚刚发了新的工单'];
+  const creators: string[] = [];
+  const skipped: string[] = [];
+  const missing: string[] = [];
+  for (const group of groups) {
+    if (!records.some(e => e.group === group.id && TICKET_STEPS.includes(e.step))) { skipped.push(group.id); continue; }
     const found = [...records].reverse().find(e => e.group === group.id && e.evidence.requirement_number);
-    const number = found ? found.evidence.requirement_number : '【发布后补填需求编号】';
+    if (!found) missing.push(group.id);
     const g = group.request;
-    // Rows of the same name body count together, in the order they first appear.
-    const kinds = new Map<string, number>();
-    for (const item of itemsOf(g)) {
-      const kind = `${item.topic} · ${item.creative_form}`;
-      kinds.set(kind, (kinds.get(kind) ?? 0) + item.quantity);
-    }
-    const what = [...kinds].map(([kind, quantity]) => `${kind} * ${quantity}`).join('，');
-    lines.push(`需求编号：${number}（${what}）`, `供应商：${g.supplier}`, `创意人：${g.creator}`, '');
+    lines.push(`需求编号：${found ? found.evidence.requirement_number : NUMBER_PLACEHOLDER}（${kindOf(g)}）`, `供应商：${g.supplier}`);
+    if (!creators.includes(g.creator)) creators.push(g.creator);
   }
-  lines.push('辛苦安排一下~');
-  return { status: 'message_ready', message: lines.join('\n') };
+  if (creators.length === 0) return { status: 'message_not_ready', message: null, skipped_groups: skipped, missing_numbers: missing };
+  lines.push(`创意人：${creators.join('/')}`, '辛苦安排一下~');
+  return { status: 'message_ready', message: lines.join('\n'), skipped_groups: skipped, missing_numbers: missing };
 }
 
 /** The progress sheet's tab of `sheetId` (the sheet itself without one). */

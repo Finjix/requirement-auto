@@ -27,7 +27,7 @@ start.cmd
 | 插件在 Codex 里的名字 | `requirement-auto@lark-agent`；技能 `requirement-auto:gof-requirement` |
 | 每个用户每一轮的环境变量 | `LARK_AGENT_USER_DIR`（`user/<名>`，不是其中的 `workspace`）、`LARK_AGENT_USER_OPEN_ID`（飞书 Open ID）、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`（机器人的应用）。Codex 的 shell 工具和 MCP 服务都拿得到 |
 | MCP 服务 | lark-agent 读取已装副本的 `mcp.json`，把其中的 stdio 服务**用同样的名字**在配置里重新注册（`${PLUGIN_ROOT}` 换成安装目录，`node` 换成运行 lark-agent 的那个 node，加上 `env_vars` 转发上面四个变量），再关掉插件自带的那个 |
-| 数据位置 | `user/<名>/requirement-auto/{feishu,batches}`。不在 `workspace/` 里，所以不会被自动清理，也不会被当作交付文件发给用户 |
+| 数据位置 | `user/<名>/requirement-auto/{feishu,cls,batches,tmp}`。不在 `workspace/` 里，所以不在 lark-agent 的清理范围内，也不会被当作交付文件发给用户。登录（`feishu`、`cls`）一直保留；`batches` 和 `tmp` 由插件自己清理：每次运行 `gof` 开始时，删除 7 天（环境变量 `REQUIREMENT_AUTO_RETENTION_DAYS` 可改，整数天）内没有任何文件被创建、修改或移动过的批次目录和 tmp 文件（`src/retention.ts`）。批次整个删或整个不删，所以超过 7 天的未完成批次不能再恢复 |
 
 ### 为什么宿主要重新注册 MCP
 

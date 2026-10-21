@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { makePlan, type Plan } from '../src/gof/plan.ts';
 import { normalizeRequest } from '../src/gof/request.ts';
-import { clsCheck, loadBatch, message, preflight, prepare, record, report, status, verify } from '../src/gof/batch.ts';
+import { clsCheck, composeMessage, loadBatch, message, preflight, prepare, record, report, status, verify } from '../src/gof/batch.ts';
 import { Blocked, canonical, digest, readJson, writeJsonNew } from '../src/gof/util.ts';
 import { rejectSecrets } from '../src/gof/seal.ts';
 
@@ -305,7 +305,58 @@ test('a group can hold rows of several kinds: they keep their order, share one C
   assert.equal(csv.split('\r\n').length, 7);
   assert.ok(csv.includes('GOFCN1011_玩法_卖点_视频_关键词,https://centurygames.feishu.cn/wiki/XYZ789?sheet=abc123,'));
   assert.ok(csv.includes('GOFCN1015_画面_体验_图文_关键词,同上,'));
-  assert.ok((message(dir).message as string).includes('（玩法_卖点 · 视频 * 3，玩法_体验 · 视频 * 1，画面_体验 · 图文 * 1）'));
+  // Without a label the message counts the rows by 一级标签, in the order they first appear.
+  assert.equal(composeMessage(plan.groups, [{ group: '01', step: 'handoff', evidence: {} }]).message.split('\n')[1],
+    '需求编号：【发布后补填需求编号】（玩法*4，画面*1）');
+});
+
+// ---- the group message of a batch with one or several requirement documents
+
+const kind = (label: string | undefined, quantity: number, supplier: string, reviewer: string, form = '视频') =>
+  derived({ supplier, reviewer, quantity, primary_tag: '玩法', secondary_tag: '卖点', creative_form: form, ...(label ? { label } : {}) });
+const numbered = (...entries: [string, string][]) => entries.map(([group, number]) => ({ group, step: 'requirement_number', evidence: { requirement_number: number } }));
+
+test('several requirement documents give one message: every requirement with its supplier, then each creator once', () => {
+  const plan = makePlan(open('base.xlsx'), { groups: [
+    kind('迭代', 22, '潘越', '张天伟'), kind('素人剧情', 25, '丁杰', '张天伟'), kind('明星', 25, '丁杰', '雷佳威'), kind('解说', 25, '王晨龙', '雷佳威', '2D'),
+  ] });
+  const got = composeMessage(plan.groups, numbered(['01', 'GOFCN20250919001'], ['02', 'GOFCN20250919002'], ['03', 'GOFCN20250919003'], ['04', 'GOFCN20250919004']));
+  assert.deepEqual(got, { status: 'message_ready', skipped_groups: [], missing_numbers: [], message: [
+    '@李聪（Cici）老师好 刚刚发了新的工单',
+    '需求编号：GOFCN20250919001（迭代*22）', '供应商：潘越',
+    '需求编号：GOFCN20250919002（素人剧情*25）', '供应商：丁杰',
+    '需求编号：GOFCN20250919003（明星*25）', '供应商：丁杰',
+    '需求编号：GOFCN20250919004（解说*25）', '供应商：王晨龙',
+    '创意人：张天伟/雷佳威',
+    '辛苦安排一下~',
+  ].join('\n') });
+});
+
+test('one requirement gets the same wording, and a missing official number keeps the placeholder', () => {
+  const plan = makePlan(open('base.xlsx'), { groups: [kind('素人剧情', 25, '丁杰', '张天伟')] });
+  const got = composeMessage(plan.groups, [{ group: '01', step: 'draft_saved', evidence: {} }]);
+  assert.equal(got.message, ['@李聪（Cici）老师好 刚刚发了新的工单', '需求编号：【发布后补填需求编号】（素人剧情*25）', '供应商：丁杰', '创意人：张天伟', '辛苦安排一下~'].join('\n'));
+  assert.deepEqual([got.status, got.missing_numbers, got.skipped_groups], ['message_ready', ['01'], []]);
+});
+
+test('a requirement without a ticket is left out of the message and named; with no ticket at all there is no message', () => {
+  const plan = makePlan(open('base.xlsx'), { groups: [kind('明星', 3, '丁杰', '张天伟'), kind('解说', 2, '王晨龙', '雷佳威')] });
+  const some = composeMessage(plan.groups, numbered(['02', 'GOFCN20250919002']));
+  assert.deepEqual([some.skipped_groups, some.missing_numbers], [['01'], []]);
+  assert.ok(!some.message.includes('明星') && some.message.includes('需求编号：GOFCN20250919002（解说*2）') && some.message.includes('创意人：雷佳威'));
+  // Only a saved draft, a hand-over or an official number counts; starting the CLS stage does not.
+  const none = composeMessage(plan.groups, [{ group: '01', step: 'cls_started', evidence: {} }, { group: null, step: 'append_verified', evidence: {} }]);
+  assert.deepEqual(none, { status: 'message_not_ready', message: null, skipped_groups: ['01', '02'], missing_numbers: [] });
+});
+
+test('the label of a group is a short plain name; it is optional and survives normalizing again', () => {
+  const plan = makePlan(open('base.xlsx'), { groups: [kind('素人剧情', 2, '丁杰', '张三')] });
+  assert.equal(plan.groups[0].request.label, '素人剧情');
+  assert.deepEqual(normalizeRequest(plan.request), plan.request);
+  assert.ok(!('label' in makePlan(open('base.xlsx'), { groups: [kind(undefined, 2, '丁杰', '张三')] }).groups[0].request));
+  for (const bad of ['', '  ', '素人（剧情）', '明星*2', 'a\nb', 'x'.repeat(21)]) {
+    assert.throws(() => normalizeRequest({ groups: [{ ...kind(undefined, 2, '丁杰', '张三'), label: bad }] }), (e: Error) => e instanceof Blocked && /label/.test(e.message), JSON.stringify(bad));
+  }
 });
 
 test('a request with rows of several kinds is refused when an item is incomplete or the group also counts its own rows', () => {

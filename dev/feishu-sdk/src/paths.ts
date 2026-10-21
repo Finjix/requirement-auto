@@ -15,6 +15,8 @@ export interface DataPaths {
   login: string;
   lock: string;
   batches: string;
+  /** intermediate files of a task (catalog, snapshots, requests); like the batches they are removed once old, see retention.ts */
+  tmp: string;
 }
 
 function absolute(name: string, value: string): string {
@@ -29,6 +31,7 @@ function layout(mode: DataPaths['mode'], root: string): DataPaths {
   return {
     mode, root, feishu, auth: path.join(feishu, 'auth.json'), login: path.join(feishu, 'login.json'),
     lock: path.join(feishu, 'refresh.lock'), batches: path.join(root, 'batches'),
+    tmp: path.join(root, 'tmp'),
   };
 }
 

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CellRange, columnLetter } from './a1.ts';
 import { BRIDGE_VERSION, runBridge, type BridgeContext, type BridgeReply } from '../bridge.ts';
-import { events, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
+import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
 import { business, makePlan, type Plan } from './plan.ts';
@@ -485,8 +485,9 @@ export function planSummary(result: Obj, file: string): Obj {
         offset += item.quantity;
         return { quantity: item.quantity, first: names[0], last: names[names.length - 1] };
       });
+      // `message_kind` is how the group message will name this requirement ("素人剧情*25"), shown in the plan so it can be corrected before.
       return { group: g.id, quantity: g.request.quantity, requirement_name: requirementName(g.names), supplier: g.request.supplier,
-        reviewer: g.request.reviewer, script_url: g.request.script_url, items };
+        reviewer: g.request.reviewer, script_url: g.request.script_url, message_kind: kindOf(g.request), items };
     }),
     // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.
     new_options: (api.dropdowns as Obj[]).flatMap(d => (d.missing as string[]).map(option => ({ field: OPTION_NAMES[d.field] ?? d.field, option }))),

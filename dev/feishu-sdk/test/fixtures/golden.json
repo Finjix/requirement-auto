@@ -138,7 +138,9 @@
       "status": "blocked"
     },
     "message_after_number": {
-      "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：GOFCN20260100009（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n\n辛苦安排一下~",
+      "message": "@李聪（Cici）老师好 刚刚发了新的工单\n需求编号：GOFCN20260100009（玩法*2）\n供应商：供应商丙\n需求编号：GOFCN20260100001（画面*1）\n供应商：供应商甲\n创意人：张三/李四\n辛苦安排一下~",
+      "missing_numbers": [],
+      "skipped_groups": [],
       "status": "message_ready"
     },
     "operation_exists": {
@@ -672,7 +674,11 @@
     {
       "name": "message",
       "result": {
-        "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：【发布后补填需求编号】（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n\n辛苦安排一下~",
+        "message": "@李聪（Cici）老师好 刚刚发了新的工单\n需求编号：GOFCN20260100001（画面*1）\n供应商：供应商甲\n创意人：李四\n辛苦安排一下~",
+        "missing_numbers": [],
+        "skipped_groups": [
+          "01"
+        ],
         "status": "message_ready"
       }
     },
@@ -692,7 +698,7 @@
     {
       "name": "report body",
       "result": {
-        "message": "请在正式发布后核对并补齐需求编号，再复制到无尽冬日-素材外包结算群发送。\n\n@cici cici老师好，本批需求如下：\n需求编号：【发布后补填需求编号】（玩法_卖点 · 视频 * 2）\n供应商：供应商丙\n创意人：张三\n\n需求编号：GOFCN20260100001（画面_体验 · 图文 * 1）\n供应商：供应商甲\n创意人：李四\n\n辛苦安排一下~",
+        "message": "@李聪（Cici）老师好 刚刚发了新的工单\n需求编号：GOFCN20260100001（画面*1）\n供应商：供应商甲\n创意人：李四\n辛苦安排一下~",
         "range": "A6:I8",
         "status": "report_ready",
         "target": "https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn",
