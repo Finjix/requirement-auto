@@ -28,7 +28,7 @@ If `append` rejects the overwrite receipt, tell the user "写入功能暂时不�
 
 ## Local files
 
-Intermediate files (catalog, snapshots, requests, plans, observations) go to `<LARK_AGENT_USER_DIR>/requirement-auto/tmp`, not the working directory: lark-agent sends the user every new file in the working directory when a task ends, so only QR images and files meant for the user go there. After `prepare`, keep everything in the batch directory and remember its path for the session; to resume, use the original batch. `gof` removes batches and tmp files untouched for 7 days.
+Intermediate files (catalog, snapshots, requests, plans, observations) go to `<LARK_AGENT_USER_DIR>/requirement-auto/tmp`, not the working directory: lark-agent sends the user every new file in the working directory when a task ends, so only QR images and files meant for the user go there. The CSV is an intermediate file too: it stays in the batch directory, is never copied to the working directory, and is not linked or mentioned in replies, unless the user asked for the CSV itself ("只要 CSV"); then copy that group's CSV to the working directory and link it. After `prepare`, keep everything in the batch directory and remember its path for the session; to resume, use the original batch. `gof` removes batches and tmp files untouched for 7 days.
 
 ## 0. Logins
 
@@ -90,4 +90,4 @@ Then:
 
 `gof batch message --batch …` builds the group message; hand it over exactly as returned, once for all documents. `【发布后补填需求编号】` marks groups without an official number (`missing_numbers`): tell the user to fill it in after publishing. Groups without a ticket are left out (`skipped_groups`): say which. If the user later gives the real number, `record --step requirement_number` and regenerate.
 
-`gof batch report --batch … --output <tmp>/<new report>.json`. Give the user: appended numbers, the links from the report's `links` ("创意进度表：<link>", "CLS 草稿：<link>", or with several documents "CLS 草稿（<供应商>·<类型名>）：<link>"), the copyable message and what is left for them (publish, fill in 需求编号, send). Give the links for whatever exists also when the run stopped part-way.
+`gof batch report --batch … --output <tmp>/<new report>.json`. Give the user: appended numbers, the links from the report's `links` (only those; not the CSV or other local files) ("创意进度表：<link>", "CLS 草稿：<link>", or with several documents "CLS 草稿（<供应商>·<类型名>）：<link>"), the copyable message and what is left for them (publish, fill in 需求编号, send). Give the links for whatever exists also when the run stopped part-way.
