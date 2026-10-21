@@ -72,19 +72,23 @@ export function createClsAdapter(config: ClsAdapterConfig) {
     if (body instanceof FormData) init.body = body;
     else if (body !== undefined) { headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     let response: Response;
-    let json: Obj | null;
+    let json: Obj | null = null;
     try {
       response = await fetcher(`${config.origin}${path}`, init);
-      json = await response.json() as Obj | null;
-    } catch {
-      throw new ClsError(method === 'POST' ? '写入结果未知；先回读，不重试' : 'CLS 读取失败', method === 'POST' ? 'unknown' : 'blocked');
+    } catch (error) {
+      const reason = (error as Error)?.name === 'TimeoutError' ? '请求超时' : '连接失败';
+      throw new ClsError(method === 'POST' ? `写入结果未知（${reason}）；先回读，不重试` : `CLS 读取失败（${reason}）`, method === 'POST' ? 'unknown' : 'blocked');
     }
+    try { json = await response.json() as Obj | null; } catch { /* a body that is not JSON: the status below still says what happened */ }
     calls.push({ method, path, http_status: response.status, business_code: json?.code, elapsed_ms: Date.now() - start });
+    // The reason the user is told when CLS refuses: the HTTP status, CLS's own business code and its message.
+    const serverMessage = [json?.msg, json?.message].find((x) => typeof x === 'string' && x.trim());
+    const detail = `HTTP ${response.status}${json?.code !== undefined ? `，业务码 ${json.code}` : ''}${serverMessage ? `，${String(serverMessage).trim().slice(0, 200)}` : ''}`;
     // A gateway or server failure after a write was sent says nothing about whether the write took effect.
     if (method === 'POST' && (response.status >= 500 || response.status === 408 || response.status === 429)) {
-      throw new ClsError('写入结果未知（服务端或网关错误）；先回读，不重试', 'unknown');
+      throw new ClsError(`写入结果未知（服务端或网关错误，${detail}）；先回读，不重试`, 'unknown');
     }
-    assert(response.status >= 200 && response.status < 300 && json?.code === 0, 'CLS HTTP/业务码失败；停止并核对现状');
+    assert(response.status >= 200 && response.status < 300 && json?.code === 0, `CLS 请求失败（${detail}）；停止并核对现状`);
     return json!.data;
   }
 

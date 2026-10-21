@@ -54,7 +54,8 @@ export class Bridge {
       if (kind === 'occupied') throw new OccupiedRefusal('服务端明确拒绝写入非空目标');
       if (kind === 'unknown_result' || (write && kind === 'network')) throw new Blocked('接口写入结果未知，必须回读，不可重试');
       if (SHOWN_KINDS.has(kind)) throw new Blocked(`飞书不可用（${kind}）：${message}`);
-      throw new Blocked('飞书接口调用失败；写操作须回读核对，检查授权和权限');
+      const code = (reply.error as { code?: number }).code;
+      throw new Blocked(`飞书接口调用失败（${kind}${code !== undefined ? `，错误码 ${code}` : ''}）；写操作须回读核对，检查授权和权限`);
     }
     Bridge.complete(reply.data);
     return reply.data;

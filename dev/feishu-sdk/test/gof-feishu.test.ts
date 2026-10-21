@@ -432,33 +432,17 @@ test('a requirement doc is read as its text with its title; other kinds of docum
   await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/docx/doxREQ', { sheet: 't1' }), /只用于表格/);
 });
 
-test('the context gives the dropdown options from the API rules, the latest runs of rows of a supplier, and the earlier batches', async () => {
+test('the context gives the target sheet, the next number and the dropdown options, and no earlier rows or batches', async () => {
   const fake = new FakeProduction();
   const probeServer = new FakeSheets();
   probeServer.production = fake.handle;
   const bridge = new Bridge(async (name, payload) => probeServer.handle(name, payload));
   const base = new Snapshot(path.join(fixtures, 'base.xlsx'));
-  const root = tmp();
-  prepare(makePlan(base, readJson(path.join(fixtures, 'requests', 'basic.json'))), base, { outputRoot: root });
-  fs.mkdirSync(path.join(root, 'not-a-batch'));
-  const result = await context(bridge, base, { supplier: '供应商甲', batchRoot: root });
+  const result = await context(bridge, base);
   assert.deepEqual([result.worksheet, result.sheet_id, result.next_number], ['GOFCN创意进度 26年3月', 's3', 1011]);
   assert.deepEqual(result.options, { primary_tag: ['玩法', '画面', '系统'], secondary_tag: ['卖点', '体验'], creative_form: ['视频', '图文'],
     supplier: ['供应商甲', '供应商乙'], creator: ['张三', '李四'] });
-  assert.deepEqual(result.recent.map((r: any) => [r.sheet, r.rows, r.count, r.numbers, r.keywords]), [
-    ['GOFCN创意进度 26年3月', '4-4', 1, 'GOFCN1006-GOFCN1006', ['老爆点3']],
-    ['GOFCN创意进度 26年3月', '2-2', 1, 'GOFCN1004-GOFCN1004', ['老爆点1']],
-    ['GOFCN创意进度 26年2月', '2-3', 2, 'GOFCN1001-GOFCN1002', ['爆点B', '爆点A']]]);
-  assert.deepEqual(result.recent[0], { sheet: 'GOFCN创意进度 26年3月', rows: '4-4', count: 1, numbers: 'GOFCN1006-GOFCN1006', supplier: '供应商甲',
-    primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频', creator: '张三', keywords: ['老爆点3'] });
-  assert.equal(result.past_requests.length, 1);
-  const past = result.past_requests[0];
-  assert.deepEqual([past.numbers, past.append_verified, past.groups.length], ['GOFCN1011-GOFCN1013', false, 2]);
-  assert.deepEqual(past.groups[1], { supplier: '供应商甲', reviewer: '李四', script_url: 'https://centurygames.feishu.cn/wiki/XYZ789',
-    cls: { currency: 'USD', direction: '方向一', quotation: '100.50', task_type: 'creative_a' }, requirement_name: 'GOFCN1013', quantity: 1,
-    items: [{ quantity: 1, primary_tag: '画面', secondary_tag: '体验', creative_form: '图文', keyword: '另一个' }], steps: [] });
-  assert.deepEqual((await context(bridge, base, { supplier: '没有这家', batchRoot: root })).past_requests, []);
-  assert.equal((await context(bridge, base, { batchRoot: root })).recent.length, 7);
+  assert.equal('recent' in result || 'past_requests' in result, false);
 });
 
 test('dropdown-add finds the column of each of the five fields by its header and adds to the whole column', async () => {

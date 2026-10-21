@@ -131,7 +131,7 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
     case 'context': {
       const { values } = parse(args, { snapshot: { type: 'string' }, worksheet: { type: 'string' }, supplier: { type: 'string' } });
       const snap = new Snapshot(mustHave(values.snapshot, 'snapshot'));
-      try { return await context(bridge, snap, { worksheet: str(values.worksheet), supplier: str(values.supplier) }); } finally { snap.close(); }
+      try { return await context(bridge, snap, { worksheet: str(values.worksheet) }); } finally { snap.close(); }
     }
     case 'dropdown-add': {
       const { values } = parse(args, { field: { type: 'string' }, option: { type: 'string' }, sheet: { type: 'string' }, color: { type: 'string' } });
