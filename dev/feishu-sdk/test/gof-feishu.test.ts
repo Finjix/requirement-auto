@@ -381,7 +381,9 @@ class FakeDocs {
     const p: string = payload.path;
     if (p.endsWith('/spaces/get_node')) {
       const nodes: Record<string, unknown> = {
-        wikiSHEET: { obj_type: 'sheet', obj_token: 'shtREQ', title: '丁杰AI' },
+        wikiSHEET: { obj_type: 'sheet', obj_token: 'shtREQ', title: '丁杰AI', parent_node_token: 'wikiDIR' },
+        wikiDIR: { obj_type: 'docx', obj_token: 'doxDIR', title: '张天伟', parent_node_token: 'wikiROOT' },
+        wikiROOT: { obj_type: 'docx', obj_token: 'doxROOT', title: '点点互动', parent_node_token: '' },
         wikiDOC: { obj_type: 'docx', obj_token: 'doxREQ', title: '丁杰代言人需求表' },
         wikiMIND: { obj_type: 'mindnote', obj_token: 'mndREQ', title: '脑图' },
       };
@@ -403,6 +405,7 @@ test('a requirement sheet is read as the linked tab (or the newest), its header 
   const { bridge } = bridgeWith(docs.handle);
   const linked = await readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET?sheet=t1');
   assert.deepEqual([linked.kind, linked.title, linked.sheet], ['sheet', '丁杰AI', { sheet_id: 't1', title: '2026.10.10', chosen_by: 'link' }]);
+  assert.deepEqual(linked.path, ['点点互动', '张天伟']);
   assert.deepEqual(linked.tabs, ['2026.10.10', '2026.10.16']);
   assert.deepEqual(linked.columns, ['A', 'B', 'C', 'D']);
   assert.deepEqual(linked.header, ['序号', '创意形式\n（制作形式）', '脚本', '']);
@@ -415,7 +418,7 @@ test('a requirement sheet is read as the linked tab (or the newest), its header 
   const asked = await readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET', { sheet: '2026.10.10', full: true });
   assert.deepEqual([asked.sheet.chosen_by, asked.rows[0].cells[2].length, asked.clipped_cells], ['asked', 400, undefined]);
   const direct = await readBrief(bridge, 'https://centurygames.feishu.cn/sheets/shtREQ?sheet=t2');
-  assert.deepEqual([direct.title, direct.sheet.chosen_by], ['杨燃对接文档', 'link']);
+  assert.deepEqual([direct.title, direct.sheet.chosen_by, direct.path], ['杨燃对接文档', 'link', undefined]);
   await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET?sheet=tx'), /链接指向的工作表不存在或已隐藏/);
   await failsWith(readBrief(bridge, 'https://centurygames.feishu.cn/wiki/wikiSHEET', { sheet: '没有' }), /没有工作表“没有”/);
 });

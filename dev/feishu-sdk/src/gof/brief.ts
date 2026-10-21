@@ -13,6 +13,7 @@ const MAX_ROWS = 300;
 const MAX_COLS = 60;
 const CELL_CHARS = 300;
 const DOC_CHARS = 30_000;
+const MAX_DEPTH = 8;
 
 /** What a cell shows, as text: rich-text segments joined, an attachment by its file name, an image as [图片]. */
 export function cellShown(value: unknown): string {
@@ -78,6 +79,28 @@ async function readSheet(bridge: Bridge, token: string, title: string, linked: s
   };
 }
 
+/**
+ * The folder titles above a wiki node, outermost first (the breadcrumb Feishu shows: a person's or a supplier's folder often says
+ * who the document belongs to). Best effort: a parent the user cannot read ends the path, it never fails the read.
+ */
+async function wikiAncestors(bridge: Bridge, parent: string): Promise<string[]> {
+  const titles: string[] = [];
+  const seen = new Set<string>();
+  for (let next = parent; next && !seen.has(next) && seen.size < MAX_DEPTH;) {
+    seen.add(next);
+    let node: Obj | undefined;
+    try {
+      node = (await bridge.apiRead('/open-apis/wiki/v2/spaces/get_node', { token: next, obj_type: 'wiki' })).node;
+    } catch {
+      break;
+    }
+    if (!node) break;
+    if (typeof node.title === 'string' && node.title.trim()) titles.unshift(node.title.trim());
+    next = String(node.parent_node_token ?? '');
+  }
+  return titles;
+}
+
 /** The requirement document behind a link: a sheet tab as header and rows, a docx as its text. */
 export async function readBrief(bridge: Bridge, url: string, options: { sheet?: string; full?: boolean } = {}): Promise<Obj> {
   const docPath = feishuDocPath(url, 'docx|wiki|sheets', true);
@@ -87,14 +110,20 @@ export async function readBrief(bridge: Bridge, url: string, options: { sheet?: 
   let type = kind === 'sheets' ? 'sheet' : kind;
   let objToken = token;
   let title = '';
+  let wikiParent = '';
   if (kind === 'wiki') {
     const node = (await bridge.apiRead('/open-apis/wiki/v2/spaces/get_node', { token, obj_type: 'wiki' })).node;
     need(node && typeof node.obj_token === 'string', '读不到这个知识库节点');
     type = node.obj_type;
     objToken = node.obj_token;
     title = String(node.title ?? '');
+    wikiParent = String(node.parent_node_token ?? '');
   }
   const result: Obj = { url };
+  if (wikiParent) {
+    const path = await wikiAncestors(bridge, wikiParent);
+    if (path.length) result.path = path;
+  }
   if (type === 'sheet') {
     if (!title) title = String((await bridge.apiRead(`/open-apis/sheets/v3/spreadsheets/${objToken}`))?.spreadsheet?.title ?? '');
     return { ...await readSheet(bridge, objToken, title, linked, options.sheet, options.full === true), ...result };

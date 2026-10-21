@@ -94,7 +94,7 @@ Work out each field; the first source that answers it wins:
   3. Still open (no script, or two options fit equally): ask.
   Rows that come out different (设定3.0 vs 设定2.0) are separate `items`, in the doc's row order.
 - **提炼词:** `关键词`, unless the message or doc gives one for the name ("命名加入关键字【ZJJC】" → ZJJC).
-- **创意者脚本审核人:** named in the message or doc; else ask.
+- **创意者脚本审核人:** named in the message or doc; else from the document's name and folder path (`gof feishu document` returns `title` and, for wiki links, `path`, the folders above the document, outermost first): a person's name in the `path` (张天伟) or its initials in the title (谢振文对接文档-TW → TW = 张天伟) points to the reviewer. Take it only when it matches exactly one existing `reviewer` option (or one CLS person in `choices`); several matches or none: ask. The plan states where it came from ("审核人：张天伟（来自文档所在目录）") so the user can correct it.
 - **CLS 创意方向 / 任务类型:** stated; else the GOFCN direction and creative task type from `choices` that fit the work best (混剪 → 2D剪辑 / 视频; AI 视频 → AI视频 / AI生成).
 - **CLS 供应商 / 创意人:** the same supplier and reviewer; the program finds their CLS names (exact, a short name the CLS name carries, or the one CLS name containing it: 丁杰 → 北京柒曦文化传媒有限公司（丁杰）, 冯彦蓉 → 冯彦蓉-实习生). If the preview cannot match, set `cls.supplier` / `cls.creator` to the `choices` name that is clearly the same; ask only if none is.
 - **脚本内容:** the user's link, exactly as given (CSV only).
@@ -112,6 +112,8 @@ Rules:
 - Optional CLS fields: fill from what the user gave, otherwise blank, decided in the plan, never during execution. Unspecified quote/currency use the native defaults 0 / cny; label them "system default" in the plan, not as user-confirmed amounts.
 - CSV tag is fixed `玩法卖点（单选，必选）/展示向/展示向`, independent of the progress tags.
 - Sheet choice: user-named > latest year-month GOFCN sheet with the right columns. The bridge ignores the browser's current tab and never takes the run month as the target month. Ties or header mismatch: ask. A GOFCN-named sheet with an unusable header that is as new as the target (or has no readable month) stops planning, since it may be the real target or hold higher numbers: relay the reason and ask; never skip it. The plan states the sheet name and its real sheet ID.
+
+**Ask each question exactly once, in one message, as the last thing of the turn, then end the turn.** Collect all open points first and ask them together.
 
 **Questions to the user contain only the missing information:** short, direct, with only the context needed to identify the batch. No restated requirements, inferences, fixed fields, execution method, rules, technical detail or plan preview, in the question, its description or its options. Do all inference internally. Show everything once, in the full plan.
 
