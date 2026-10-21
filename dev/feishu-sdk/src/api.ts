@@ -88,7 +88,7 @@ export class FeishuApi {
     if (code !== undefined && SCOPE_MISSING.has(code)) throw new BridgeError('scope_missing', `飞书登录缺少调用所需的权限；请在应用后台开通并重新授权（${message}）`, code);
     if (call.write && OCCUPIED.test(message)) throw new BridgeError('occupied', '服务端拒绝写入非空目标', code);
     if (call.write && status >= 500) throw new BridgeError('unknown_result', `飞书写入返回 ${status}，写入可能已生效；必须回读核对，不可重发`, code);
-    throw new BridgeError('api', `飞书接口返回错误：${message}`, code);
+    throw new BridgeError('api', `飞书接口返回错误${status !== 200 && !message.startsWith('HTTP ') ? `（HTTP ${status}）` : ''}：${message}`, code);
   }
 
   /**

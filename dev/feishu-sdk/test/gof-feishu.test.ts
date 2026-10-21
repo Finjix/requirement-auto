@@ -36,19 +36,30 @@ async function failsWith(promise: Promise<unknown>, pattern: RegExp, type: new (
   throw new assert.AssertionError({ message: `expected a failure matching ${pattern}` });
 }
 
-test('bridge failures map to the refusals the workflow expects, and untrusted server text is never echoed', async () => {
+test('bridge failures map to the refusals the workflow expects, and keep the reason the bridge gave', async () => {
   const cases: [BridgeReply, RegExp, any][] = [
     [failure('occupied'), /非空/, OccupiedRefusal],
     [failure('unknown_result'), /结果未知/, Blocked],
     [failure('auth_required', '飞书登录已过期，请重新授权'), /auth_required.*重新授权/, Blocked],
     [failure('scope_missing', '缺少权限：x'), /缺少权限/, Blocked],
-    [failure('api', 'SECRET-SERVER-TEXT code=1'), /飞书接口调用失败/, Blocked],
+    [failure('api', '导出任务仍未完成（ticket=T123）；稍后只读查询该任务'), /飞书接口调用失败（api）：导出任务仍未完成（ticket=T123）/, Blocked],
   ];
   for (const [result, pattern, type] of cases) {
     const { bridge } = bridgeWith(() => result);
-    const error = await failsWith(bridge.call('api-get', { path: '/open-apis/x' }), pattern, type);
-    assert.ok(!error.message.includes('SECRET-SERVER-TEXT'));
+    await failsWith(bridge.call('api-get', { path: '/open-apis/x' }), pattern, type);
   }
+  const { bridge } = bridgeWith(() => ({ ok: false, error: { kind: 'api', code: 1310213, message: '飞书接口返回错误（HTTP 403）：forbidden' } }));
+  await failsWith(bridge.call('api-get', {}), /错误码 1310213）：飞书接口返回错误（HTTP 403）：forbidden$/);
+});
+
+test('an append killed before anything was sent leaves no folder that stops the next one', async () => {
+  const { fake, bridge, dir, receipt } = await approvedBatch();
+  const leftover = path.join(dir, `api-attempt-${String(status(dir).events.length + 1).padStart(6, '0')}`);
+  fs.mkdirSync(leftover);
+  fs.writeFileSync(path.join(leftover, 'preflight.xlsx'), 'left over');
+  const result = await execute(bridge, dir, receipt);
+  assert.equal(result.status, 'append_verified');
+  assert.equal(fake.productionWrites, 1);
 });
 
 test('a write that got no answer is an unknown result, a read that got none is a plain failure', async () => {

@@ -14,7 +14,7 @@
         "category": "Productivity",
         "capabilities": ["Read", "Write"],
         "defaultPrompt": [
-          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with script import, one copyable group message for all of them. Don't ask about scope. Work out the rows, tags, supplier, reviewer and CLS fields from my requirement link (or several links at once, one ticket each) and the progress sheet's history, ask only what cannot be worked out, show one complete plan, and once I approve it run everything without further questions unless blocked."
+          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with the scripts imported, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end."
         ]
       }
     }

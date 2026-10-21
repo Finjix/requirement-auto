@@ -129,6 +129,18 @@ test('the adapter checks an operation built here (same canonical form and digest
   await assert.rejects(() => adapter.createDraft(op), /CLS 读取失败/);
 });
 
+test('a write answered 2xx without a business code (a gateway page) is an unknown result, not a refusal', async () => {
+  const { fakeCls } = await import('./helpers/fake-cls.ts');
+  const cls = await fakeCls(catalog);
+  try {
+    const op = operation(groupReady(), '01', 'save_draft', catalog, observations);
+    const adapter = createClsAdapter({ origin: cls.origin, authorization: 'Bearer good',
+      fetch: async (url, init) => init?.method === 'POST' ? new Response('<html>ok</html>', { status: 200 }) : fetch(url, init) });
+    await assert.rejects(() => adapter.createDraft(op), (error: any) =>
+      error.kind === 'unknown' && error.operationId === op.operation_id && /写入结果未知（HTTP 200，响应没有业务码）/.test(error.message));
+  } finally { cls.close(); }
+});
+
 test('the cls command line builds and saves an operation file', async () => {
   const dir = groupReady();
   const obs = path.join(dir, 'obs.json');

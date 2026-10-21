@@ -47,7 +47,7 @@ export class Bridge {
       throw new Blocked(write ? '接口写入结果未知，必须回读，不可重试' : '飞书桥调用失败');
     }
     this.calls.push({ command: [name], path: options.path ?? null, write, elapsed_ms: Date.now() - started, ok: reply.ok });
-    // Never echo stderr, tokens, full auth status, or an untrusted error body.
+    // The bridge has already redacted credentials from the message (toPayload), so its reason can be passed on.
     need(reply && typeof reply === 'object' && typeof reply.ok === 'boolean', '飞书桥返回结构不匹配');
     if (!reply.ok) {
       const { kind, message } = reply.error;
@@ -55,7 +55,8 @@ export class Bridge {
       if (kind === 'unknown_result' || (write && kind === 'network')) throw new Blocked('接口写入结果未知，必须回读，不可重试');
       if (SHOWN_KINDS.has(kind)) throw new Blocked(`飞书不可用（${kind}）：${message}`);
       const code = (reply.error as { code?: number }).code;
-      throw new Blocked(`飞书接口调用失败（${kind}${code !== undefined ? `，错误码 ${code}` : ''}）；写操作须回读核对，检查授权和权限`);
+      const reason = String(message ?? '').trim().slice(0, 300);
+      throw new Blocked(`飞书接口调用失败（${kind}${code !== undefined ? `，错误码 ${code}` : ''}）${reason ? `：${reason}` : ''}${write ? '；写操作须回读核对' : ''}`);
     }
     Bridge.complete(reply.data);
     return reply.data;
@@ -260,6 +261,8 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
   const token = await target(bridge);
   need(token === context.spreadsheet_token && approved.production_token === token, '目标与安全验证记录不匹配');
   const attempt = path.join(batchPath, `api-attempt-${String(events(batchPath).length + 1).padStart(6, '0')}`);
+  // No append_started yet (checked above), so a folder of that name is what a killed, unsent attempt left behind.
+  fs.rmSync(attempt, { recursive: true, force: true });
   fs.mkdirSync(attempt);
   let fresh: Snapshot | undefined;
   let started = false;

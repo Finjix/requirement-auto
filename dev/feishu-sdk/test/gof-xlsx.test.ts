@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { CellRange, columnIndex, columnLetter, translateFormula } from '../src/gof/a1.ts';
-import { Snapshot, validationProjection } from '../src/gof/snapshot.ts';
+import { Snapshot, sheetPeriod, validationProjection } from '../src/gof/snapshot.ts';
 import { readWorkbook } from '../src/gof/xlsx.ts';
 import { parseXml } from '../src/gof/xml.ts';
 import { ZipReader } from '../src/gof/zip.ts';
@@ -168,4 +168,13 @@ test('A1 arithmetic and formula filling', () => {
     '=CONCATENATE("GOFCN",A8,"_A1_",$D8,"_",E$5,"_",$F$5,LOG10(B8),"x""A9",\'Sheet 1\'!C8)');
   assert.equal(translateFormula('=A1+B2', 'C3', 'D5'), '=B3+C4');
   assert.throws(() => translateFormula('=A1', 'B2', 'A1'), /越界/);
+});
+
+test('a sheet name gives the month it ends in, the year rolling over when the span crosses January', () => {
+  assert.deepEqual(sheetPeriod('26年1月-GOFCN'), [2026, 1]);
+  assert.deepEqual(sheetPeriod('GOFCN 2025年11月'), [2025, 11]);
+  assert.deepEqual(sheetPeriod('GOFCN 2025年10月-11月'), [2025, 11]);
+  assert.deepEqual(sheetPeriod('GOFCN 2025年12月-1月'), [2026, 1]);
+  assert.deepEqual(sheetPeriod('GOFCN 25年12月至2月'), [2026, 2]);
+  assert.equal(sheetPeriod('GOFCN 2025年13月'), undefined);
 });

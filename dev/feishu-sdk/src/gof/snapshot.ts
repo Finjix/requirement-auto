@@ -163,6 +163,7 @@ export function sheetPeriod(name: string): [number, number] | undefined {
   let year = Number(m[1]);
   const month = Number(m[3] ?? m[2]);
   if (year < 100) year += 2000;
+  if (m[3] !== undefined && month < Number(m[2])) year += 1; // "2025年12月-1月" ends in January 2026
   return month >= 1 && month <= 12 ? [year, month] : undefined;
 }
 

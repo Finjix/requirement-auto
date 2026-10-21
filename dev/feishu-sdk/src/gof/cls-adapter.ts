@@ -88,6 +88,10 @@ export function createClsAdapter(config: ClsAdapterConfig) {
     if (method === 'POST' && (response.status >= 500 || response.status === 408 || response.status === 429)) {
       throw new ClsError(`写入结果未知（服务端或网关错误，${detail}）；先回读，不重试`, 'unknown');
     }
+    // A 2xx answer to a write without a business code (an HTML page from a gateway, say) is no refusal: the write may have landed.
+    if (method === 'POST' && response.status >= 200 && response.status < 300 && typeof json?.code !== 'number') {
+      throw new ClsError(`写入结果未知（${detail}，响应没有业务码）；先回读，不重试`, 'unknown');
+    }
     assert(response.status >= 200 && response.status < 300 && json?.code === 0, `CLS 请求失败（${detail}）；停止并核对现状`);
     return json!.data;
   }

@@ -135,7 +135,7 @@ function readActivePort(profileDir: string): { port: number; path: string } | un
 
 function killTree(pid: number): Promise<void> {
   return new Promise(resolve => {
-    if (process.platform === 'win32') execFile(path.join(process.env.SystemRoot ?? 'C:\Windows', 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
+    if (process.platform === 'win32') execFile(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve());
     else { try { process.kill(pid, 'SIGKILL'); } catch { /* gone already */ } resolve(); }
   });
 }
