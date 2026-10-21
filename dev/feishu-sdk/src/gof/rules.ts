@@ -116,9 +116,9 @@ export function buildWrites(plan: Plan, context: Obj): Obj[] {
     need(values.every(v => v !== null), '写入列有空洞，不允许混合清空操作');
     const cells = values.map(value => {
       const cell: Obj = typeof value === 'string' && value.startsWith('=') ? { formula: value } : { value };
-      cell.cell_styles = { horizontal_alignment: 'center' }; // the sheet's rows are centered; a bare write comes out left-aligned
       const d = validation.get(col);
       if (d) {
+        cell.cell_styles = { horizontal_alignment: 'center' }; // dropdown columns are centered in the sheet; the rest stay left-aligned
         cell.data_validation = { type: 'list', items: d.options, support_multiple_values: d.mode === 'multiple',
           enable_highlight: d.highlight, highlight_colors: d.colors };
         if (d.mode === 'multiple') { delete cell.value; cell.multiple_values = [{ value }]; }
