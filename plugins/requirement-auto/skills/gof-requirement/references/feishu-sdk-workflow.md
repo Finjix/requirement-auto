@@ -13,14 +13,14 @@ gof feishu doctor      # Node, bridge, current user's login and required scopes
 
 ## Login (device authorization)
 
-MCP tools of the `feishu-auth` server: `feishu_auth_status` (local record only) -> `feishu_auth_login` -> `feishu_auth_poll` after the user confirms; `feishu_auth_logout` to log out or switch accounts. The QR path (`gof feishu authorize --qr`) is in SKILL.md section 0. Script equivalents:
-
 ```text
-gof feishu login start [--probe-scope]
-gof feishu login poll [--wait 40]
-gof feishu login status
-gof feishu login logout
+gof feishu login start [--probe-scope]   # link and code; the same request while an unexpired one exists
+gof feishu login poll [--wait 40]        # after the user confirms: authorized / pending / denied / expired
+gof feishu login status                  # local record only, no network
+gof feishu login logout                  # log out or switch accounts
 ```
+
+No output contains a token. The QR path (`gof feishu authorize --qr`) is in SKILL.md section 0.
 
 If the host declares the user's Open ID, another authorized account is rejected.
 

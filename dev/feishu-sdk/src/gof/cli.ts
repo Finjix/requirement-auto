@@ -228,7 +228,7 @@ async function loginCheck(bridge: Bridge, via: online.Online): Promise<Result> {
     return {
       status: 'login_required', feishu,
       cls: { status: 'not_checked', reason: 'Feishu login comes first; CLS is checked after it' },
-      todo: ['Feishu: call feishu_auth_login (keep its link to yourself), then run gof.mjs feishu authorize --qr feishu-login.png and send the QR image to the user only, to scan with the Feishu phone app. That one scan also covers CLS. Ask for nothing else until Feishu is ok'],
+      todo: ['Feishu: run gof.mjs feishu login start (keep its link to yourself), then gof.mjs feishu authorize --qr feishu-login.png and send the QR image to the user only, to scan with the Feishu phone app. That one scan also covers CLS. Ask for nothing else until Feishu is ok'],
     };
   }
   const cls = await online.check(via);

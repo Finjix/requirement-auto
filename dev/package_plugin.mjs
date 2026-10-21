@@ -13,15 +13,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PLUGIN = path.join(ROOT, 'plugins', 'requirement-auto');
 const SKILL = path.join(PLUGIN, 'skills', 'gof-requirement');
 const MARKETPLACE = path.join(ROOT, '.agents', 'plugins', 'marketplace.json');
-const MCP_SCHEMA = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
-// What a stdio entry of the portable mcp.json may contain (Agent Plugins schema); anything else makes Codex drop the server.
-const STDIO_KEYS = new Set(['type', 'command', 'args', 'env', 'cwd']);
 const FORBIDDEN_PARTS = new Set(['__pycache__', 'node_modules', '.state', '.git', '.codex', 'browser-profile']);
 const FORBIDDEN_NAMES = new Set(['auth.json', 'login.json', 'app.json', 'refresh.lock', '.env', 'account.json', 'login-qr.json']);
 const FORBIDDEN_EXTENSIONS = ['.py', '.pyc', '.pyd', '.dll', '.exe', '.png'];
-const ENTRY_POINTS = ['bridge', 'mcp', 'gof'].map(name => `server/dist/${name}.mjs`);
+const ENTRY_POINTS = ['bridge', 'gof'].map(name => `server/dist/${name}.mjs`);
 const REQUIRED_FILES = [
-  'plugin.json', 'mcp.json', ...ENTRY_POINTS,
+  'plugin.json', ...ENTRY_POINTS,
   'skills/gof-requirement/SKILL.md', 'skills/gof-requirement/agents/openai.yaml',
   'skills/gof-requirement/assets/csv-template.csv', 'skills/gof-requirement/references/feishu-sdk-workflow.md',
 ];
@@ -51,17 +48,6 @@ export function problems() {
     if (entries.length !== 1 || entries[0].source?.path !== './plugins/requirement-auto') found.push('marketplace.json does not point at plugins/requirement-auto');
   } catch (error) {
     found.push(`plugin.json / marketplace.json unreadable: ${error.message}`);
-  }
-  try {
-    const mcp = readJson(path.join(PLUGIN, 'mcp.json'));
-    const keys = Object.keys(mcp).sort();
-    if (mcp.$schema !== MCP_SCHEMA || keys.join() !== ['$schema', 'mcpServers'].join()) found.push('mcp.json: needs exactly $schema and mcpServers');
-    for (const [name, server] of Object.entries(mcp.mcpServers ?? {})) {
-      const extra = Object.keys(server).filter(k => !STDIO_KEYS.has(k));
-      if ((server.type === 'stdio' || server.type === undefined) && extra.length) found.push(`mcp.json: ${name} has keys Codex does not accept: ${extra.sort()}`);
-    }
-  } catch (error) {
-    found.push(`mcp.json unreadable: ${error.message}`);
   }
   const skill = path.join(SKILL, 'SKILL.md');
   const text = fs.existsSync(skill) ? fs.readFileSync(skill, 'utf8').replace(/\r\n/g, '\n') : '';

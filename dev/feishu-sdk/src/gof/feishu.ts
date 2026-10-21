@@ -104,7 +104,7 @@ export class Bridge {
     need(info.bridge === BRIDGE_VERSION, '飞书桥版本与技能不匹配');
     need(info.app_configured === true, '未配置飞书应用（FEISHU_APP_ID / FEISHU_APP_SECRET），由宿主或管理员配置');
     const auth = await this.call('auth-status');
-    need(auth.logged_in === true, '飞书尚未授权：用 feishu_auth_login 工具，或 gof.mjs feishu login start 取得授权链接交给用户确认');
+    need(auth.logged_in === true, '飞书尚未授权：用 gof.mjs feishu login start 取得授权链接交给用户确认');
     await this.checkScopes(SCOPES);
     return { version: BRIDGE_VERSION, node: info.node, logged_in: true, identity: 'user', user_name: auth.name, open_id: auth.open_id,
       storage: auth.storage, required_scopes: SCOPES };
@@ -376,7 +376,7 @@ export async function reconcile(bridge: Bridge, dir: string): Promise<Obj> {
   }
 }
 
-/** The device authorization the MCP tools run, for when those tools are not available. Never prints a token. */
+/** `gof feishu login start|poll|status|logout`: the device authorization. Never prints a token. */
 export async function login(bridge: Bridge, action: string, options: { wait?: number; probeScope?: boolean } = {}): Promise<any> {
   if (action === 'start') return bridge.call('auth-login', { extra_scopes: options.probeScope ? ['sheets:spreadsheet:create'] : [] });
   if (action === 'poll') {

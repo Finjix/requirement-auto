@@ -48,7 +48,7 @@ test('feishu authorize --qr: the sign-in QR is written for the user; an existing
   const silent = web({ state: 'approved' });
   const done = await run(['feishu', 'authorize', '--qr', path.join(tempDir('ra-out-'), 'q.png')], pending(), silent);
   assert.equal(done.result.status, 'approved');
-  assert.match(done.result.message, /feishu_auth_poll/);
+  assert.match(done.result.message, /feishu login poll/);
 });
 
 test('feishu authorize without --qr finishes after the scan, and says so when nobody has scanned', async () => {

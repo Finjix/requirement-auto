@@ -126,7 +126,7 @@ test('login check: both good is ok; each missing login is named with what to do 
   const feishuGone = await main(['login', 'check'], bridgeSaying(fail('auth_required', '飞书登录已失效')), clsNotLooked);
   assert.deepEqual([feishuGone.code, feishuGone.result.status, feishuGone.result.feishu.status], [2, 'login_required', 'login_required']);
   assert.equal(feishuGone.result.todo.length, 1);
-  assert.match(feishuGone.result.todo[0], /feishu_auth_login/);
+  assert.match(feishuGone.result.todo[0], /feishu login start/);
   assert.equal(feishuGone.result.cls.status, 'not_checked', 'CLS waits for Feishu');
   assert.equal(clsNotLooked.looked, 0, 'no browser is started while Feishu is not logged in');
 
@@ -137,7 +137,7 @@ test('login check: both good is ok; each missing login is named with what to do 
   const neitherCls = clsSaying('login_required');
   const neither = await main(['login', 'check'], bridgeSaying(fail('auth_required')), neitherCls);
   assert.equal(neither.result.todo.length, 1, 'one login at a time: Feishu first');
-  assert.match(neither.result.todo[0], /feishu_auth_login/);
+  assert.match(neither.result.todo[0], /feishu login start/);
   assert.equal(neitherCls.looked, 0);
 
   const missingScopes = await main(['login', 'check'], bridgeSaying(ok({ logged_in: true, name: '李小明', missing_scopes: ['wiki:wiki:readonly'] })), clsSaying('ok'));

@@ -1,4 +1,4 @@
-/** Failure categories the callers (MCP tools, the gof command line) branch on; the message is for people. */
+/** Failure categories the callers (the bridge and the gof command line) branch on; the message is for people. */
 export type ErrorKind =
   | 'config'            // app credentials or data directory missing / invalid
   | 'auth_required'     // not logged in, or the login expired

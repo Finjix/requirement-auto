@@ -1,4 +1,4 @@
-// Bundles the bridge, the MCP server and the skill's command line into the plugin: plugins/requirement-auto/server/dist/{bridge,mcp,gof}.mjs (+ one shared chunk).
+// Bundles the bridge and the skill's command line into the plugin: plugins/requirement-auto/server/dist/{bridge,gof}.mjs (+ one shared chunk).
 // The plugin is installed by copying its folder, so everything it needs at run time has to be in these files.
 import { build } from 'esbuild';
 import { rm } from 'node:fs/promises';
@@ -20,7 +20,7 @@ const shims = [
 
 await rm(outdir, { recursive: true, force: true });
 await build({
-  entryPoints: { bridge: path.join(here, 'src/cli.ts'), mcp: path.join(here, 'src/server.ts'), gof: path.join(here, 'src/gof.ts') },
+  entryPoints: { bridge: path.join(here, 'src/cli.ts'), gof: path.join(here, 'src/gof.ts') },
   outdir, outExtension: { '.js': '.mjs' }, entryNames: '[name]', chunkNames: 'shared-[hash]',
   bundle: true, splitting: true, format: 'esm', platform: 'node', target: 'node24',
   legalComments: 'none', sourcemap: false, minify: true, logLevel: 'info',

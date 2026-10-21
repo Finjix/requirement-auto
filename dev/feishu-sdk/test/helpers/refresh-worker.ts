@@ -1,4 +1,4 @@
-// Child process of the concurrency test: asks for an access token the way a separate bridge or MCP process would.
+// Child process of the concurrency test: asks for an access token the way a separate bridge or gof process would.
 import { FeishuAuth } from '../../src/auth.ts';
 import { resolveDataPaths } from '../../src/paths.ts';
 

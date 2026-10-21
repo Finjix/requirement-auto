@@ -9,7 +9,7 @@ import { Blocked, need } from './util.ts';
 /*
  * The Feishu login by device authorization, completed in the hidden browser instead of in the user's own browser.
  *
- * The device flow (feishu_auth_login / feishu_auth_poll) needs somebody to open a link on accounts.feishu.cn, be logged in to Feishu
+ * The device flow (gof feishu login start / login poll) needs somebody to open a link on accounts.feishu.cn, be logged in to Feishu
  * there, and press 【授权】. The user's browser is not the only place that can do that: the hidden browser that already holds the CLS
  * login can too. If it is not logged in to Feishu, the link lands on Feishu's QR sign-in page, which is shown to the user as a picture
  * to scan with their phone, exactly as for CLS. That one scan gives the browser a Feishu web session, which also covers the CLS
@@ -103,7 +103,7 @@ export async function driveDeviceAuthorization(options: DeviceOptions): Promise<
         if (attempt.state === 'clicked') {
           // Feishu's page may stay on the same address after the answer, so there is nothing reliable to wait for: give it a moment, then
           // leave nothing on a Feishu address behind (the next command that uses this profile starts from a blank page, and would
-          // otherwise find this page restored and take it for a consent request of its own). feishu_auth_poll is what confirms the login.
+          // otherwise find this page restored and take it for a consent request of its own). `login poll` is what confirms the login.
           await pause(options.afterClickMs ?? 3_000);
           await cdp.send('Page.navigate', { url: 'about:blank' }, sessionId).catch(() => undefined);
           await pause(300);
@@ -140,13 +140,13 @@ const qrRecordFile = (env: NodeJS.ProcessEnv = process.env): string => path.join
 /**
  * `gof feishu authorize [--qr file.png]`. With --qr: open the pending authorization's link in the hidden browser; if that browser is
  * not logged in to Feishu the sign-in QR goes to the file, otherwise 【授权】 is pressed at once. Without --qr: after the user has scanned,
- * press 【授权】. Either way `feishu_auth_poll` then collects the login.
+ * press 【授权】. Either way `gof feishu login poll` then collects the login.
  */
 export async function authorizeFeishu(bridge: Bridge, web: DeviceWeb, qrFile: string | undefined, env: NodeJS.ProcessEnv = process.env): Promise<Result> {
   const status = await bridge.call('auth-status');
   const pending = status?.pending_login as { user_code: string; verification_uri_complete: string; expires_at: number } | undefined;
   if (!pending || pending.expires_at <= Date.now()) {
-    return { status: 'no_pending', message: status?.logged_in ? '飞书已经登录，没有待完成的授权' : '没有待完成的飞书授权（或已过期）：先调用 feishu_auth_login' };
+    return { status: 'no_pending', message: status?.logged_in ? '飞书已经登录，没有待完成的授权' : '没有待完成的飞书授权（或已过期）：先运行 gof.mjs feishu login start' };
   }
   const url = checkVerificationUrl(pending.verification_uri_complete, pending.user_code);
   const recordFile = qrRecordFile(env);
@@ -157,7 +157,7 @@ export async function authorizeFeishu(bridge: Bridge, web: DeviceWeb, qrFile: st
   switch (outcome.state) {
     case 'approved':
       clearQr(recordFile);
-      return { status: 'approved', message: '已在浏览器里点了【授权】；现在调用 feishu_auth_poll 取得登录' };
+      return { status: 'approved', message: '已在浏览器里点了【授权】；现在运行 gof.mjs feishu login poll 取得登录' };
     case 'qr': {
       const file = writeQr(recordFile, path.resolve(qrFile!), outcome.png);
       return {
@@ -169,6 +169,6 @@ export async function authorizeFeishu(bridge: Bridge, web: DeviceWeb, qrFile: st
       return { status: 'login_required', message: '还停在扫码页：用户还没扫码或二维码已失效。让用户扫码，或重新运行 gof.mjs feishu authorize --qr <png> 生成新的二维码' };
     case 'refused': throw new Blocked(outcome.reason);
     case 'stuck':
-      return { status: 'stuck', where: outcome.where, message: '页面既不是扫码页也不是授权页，或【授权】点了没反应；调用 feishu_auth_poll 看是否已授权，没有则重新运行 --qr' };
+      return { status: 'stuck', where: outcome.where, message: '页面既不是扫码页也不是授权页，或【授权】点了没反应；运行 gof.mjs feishu login poll 看是否已授权，没有则重新运行 --qr' };
   }
 }
