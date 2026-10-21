@@ -429,7 +429,7 @@ export function message(dir: string): Record<string, any> {
 
 /** The group message from the plan's groups and the batch's events; the part of `message` that needs no batch on disk. */
 export function composeMessage(groups: Plan[], records: Pick<BatchEvent, 'group' | 'step' | 'evidence'>[]): Record<string, any> {
-  const lines = ['@李聪（Cici）老师好 刚刚发了新的工单'];
+  const lines = ['老师好 刚刚发了新的工单'];
   const creators: string[] = [];
   const skipped: string[] = [];
   const missing: string[] = [];

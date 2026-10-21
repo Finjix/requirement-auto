@@ -322,7 +322,7 @@ test('several requirement documents give one message: every requirement with its
   ] });
   const got = composeMessage(plan.groups, numbered(['01', 'GOFCN20250919001'], ['02', 'GOFCN20250919002'], ['03', 'GOFCN20250919003'], ['04', 'GOFCN20250919004']));
   assert.deepEqual(got, { status: 'message_ready', skipped_groups: [], missing_numbers: [], message: [
-    '@李聪（Cici）老师好 刚刚发了新的工单',
+    '老师好 刚刚发了新的工单',
     '需求编号：GOFCN20250919001（迭代*22）', '供应商：潘越',
     '需求编号：GOFCN20250919002（素人剧情*25）', '供应商：丁杰',
     '需求编号：GOFCN20250919003（明星*25）', '供应商：丁杰',
@@ -335,7 +335,7 @@ test('several requirement documents give one message: every requirement with its
 test('one requirement gets the same wording, and a missing official number keeps the placeholder', () => {
   const plan = makePlan(open('base.xlsx'), { groups: [kind('素人剧情', 25, '丁杰', '张天伟')] });
   const got = composeMessage(plan.groups, [{ group: '01', step: 'draft_saved', evidence: {} }]);
-  assert.equal(got.message, ['@李聪（Cici）老师好 刚刚发了新的工单', '需求编号：【发布后补填需求编号】（素人剧情*25）', '供应商：丁杰', '创意人：张天伟', '辛苦安排一下~'].join('\n'));
+  assert.equal(got.message, ['老师好 刚刚发了新的工单', '需求编号：【发布后补填需求编号】（素人剧情*25）', '供应商：丁杰', '创意人：张天伟', '辛苦安排一下~'].join('\n'));
   assert.deepEqual([got.status, got.missing_numbers, got.skipped_groups], ['message_ready', ['01'], []]);
 });
 
