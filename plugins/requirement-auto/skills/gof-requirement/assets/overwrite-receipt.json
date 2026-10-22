@@ -2,14 +2,14 @@
   "schema": 2,
   "bridge_version": "feishu-sdk-bridge/1",
   "identity": "user",
-  "probe_workbook": "XIUKsXF8uhA49HtIgmvcldAVnTc",
-  "production_token": "LYHPsEXskh0QgytYBrwcsgl8nnb",
+  "probe_workbook": "K7p4s22qrhbwmRtut3Jc6XzOnCf",
+  "production_token": "FZAes3wMlhrwsztmxOacz2GnnOe",
   "passed": [
     "occupied_value",
     "empty_formula",
     "repeated_occupancy"
   ],
-  "created_at": "2026-10-20T07:38:52.488Z",
+  "created_at": "2026-10-22T07:54:13.222Z",
   "observations": [
     {
       "case": "occupied_value",
@@ -76,7 +76,7 @@
       ],
       "path": null,
       "write": false,
-      "elapsed_ms": 3,
+      "elapsed_ms": 1,
       "ok": true
     },
     {
@@ -85,7 +85,7 @@
       ],
       "path": null,
       "write": false,
-      "elapsed_ms": 0,
+      "elapsed_ms": 1,
       "ok": true
     },
     {
@@ -103,7 +103,7 @@
       ],
       "path": "/open-apis/wiki/v2/spaces/get_node",
       "write": false,
-      "elapsed_ms": 403,
+      "elapsed_ms": 395,
       "ok": true
     },
     {
@@ -112,14 +112,14 @@
       ],
       "path": null,
       "write": true,
-      "elapsed_ms": 1151,
+      "elapsed_ms": 1160,
       "ok": true
     },
     {
       "command": [
         "api-get"
       ],
-      "path": "/open-apis/sheets/v3/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/sheets/query",
+      "path": "/open-apis/sheets/v3/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/sheets/query",
       "write": false,
       "elapsed_ms": 291,
       "ok": true
@@ -130,52 +130,25 @@
       ],
       "path": null,
       "write": true,
-      "elapsed_ms": 545,
+      "elapsed_ms": 534,
       "ok": true
     },
     {
       "command": [
         "api-get"
       ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
       "write": false,
-      "elapsed_ms": 585,
+      "elapsed_ms": 570,
       "ok": true
     },
     {
       "command": [
         "api-get"
       ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
       "write": false,
-      "elapsed_ms": 177,
-      "ok": true
-    },
-    {
-      "command": [
-        "sheets-cells-set"
-      ],
-      "path": null,
-      "write": true,
-      "elapsed_ms": 366,
-      "ok": false
-    },
-    {
-      "command": [
-        "api-get"
-      ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
-      "write": false,
-      "elapsed_ms": 173,
-      "ok": true
-    },
-    {
-      "command": [
-        "api-get"
-      ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
-      "write": false,
-      "elapsed_ms": 189,
+      "elapsed_ms": 179,
       "ok": true
     },
     {
@@ -184,25 +157,25 @@
       ],
       "path": null,
       "write": true,
-      "elapsed_ms": 293,
+      "elapsed_ms": 264,
       "ok": false
     },
     {
       "command": [
         "api-get"
       ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
       "write": false,
-      "elapsed_ms": 172,
+      "elapsed_ms": 178,
       "ok": true
     },
     {
       "command": [
         "api-get"
       ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
       "write": false,
-      "elapsed_ms": 170,
+      "elapsed_ms": 190,
       "ok": true
     },
     {
@@ -211,18 +184,45 @@
       ],
       "path": null,
       "write": true,
-      "elapsed_ms": 348,
+      "elapsed_ms": 267,
       "ok": false
     },
     {
       "command": [
         "api-get"
       ],
-      "path": "/open-apis/sheets/v2/spreadsheets/XIUKsXF8uhA49HtIgmvcldAVnTc/values_batch_get",
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
       "write": false,
-      "elapsed_ms": 245,
+      "elapsed_ms": 178,
+      "ok": true
+    },
+    {
+      "command": [
+        "api-get"
+      ],
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
+      "write": false,
+      "elapsed_ms": 171,
+      "ok": true
+    },
+    {
+      "command": [
+        "sheets-cells-set"
+      ],
+      "path": null,
+      "write": true,
+      "elapsed_ms": 255,
+      "ok": false
+    },
+    {
+      "command": [
+        "api-get"
+      ],
+      "path": "/open-apis/sheets/v2/spreadsheets/K7p4s22qrhbwmRtut3Jc6XzOnCf/values_batch_get",
+      "write": false,
+      "elapsed_ms": 223,
       "ok": true
     }
   ],
-  "receipt_id": "36fec41657966ce088bc7ea732734335c28962c0a72e41cf67397bda47cc6dc8"
+  "receipt_id": "f2c9b6ba8c8ec9f1a7b7fe46820a7737fb83f04e776805bddd51f66491de50a3"
 }
