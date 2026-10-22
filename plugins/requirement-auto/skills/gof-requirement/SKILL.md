@@ -1,6 +1,6 @@
 ---
 name: gof-requirement
-description: "GOFCN creative-material requests (素材需求 / 创意进度表 / CLS 草稿) from one or more Feishu requirement links: work out rows, tags, supplier, reviewer and CLS fields from the linked sheet or doc, append the rows to the Feishu creative progress sheet and verify them, build the CSV, save an unpublished CLS draft with the CSV imported, and hand over one copyable group message. Asks only what cannot be worked out; runs everything once the plan is approved."
+description: "GOFCN creative-material requests (素材需求 / 创意进度表 / CLS 草稿) from one or more Feishu requirement links: work out rows, tags, supplier, reviewer and CLS fields from the linked sheet or doc, append the rows to the Feishu creative progress sheet and verify them, build the CSV, save an unpublished CLS draft with the CSV imported, hand back screenshots of the progress sheet and the CLS draft, and hand over one copyable group message. Asks only what cannot be worked out; runs everything once the plan is approved."
 ---
 
 # GOFCN requirement automation
@@ -11,7 +11,7 @@ Talk to the user in their language (Chinese unless they write otherwise). Field 
 
 ## Flow
 
-A request is the **full flow** unless the user narrows it ("只要 CSV"): append progress rows -> verify -> CSV -> unpublished CLS draft -> import the CSV into it -> copyable group message. Publishing the draft and sending the message are the user's.
+A request is the **full flow** unless the user narrows it ("只要 CSV"): append progress rows -> verify -> CSV -> unpublished CLS draft -> import the CSV into it -> screenshots of the progress sheet and the draft -> copyable group message. Publishing the draft and sending the message are the user's.
 
 **Several links in one message are one request:** one plan, one approval, one append of all rows, one CLS draft per document, one group message for all.
 
@@ -28,7 +28,7 @@ If `append` rejects the overwrite receipt, tell the user "写入功能暂时不�
 
 ## Local files
 
-Intermediate files (catalog, snapshots, requests, plans, observations) go to `<LARK_AGENT_USER_DIR>/requirement-auto/tmp`, not the working directory: lark-agent sends the user every new file in the working directory when a task ends, so only QR images and files meant for the user go there. The CSV is an intermediate file too: it stays in the batch directory, is never copied to the working directory, and is not linked or mentioned in replies, unless the user asked for the CSV itself ("只要 CSV"); then copy that group's CSV to the working directory and link it. After `prepare`, keep everything in the batch directory and remember its path for the session; to resume, use the original batch. `gof` removes batches and tmp files untouched for 7 days.
+Intermediate files (catalog, snapshots, requests, plans, observations) go to `<LARK_AGENT_USER_DIR>/requirement-auto/tmp`, not the working directory: lark-agent sends the user every new file in the working directory when a task ends, so only QR images, the two screenshots of the handover and files meant for the user go there. The CSV is an intermediate file too: it stays in the batch directory, is never copied to the working directory, and is not linked or mentioned in replies, unless the user asked for the CSV itself ("只要 CSV"); then copy that group's CSV to the working directory and link it. After `prepare`, keep everything in the batch directory and remember its path for the session; to resume, use the original batch. `gof` removes batches and tmp files untouched for 7 days.
 
 ## 0. Logins
 
@@ -90,4 +90,8 @@ Then:
 
 `gof batch message --batch …` builds the group message; hand it over exactly as returned, once for all documents. It has no @ (a pasted @ does not turn into a mention in Feishu), so introduce it with: `草稿已导入全部脚本，尚未发布。请发布后将以下消息粘贴到群里，@李聪（Cici） 后发送：`. `【发布后补填需求编号】` marks groups without an official number (`missing_numbers`): tell the user to fill it in after publishing. Groups without a ticket are left out (`skipped_groups`): say which. If the user later gives the real number, `record --step requirement_number` and regenerate.
 
-`gof batch report --batch … --output <tmp>/<new report>.json`. Give the user: appended numbers, the links from the report's `links` (only those; not the CSV or other local files) ("创意进度表：<link>", "CLS 草稿：<link>", or with several documents "CLS 草稿（<供应商>·<类型名>）：<link>"), the copyable message and what is left for them (publish, fill in 需求编号, paste into the group, @李聪（Cici）, send). Give the links for whatever exists also when the run stopped part-way.
+`gof batch report --batch … --output <tmp>/<new report>.json`.
+
+**Screenshots** (after the report, in the working directory; they go to the user with the reply): the progress sheet on the appended rows, `gof feishu screenshot --batch … --output progress-<time>.png`, and each group's CLS draft, `gof cls screenshot --batch … --group <group> --output cls-draft-<group>-<time>.png` (for a single document `--group` can be left out). Both only look at the pages in this user's own browser: the sheet opens as the user (the Feishu scan logs in the web page too), the draft in the CLS app. Take what the run produced: no progress picture when nothing was appended, no draft picture for a group without a draft. Then look at each picture yourself (open the PNG) before it goes out: a sign-in page, a "no permission" page, an empty sheet or a sheet that does not show the new GOFCN numbers is not handed over. A refused or poor picture never fails the task: say in one line which picture is missing and why (the command's `reason`, e.g. a lost Feishu web login: `gof login check`, then once more), and keep the links.
+
+Give the user: appended numbers, the links from the report's `links` (only those; not the CSV or other local files) ("创意进度表：<link>", "CLS 草稿：<link>", or with several documents "CLS 草稿（<供应商>·<类型名>）：<link>"), the copyable message and what is left for them (publish, fill in 需求编号, paste into the group, @李聪（Cici）, send). The screenshots go as attachments only: no text link to them, no local path or URL for the image (such a link does not open); the links above stay. Give the links for whatever exists also when the run stopped part-way.

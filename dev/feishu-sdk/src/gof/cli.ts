@@ -7,6 +7,7 @@ import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
 import * as creative from './creative-online.ts';
+import { draftPicture, sheetPicture } from './shots-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
 import { readBrief } from './brief.ts';
 import { context } from './context.ts';
@@ -106,8 +107,12 @@ function batchCommand(command: string, args: string[]): Result {
   }
 }
 
-async function feishuCommand(command: string, args: string[], bridge: Bridge, web: DeviceWeb): Promise<Result> {
+async function feishuCommand(command: string, args: string[], bridge: Bridge, web: DeviceWeb, via: online.Online): Promise<Result> {
   switch (command) {
+    case 'screenshot': {
+      const { values } = parse(args, { batch: { type: 'string' }, output: { type: 'string' } });
+      return sheetPicture(via, mustHave(values.batch, 'batch'), mustHave(values.output, 'output'));
+    }
     case 'doctor': return bridge.doctor();
     case 'login': {
       const { values, positionals } = parse(args, { wait: { type: 'string' }, 'probe-scope': { type: 'boolean' } }, true);
@@ -167,7 +172,7 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
 
 const intOf = (v: unknown, flag: string): number => { need(typeof v === 'string' && /^[1-9]\d*$/.test(v), `--${flag} 需要正整数`); return Number(v); };
 
-const CLS_ONLINE = ['login', 'session', 'catalog', 'observe', 'run', 'read-draft', 'verify'];
+const CLS_ONLINE = ['login', 'session', 'catalog', 'observe', 'run', 'read-draft', 'verify', 'screenshot'];
 
 /** The commands that talk to CLS: they log in through the browser on this user's profile and work over HTTP (see cls-online.ts). */
 async function clsOnlineCommand(command: string, args: string[], via: online.Online): Promise<Result> {
@@ -187,6 +192,10 @@ async function clsOnlineCommand(command: string, args: string[], via: online.Onl
     case 'run': {
       const { values } = parse(args, { batch: { type: 'string' }, operation: { type: 'string' }, output: { type: 'string' } });
       return online.run(via, mustHave(values.batch, 'batch'), mustHave(values.operation, 'operation'), mustHave(values.output, 'output'));
+    }
+    case 'screenshot': {
+      const { values } = parse(args, { batch: { type: 'string' }, group: { type: 'string' }, output: { type: 'string' } });
+      return draftPicture(via, mustHave(values.batch, 'batch'), str(values.group), mustHave(values.output, 'output'));
     }
     case 'read-draft': return online.readDraft(via, intOf(parse(args, { id: { type: 'string' } }).values.id, 'id'));
     case 'verify': {
@@ -265,7 +274,7 @@ export async function main(argv: string[], bridge: Bridge = new Bridge(), via: o
     const [group, command, ...rest] = argv;
     let result: Result;
     if (group === 'batch') result = batchCommand(command ?? '', rest);
-    else if (group === 'feishu') result = await feishuCommand(command ?? '', rest, bridge, web);
+    else if (group === 'feishu') result = await feishuCommand(command ?? '', rest, bridge, web, via);
     else if (group === 'login' && command === 'check') result = await loginCheck(bridge, via);
     else if (group === 'cls') result = CLS_ONLINE.includes(command ?? '') ? await clsOnlineCommand(command!, rest, via) : clsCommand(argv.slice(1));
     else if (group === 'creative') result = await creativeCommand(command ?? '', rest, bridge, via);

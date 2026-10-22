@@ -1,6 +1,6 @@
 interface:
   display_name: "GOFCN 需求自动化"
-  short_description: "根据飞书需求链接整理需求，追加创意进度表并验收，保存 CLS 草稿并导入脚本，给出群消息"
-  default_prompt: "Use $gof-requirement for the full flow: progress sheet, unpublished CLS draft with the scripts imported, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end."
+  short_description: "根据飞书需求链接整理需求，追加创意进度表并验收，保存 CLS 草稿并导入脚本，回传进度表和 CLS 草稿截图，给出群消息"
+  default_prompt: "Use $gof-requirement for the full flow: progress sheet, unpublished CLS draft with the scripts imported, screenshots of the progress sheet and the draft, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end."
 policy:
   allow_implicit_invocation: true

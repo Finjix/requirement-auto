@@ -7,6 +7,7 @@ import { prepare, record } from '../src/gof/batch.ts';
 import { main } from '../src/gof/cli.ts';
 import type { Online } from '../src/gof/cls-online.ts';
 import { makePlan } from '../src/gof/plan.ts';
+import { draftOf } from '../src/gof/shots-online.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { readJson } from '../src/gof/util.ts';
 import { fakeCls } from './helpers/fake-cls.ts';
@@ -86,6 +87,11 @@ test('a whole group goes through the commands: options, observations, draft, imp
     const importEvidence = write(dir, 'import-evidence.json', { confirmed: true, unpublished: true, transport: 'cls_api', draft_id: 5001, operation: imp, receipt: receiptImport,
       url: 'https://creative.centurygames.cn/requirement/5001/edit-outer', quantity: 2, names });
     await ok(['batch', 'record', '--batch', dir, '--step', 'scripts_imported', '--group', '01', '--evidence', importEvidence], via);
+
+    // The picture of the draft is taken from the batch's own record: the draft the scripts went into.
+    assert.deepEqual(draftOf(dir, '01'), { group: '01', id: 5001, url: 'https://creative.centurygames.cn/requirement/5001/edit-outer' });
+    assert.deepEqual(draftOf(dir, undefined), draftOf(dir, '01'));
+    assert.throws(() => draftOf(dir, '99'), /没有分组 99/);
 
     // Only Authorization was sent, only to the allowed paths, and nothing was ever published or deleted.
     assert.ok(cls.requests.every(r => r.authorization === 'Bearer good'));
