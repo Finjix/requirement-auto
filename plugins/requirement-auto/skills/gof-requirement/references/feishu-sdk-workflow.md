@@ -52,7 +52,9 @@ The target is the test Wiki node `YFyywzwLsiT07EkpBaecr8nIncn`; the bridge resol
 `gof batch status`, then `gof feishu reconcile --batch …`: read-only; re-exports, reads back all rules and builds a new rule proof and verification report against the original `api_plan`. Its `snapshot` and `validation_evidence` feed `batch verify` and `record resumed`.
 
 - Complete: reuse the original CSV; if `append_verified` is not yet recorded, record it with the reconcile evidence, then continue to CLS (check existing drafts first if CLS had started).
-- An attempted write is never re-sent (the tool refuses), even when everything reads back empty. Partial, occupied or conflicting results are reported to the user.
+- An attempted write is never re-sent (the tool refuses), even when everything reads back empty. Partial, occupied or conflicting results are reported to the user. When the new rows lack their planned dropdowns, reconcile still gives the values' verdict (`not_applied`, `partial`, `conflict`) with the rule problem in `rule_issue`.
+- Every refusal of `append` after the write went out carries `write_sent: true`. A request whose earlier batch was sent but never verified is planned again only when none of that batch's rows are in the sheet (`prepare` refuses otherwise).
+- Verification of an API batch is strict on the appended rows (every column) and on the appended columns' dropdown rules. Edits colleagues make elsewhere in the shared workbook while it runs (other cells, other tabs, filters, sizes, hidden rows, rules of other columns) are listed in `foreign_changes` and do not fail it.
 - A never-attempted batch can continue if baseline, rules and approved revision are unchanged.
 - Batches from the lark-cli era (`cli_version` in `api-plan`) cannot be read back with this bridge.
 

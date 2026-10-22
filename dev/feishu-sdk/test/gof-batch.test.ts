@@ -62,7 +62,7 @@ test('the fingerprint is stable for the same file and changes with any content, 
   }
 });
 
-test('prepare writes the same CSV and clipboard text as before, refuses a second run and a stale plan', () => {
+test('prepare writes the same CSV and clipboard text as before, starts a batch of its own when run again, and refuses a stale plan', () => {
   const snapshot = open('base.xlsx');
   const plan = makePlan(snapshot, request('basic'));
   const root = tmp();
@@ -75,7 +75,11 @@ test('prepare writes the same CSV and clipboard text as before, refuses a second
     assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), text, name);
   }
   assert.ok(fs.readFileSync(path.join(dir, golden.prepare.csv[0]), 'utf8').startsWith('﻿脚本名称,脚本内容,创意标签\r\n'));
-  assert.throws(() => prepare(plan, snapshot, { outputRoot: root }), /EEXIST/);
+  // The same plan again (only possible on an unchanged sheet: nothing of the first batch landed) never reuses the first batch's directory.
+  const second = prepare(plan, snapshot, { outputRoot: root }).batch as string;
+  assert.equal(path.basename(second), `${plan.plan_id}-2`);
+  assert.equal(status(second).events.length, 0);
+  assert.equal(loadBatch(dir).path, dir, 'the first one is left as it was');
   const stale = { ...plan, first_number: plan.first_number + 1 };
   assert.throws(() => prepare(stale, snapshot, { outputRoot: tmp() }), (e: Error) => e.message === golden.prepare.stale_plan);
   assert.throws(() => prepare(plan, snapshot, { outputRoot: tmp(), workspace: tmp() }), /不能同时使用/);

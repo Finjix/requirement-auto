@@ -14,6 +14,7 @@ import { listScreenshot, type ShotOptions } from './creative-shot.ts';
 import { target, type Bridge } from './feishu.ts';
 import { Snapshot } from './snapshot.ts';
 import { resolveDataPaths } from '../paths.ts';
+import { UNPACKED } from '../retention.ts';
 import { Blocked, feishuDocPath, need, readJson, writeJsonNew } from './util.ts';
 
 /*
@@ -149,7 +150,7 @@ export async function planUpload(online: Online, bridge: Bridge | undefined, req
   need(!fs.existsSync(file), '计划文件已存在，不覆盖');
   const request: UploadRequest = normalizeUploadRequest(readJson(requestFile));
   // A folder reaches lark-agent only as a zip (Feishu does not hand folders to bots): it is unpacked into this user's tmp and read like a folder.
-  const archives = await unpackArchives(request.files, path.join(deps.tmpDir ?? resolveDataPaths().tmp, 'unpacked'));
+  const archives = await unpackArchives(request.files, path.join(deps.tmpDir ?? resolveDataPaths().tmp, UNPACKED));
   const scanned = scanMaterials(request.files, archives.unpacked);
   const { materials } = scanned;
   const skipped = [...scanned.skipped, ...archives.skipped];
@@ -235,14 +236,23 @@ function check(detail: Obj, item: Obj, name: string, account: number): Obj {
   return { ok: problems.length === 0, problems, annotated: !['创意人', '制作人', '素材类型'].some(p => problems.includes(p)), processing: !material };
 }
 
-/** Exact names this account uploaded, from the list (confirmed or 待确认): what a create of unknown outcome made. */
-async function findCreated(api: CreativeAdapter, gameId: number, account: number, names: string[]): Promise<Map<string, number>> {
+/**
+ * What a create of unknown outcome made: creatives of the exact name, uploaded by this account (confirmed or 待确认), whose material is the
+ * approved file. CLS takes a file (by its MD5) only once, so that one is this batch's; another of the same name (made by hand on the page
+ * meanwhile, say) is not, and is never annotated. A material CLS has not processed yet shows no hash: it is looked at again later.
+ */
+async function findCreated(api: CreativeAdapter, gameId: number, account: number, wanted: [string, Obj][]): Promise<Map<string, number>> {
   const found = new Map<string, number>();
-  for (const name of names) {
+  for (const [name, item] of wanted) {
     for (const confirmed of [true, false]) {
       const data = await api.search(gameId, name, confirmed);
-      const hit = (data?.creatives ?? []).filter((c: Obj) => c.name === name && c.upload_user_id === account);
-      if (hit.length === 1) found.set(name, hit[0].id);
+      const hits = (data?.creatives ?? []).filter((c: Obj) => c.name === name && c.upload_user_id === account);
+      const ours: number[] = [];
+      for (const hit of hits) {
+        const material = (await api.creative(hit.id))?.materials?.[0];
+        if (material?.file_hash === item.md5) ours.push(hit.id);
+      }
+      if (ours.length === 1) found.set(name, ours[0]!);
     }
   }
   return found;
@@ -372,7 +382,7 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
     // looked at once, since a refusal does not prove that nothing was made.
     const tries = refused ? 1 : deps.reconcileTries ?? 4;
     for (let i = 0; i < tries; i++) {
-      ids = await findCreated(api, gameId, plan.account.id, names);
+      ids = await findCreated(api, gameId, plan.account.id, names.map(name => [name, itemOf.get(name)!]));
       if (ids.size === names.length) break;
       if (i < tries - 1) await sleep(15_000);
     }

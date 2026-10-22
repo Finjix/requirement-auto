@@ -148,10 +148,19 @@ function checkNewRules(records: ApiRule[], sheetId: string, dropdownSpecs: Obj[]
   }
 }
 
-/** After a write: the old rules must be unchanged and the new rows must carry the planned dropdowns. Writes the proof file. */
+/**
+ * The old rules of the columns the append writes into, on its sheet: the only ones its write (which sets the new rows' dropdowns) could have
+ * changed. A rule changed anywhere else after the write is somebody else's edit of the shared workbook; verify reports such changes.
+ */
+function appendColumnRules(records: ApiRule[], sheetId: string, range: string): unknown[] {
+  const area = new CellRange(range);
+  return (ruleProjection(records, sheetId, range) as [string, number, ...unknown[]][]).filter(([sid, col]) => sid === sheetId && area.minCol <= col && col <= area.maxCol);
+}
+
+/** After a write: the old rules of the written columns must be unchanged and the new rows must carry the planned dropdowns. Writes the proof file. */
 export function ruleProof(file: string, fresh: Snapshot, records: ApiRule[], context: Obj, plan: Plan): Obj {
   const sid = context.sheet_id as string;
-  need(canonical(ruleProjection(context.rules, sid, plan.range)) === canonical(ruleProjection(records, sid, plan.range)),
+  need(canonical(appendColumnRules(context.rules, sid, plan.range)) === canonical(appendColumnRules(records, sid, plan.range)),
     'API 检测到历史下拉规则/颜色/模式变化');
   checkNewRules(records, sid, context.dropdowns, 'fresh');
   const proof = seal({ transport: 'feishu_api', api_plan_id: context.api_plan_id, snapshot_digest: fresh.fingerprint, rules: records }, 'proof_id');
@@ -174,7 +183,7 @@ export function validateRuleEvidence(dir: string, fresh: Snapshot, evidence: Obj
   // Recompute all comparisons without writing another proof.
   const plan = manifest.plan as Plan;
   const sid = context.sheet_id as string;
-  need(canonical(ruleProjection(context.rules, sid, plan.range)) === canonical(ruleProjection(proof.rules, sid, plan.range)), '历史下拉规则发生变化');
+  need(canonical(appendColumnRules(context.rules, sid, plan.range)) === canonical(appendColumnRules(proof.rules, sid, plan.range)), '历史下拉规则发生变化');
   checkNewRules(proof.rules, sid, context.dropdowns, 'proof');
   return context.dropdowns;
 }

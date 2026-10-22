@@ -5,7 +5,7 @@ import { makePlan, type Plan } from './plan.ts';
 import { itemsOf } from './request.ts';
 import { resolveDataPaths } from '../paths.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
-import { hasContent, inlineOptions, plainRules, Snapshot, validationProjection, holds } from './snapshot.ts';
+import { collectIds, hasContent, inlineOptions, plainRules, scanSheets, Snapshot, validationProjection, holds } from './snapshot.ts';
 import { validateBatchReceipt, validateReceipt } from './cls.ts';
 import { validateRuleEvidence } from './rules.ts';
 import {
@@ -27,7 +27,9 @@ export function loadBatch(dir: string): { path: string; manifest: Record<string,
   const manifest = readJson(path.join(batchPath, 'manifest.json'));
   const plan = manifest.plan as Plan;
   const { plan_id: token, ...unsealed } = plan;
-  need(digest(unsealed).slice(0, 24) === token && path.basename(batchPath) === token, '批次清单损坏或目录与计划不匹配');
+  // The directory is named after the plan; the same plan prepared again (its first batch spent or out of date) gets "-2", "-3" ...
+  const named = path.basename(batchPath);
+  need(digest(unsealed).slice(0, 24) === token && (named === token || new RegExp(`^${token}-[1-9]\\d*$`).test(named)), '批次清单损坏或目录与计划不匹配');
   need(manifest.baseline_sha256 === sha256(fs.readFileSync(path.join(batchPath, 'baseline.xlsx'))), '基线文件发生变化');
   for (const [name, expected] of Object.entries<string>(manifest.artifacts)) {
     need(path.basename(name) === name && sha256(fs.readFileSync(path.join(batchPath, name))) === expected, `批次文件发生变化：${name}`);
@@ -57,6 +59,34 @@ export function clipboardTsv(plan: Plan): string {
 
 export interface PrepareOptions { workspace?: string | undefined; apiPlan?: Record<string, any> | undefined; outputRoot?: string | undefined }
 
+/**
+ * Earlier batches under `base` for the same requirement (a group with the same script link) whose write went out without being verified, and
+ * whose rows are in the sheet now (a planned number at the row it was written to, or carrying the planned name). Planning that requirement
+ * again would append it twice: what happened to the earlier batch is to be read back there. One whose rows are nowhere is no obstacle.
+ */
+function landedUnverified(base: string, plan: Plan, snapshot: Snapshot): string[] {
+  const links = new Set(plan.groups.map((g: Plan) => g.request.script_url));
+  let present: { tables: Record<string, Record<string, number>>; ids: Map<number, [string, number]> } | undefined;
+  const found: string[] = [];
+  for (const name of fs.readdirSync(base)) {
+    const dir = path.join(base, name);
+    let earlier: Plan;
+    let steps: string[];
+    try { earlier = readJson(path.join(dir, 'manifest.json')).plan; steps = events(dir).map(e => e.step); } catch { continue; } // not a batch
+    if (!earlier.groups.some((g: Plan) => links.has(g.request.script_url)) || !steps.includes('append_started') || steps.includes('append_verified')) continue;
+    if (!present) { const tables = scanSheets(snapshot).tables; present = { tables, ids: collectIds(snapshot, tables) }; }
+    const { tables, ids } = present;
+    const landed = (earlier.rows as Plan[]).some(r => {
+      const at = ids.get(r.number);
+      if (!at) return false;
+      const shown = snapshot.cell(at[0], at[1], tables[at[0]]!.name!)?.value;
+      return (at[0] === earlier.worksheet && at[1] === r.row) || shown === r.name;
+    });
+    if (landed) found.push(dir);
+  }
+  return found;
+}
+
 export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions = {}): Record<string, any> {
   need(canonical(plan) === canonical(makePlan(snapshot, plan.request, plan.current_sheet)), '当前快照与获批计划不同，需更新计划并重新确认');
   const { apiPlan, workspace, outputRoot } = options;
@@ -70,7 +100,13 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   const base = outputRoot !== undefined ? path.resolve(outputRoot)
     : workspace !== undefined ? path.join(path.resolve(workspace), 'outputs', 'gof-requirement') : defaultBatchRoot();
   fs.mkdirSync(base, { recursive: true });
-  const dir = path.join(base, plan.plan_id);
+  const earlier = landedUnverified(base, plan, snapshot);
+  need(earlier.length === 0, `这份需求已有一批写入发出、尚未核对，表里已有它的行（${earlier.join('、')}）：`
+    + '先对那一批运行 gof feishu reconcile，按结果处理，不能重新追加');
+  // A batch is never reused or rewritten: the same plan made again (the workbook's revision moved with nothing visible in the export, or a
+  // write that landed nowhere) starts a batch of its own beside the earlier one, which keeps its record.
+  let dir = path.join(base, plan.plan_id);
+  for (let n = 2; fs.existsSync(dir); n++) dir = path.join(base, `${plan.plan_id}-${n}`);
   fs.mkdirSync(dir);
   try {
   // No in-place rewrite or rollback of a partially generated batch.
@@ -179,7 +215,14 @@ export function verify(dir: string, fresh: Snapshot, validationEvidence?: unknow
     const sheet = plan.worksheet as string;
     const area = new CellRange(plan.range);
     const issues: string[] = [];
-    if (canonical(fresh.sheetNames) !== canonical(baseline.sheetNames)) issues.push('工作表列表/顺序发生变化');
+    // An API batch sends nothing but its own ranges (allow_overwrite:false), so a difference outside the appended rows is somebody else's edit of
+    // the shared workbook made meanwhile: it is reported (foreign_changes) and does not fail the append, or every busy day would leave appended
+    // rows behind a batch that can never be verified. A batch written any other way (a paste in the browser) keeps the strict check.
+    const strict = !('api-plan.json' in manifest.artifacts);
+    const foreign: string[] = [];
+    const elsewhere = (text: string) => { if (strict) issues.push(text); else if (foreign.length < 20) foreign.push(text); };
+    const inRows = (row: number) => area.minRow <= row && row <= area.maxRow;
+    if (canonical(fresh.sheetNames) !== canonical(baseline.sheetNames)) elsewhere('工作表列表/顺序发生变化');
     const expected: Record<string, string | number | null> = {};
     for (const row of plan.rows) Object.assign(expected, row.values);
     const owned = (name: string, coord: string) => name === sheet && area.contains(coord);
@@ -189,7 +232,9 @@ export function verify(dir: string, fresh: Snapshot, validationEvidence?: unknow
       const after = fresh.cells[name] ?? {};
       for (const coord of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(byPosition)) {
         if (!owned(name, coord) && canonical(before[coord]) !== canonical(after[coord])) {
-          issues.push(`计划外修改：${name}!${coord}`);
+          // The appended rows themselves, beyond the written columns as well: someone writing into them is a collision, not a neighbour's edit.
+          if (name === sheet && inRows(ROW_COL(coord)[0])) issues.push(`计划外修改：${name}!${coord}`);
+          else elsewhere(`计划外修改：${name}!${coord}`);
           if (issues.length >= 20) break scan;
         }
       }
@@ -205,9 +250,21 @@ export function verify(dir: string, fresh: Snapshot, validationEvidence?: unknow
     if (beforeMeta[sheet] && afterMeta[sheet] && filterExtendsOnlyIntoAppend(beforeMeta[sheet].filter, afterMeta[sheet].filter, area)) {
       afterMeta[sheet].filter = beforeMeta[sheet].filter;
     }
-    if (canonical(beforeMeta) !== canonical(afterMeta)) issues.push('历史布局/合并/隐藏/保护/筛选发生变化');
+    if (strict) {
+      if (canonical(beforeMeta) !== canonical(afterMeta)) issues.push('历史布局/合并/隐藏/保护/筛选发生变化');
+    } else {
+      for (const name of new Set([...Object.keys(beforeMeta), ...Object.keys(afterMeta)])) {
+        const b = beforeMeta[name], a = afterMeta[name];
+        if (canonical(b) === canonical(a)) continue;
+        // On the appended sheet a protection change, or a merge that reaches the appended rows, concerns them; filters, sizes and hidden rows elsewhere do not.
+        const reaching = (meta: Record<string, any>) => (meta.merges as string[]).filter(m => { const r = new CellRange(m); return r.maxRow >= area.minRow && r.minRow <= area.maxRow; });
+        if (name === sheet && b && a && (canonical(b.protection) !== canonical(a.protection) || canonical(reaching(b)) !== canonical(reaching(a)))) {
+          issues.push('历史布局/合并/隐藏/保护/筛选发生变化');
+        } else elsewhere(`历史布局/合并/隐藏/筛选发生变化：${name}`);
+      }
+    }
     if (canonical(validationProjection(baseline, [sheet, area])) !== canonical(validationProjection(fresh, [sheet, area]))) {
-      issues.push('追加范围外的下拉验证发生变化');
+      elsewhere('追加范围外的下拉验证发生变化');
     }
     need(fresh.sheetNames.includes(sheet), '目标工作表已不存在');
     const ws = fresh.sheet(sheet);
@@ -255,6 +312,7 @@ export function verify(dir: string, fresh: Snapshot, validationEvidence?: unknow
       if (issues.length) state = 'conflict';
     }
     const result: Record<string, any> = { status: state, matched_cells: matches, expected_cells: meaningful, issues: issues.slice(0, 20) };
+    if (foreign.length) result.foreign_changes = foreign;
     if (uiValidated.length) result.ui_validated_ranges = uiValidated;
     if (apiDropdowns !== null) result.api_validated_ranges = apiDropdowns.map(d => d.range);
     return result;

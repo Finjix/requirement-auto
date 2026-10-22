@@ -14,7 +14,7 @@ import { prepare, record } from '../src/gof/batch.ts';
 import { acceptance, dropdowns } from '../src/gof/rules.ts';
 import { seal } from '../src/gof/seal.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
-import { Blocked, NODE, readJson } from '../src/gof/util.ts';
+import { Blocked, NODE, readJson, WriteSent } from '../src/gof/util.ts';
 import { main } from '../src/gof/cli.ts';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -250,6 +250,12 @@ class FakeProduction {
   appended = false;
   productionWrites = 0;
   failWrite: BridgeReply | undefined;
+  /** What the workbook looks like once the write landed: the appended rows, plus whatever colleagues changed meanwhile. */
+  after = 'applied-complete.xlsx';
+  /** A write that lands but whose answer is lost on the way back. */
+  landThenFail: BridgeReply | undefined;
+  /** Dropdown rules colleagues change once the write is in. */
+  colleagueRules: (rules: any[]) => any[] = rules => rules;
   extraRules: any[] = [];
   readonly sheets = [{ sheet_id: 's1', title: '说明' }, { sheet_id: 's2', title: 'GOFCN创意进度 26年2月' }, { sheet_id: 's3', title: 'GOFCN创意进度 26年3月' }];
 
@@ -268,7 +274,7 @@ class FakeProduction {
     }
     if (name === 'sheets-revision') return reply({ revision: 42 });
     if (name === 'sheets-export') {
-      fs.copyFileSync(path.join(fixtures, this.appended ? 'applied-complete.xlsx' : 'base.xlsx'), payload.output, fs.constants.COPYFILE_EXCL);
+      fs.copyFileSync(path.join(fixtures, this.appended ? this.after : 'base.xlsx'), payload.output, fs.constants.COPYFILE_EXCL);
       return reply({ path: payload.output, bytes: 1 });
     }
     if (name === 'sheets-cells-set') {
@@ -283,6 +289,7 @@ class FakeProduction {
             options: { multipleValues: first.support_multiple_values, highlightValidData: first.enable_highlight, colorValueMap: {} } });
         }
       }
+      if (this.landThenFail) return this.landThenFail;
       return reply({ applied: true });
     }
     return new FakeSheets().handle(name, payload);
@@ -291,8 +298,9 @@ class FakeProduction {
   private mainRules() {
     const rule = (items: string[], range: string) => ({ dataValidationType: 'list', conditionValues: items, ranges: [`s3!${range}`],
       options: { multipleValues: false, highlightValidData: false, colorValueMap: {} } });
-    return [rule(['玩法', '画面', '系统'], 'D2:D500'), rule(['卖点', '体验'], 'E2:E500'), rule(['视频', '图文'], 'F2:F500'),
+    const rules = [rule(['玩法', '画面', '系统'], 'D2:D500'), rule(['卖点', '体验'], 'E2:E500'), rule(['视频', '图文'], 'F2:F500'),
       rule(['供应商甲', '供应商乙'], 'H2:H5'), rule(['张三', '李四'], 'I2:I500'), ...this.extraRules];
+    return this.appended ? this.colleagueRules(rules) : rules;
   }
 }
 
@@ -351,6 +359,71 @@ test('an append is refused when the spreadsheet changed since the approved plan'
   // A refusal before anything was sent leaves no attempt directory behind, so the same batch can try again.
   assert.deepEqual(fs.readdirSync(dir).filter(name => name.startsWith('api-attempt-')), []);
   assert.equal((await execute(bridge, dir, receipt)).status, 'append_verified');
+});
+
+test('colleagues editing elsewhere in the shared workbook while the append runs do not fail it: their edits are listed, the append is verified', async () => {
+  for (const after of ['applied-outside-value.xlsx', 'applied-outside-sheet.xlsx', 'applied-outside-style.xlsx', 'applied-filter-changed.xlsx', 'applied-extra-sheet.xlsx']) {
+    const { fake, bridge, dir, receipt } = await approvedBatch();
+    fake.after = after;
+    const result = await execute(bridge, dir, receipt);
+    assert.equal(result.status, 'append_verified', after);
+    assert.ok(result.foreign_changes.length > 0, after);
+    assert.equal(status(dir).append_verified, true, after);
+  }
+});
+
+test('a dropdown a colleague changes in a column the append does not write is theirs; one changed in a written column still fails it', async () => {
+  const other = await approvedBatch();
+  other.fake.colleagueRules = rules => [...rules, { ...rules[0], conditionValues: ['是', '否'], ranges: ['s3!K2:K500'] }];
+  assert.equal((await execute(other.bridge, other.dir, other.receipt)).status, 'append_verified');
+  const written = await approvedBatch();
+  written.fake.colleagueRules = rules => rules.map((r, i) => i === 0 ? { ...r, conditionValues: [...r.conditionValues, '新玩法'] } : r);
+  await failsWith(execute(written.bridge, written.dir, written.receipt), /写入已发出.*历史下拉规则/, WriteSent);
+});
+
+test('what touches the appended rows still fails the append, and every refusal after the send says the write went out', async () => {
+  for (const [after, issue] of [['applied-occupied-optional.xlsx', /J6/], ['applied-bad-value.xlsx', /D6/], ['applied-protected.xlsx', /保护/]] as const) {
+    const { fake, bridge, dir, receipt } = await approvedBatch();
+    fake.after = after;
+    const error = await failsWith(execute(bridge, dir, receipt), /写入已发出.*reconcile.*追加未完整通过验收/, WriteSent) as WriteSent;
+    assert.equal(error.batch, dir);
+    assert.equal(status(dir).blocked, true, after);
+    const readback = await reconcile(bridge, dir);
+    assert.equal(readback.status, 'conflict', after);
+    assert.match(readback.issues.join(' '), issue, after);
+  }
+});
+
+test('reconcile of a write that landed nowhere gives its verdict even though the new rows have no dropdowns', async () => {
+  const { fake, bridge, dir, receipt } = await approvedBatch();
+  fake.failWrite = failure('unknown_result');
+  await failsWith(execute(bridge, dir, receipt), /写入已发出/, WriteSent);
+  const readback = await reconcile(bridge, dir);
+  assert.equal(readback.status, 'not_applied');
+  assert.match(readback.rule_issue, /新增下拉规则/);
+});
+
+test('a request whose earlier write landed but was never verified cannot be planned and appended again; one that landed nowhere can', async () => {
+  const landed = await approvedBatch();
+  landed.fake.landThenFail = failure('unknown_result');
+  await failsWith(execute(landed.bridge, landed.dir, landed.receipt), /写入已发出/, WriteSent);
+  const request = readJson(path.join(fixtures, 'requests', 'basic.json'));
+  // The sheet as it is now: the rows of the lost answer are in it, so a new plan would put them in again after themselves.
+  const now = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
+  const again = await planWithApi(landed.bridge, now, request);
+  assert.notEqual(again.batch_plan.first_number, landed.approved.batch_plan.first_number);
+  assert.throws(() => prepare(again.batch_plan, now, { outputRoot: path.dirname(landed.dir), apiPlan: again.api_plan }), /已有一批写入发出、尚未核对/);
+
+  const nowhere = await approvedBatch();
+  nowhere.fake.failWrite = failure('unknown_result');
+  await failsWith(execute(nowhere.bridge, nowhere.dir, nowhere.receipt), /写入已发出/, WriteSent);
+  const retry = await recomputeApiPlan(nowhere.bridge, nowhere.base, nowhere.approved);
+  // Same sheet as approved (nothing landed): a batch of its own beside the first, which keeps its record.
+  const fresh = prepare(nowhere.approved.batch_plan, nowhere.base, { outputRoot: path.dirname(nowhere.dir), apiPlan: retry });
+  assert.equal(fresh.status, 'prepared');
+  assert.equal(path.basename(fresh.batch), `${path.basename(nowhere.dir)}-2`);
+  nowhere.fake.failWrite = undefined;
+  assert.equal((await execute(nowhere.bridge, fresh.batch, nowhere.receipt)).status, 'append_verified');
 });
 
 test('a batch made through the bridge takes CLS evidence only as API receipts, whatever the evidence says about itself', async () => {

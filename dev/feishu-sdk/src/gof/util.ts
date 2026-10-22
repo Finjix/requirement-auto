@@ -10,6 +10,16 @@ export class Blocked extends Error {
   }
 }
 
+/** A refusal after a write went out: what happened has to be read back (reconcile); planning and sending again could append the rows twice. */
+export class WriteSent extends Blocked {
+  readonly batch: string;
+  constructor(message: string, batch: string) {
+    super(message);
+    this.name = 'WriteSent';
+    this.batch = batch;
+  }
+}
+
 export function need(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Blocked(message);
 }

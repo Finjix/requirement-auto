@@ -3,6 +3,8 @@ import path from 'node:path';
 import type { DataPaths } from './paths.ts';
 
 export const RETENTION_DAYS_ENV = 'REQUIREMENT_AUTO_RETENTION_DAYS';
+/** The folder of tmp that holds one folder per unpacked zip. */
+export const UNPACKED = 'unpacked';
 const DAY = 86_400_000;
 
 /** Days to keep untouched batches and temporary files: 7 like lark-agent's workspace, a whole number of at least 1 from the environment. */
@@ -38,17 +40,25 @@ async function newest(target: string): Promise<number> {
 export async function pruneExpired(paths: Pick<DataPaths, 'batches' | 'tmp'>, now: number = Date.now(), days: number = retentionDays()): Promise<number> {
   const cutoff = now - days * DAY;
   let removed = 0;
-  for (const root of [paths.batches, paths.tmp]) {
-    // Only a real folder: a link in its place would lead the sweep out of the user's directory.
-    if (!(await fs.lstat(root).catch(() => undefined))?.isDirectory()) continue;
+  /** Each entry of a real folder (a link in its place would lead the sweep out of the user's directory) goes whole once nothing in it is recent. */
+  const sweep = async (root: string, keepEntry: (name: string) => Promise<boolean> = async () => false) => {
+    if (!(await fs.lstat(root).catch(() => undefined))?.isDirectory()) return;
     for (const name of await fs.readdir(root).catch(() => [] as string[])) {
       const target = path.join(root, name);
       try {
-        if (await newest(target) >= cutoff) continue;
+        if (await keepEntry(name) || await newest(target) >= cutoff) continue;
         await fs.rm(target, { recursive: true, force: true });
         removed++;
       } catch { /* open in a program or no permission: next time */ }
     }
-  }
+  };
+  await sweep(paths.batches);
+  // Every zip unpacked for an upload is a folder of its own under tmp/unpacked, and is judged on its own: one unpacked last week must not
+  // keep every older one (each up to 20 GB) for as long as the user goes on uploading.
+  await sweep(paths.tmp, async name => {
+    if (name !== UNPACKED) return false;
+    await sweep(path.join(paths.tmp, UNPACKED));
+    return true;
+  });
   return removed;
 }

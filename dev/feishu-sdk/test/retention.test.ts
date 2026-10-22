@@ -47,6 +47,19 @@ test('a batch is removed whole or not at all: one recently touched file keeps al
   assert.ok(fs.existsSync(old) && fs.existsSync(recent));
 });
 
+test('every unpacked zip is judged on its own: one unpacked recently does not keep the older ones', async () => {
+  const paths = resolveDataPaths({ LARK_AGENT_USER_DIR: tempDir('ra-ret-') });
+  const oldZip = write(path.join(paths.tmp, 'unpacked', 'aaaa-old', 'files', 'big.mp4'));
+  write(path.join(paths.tmp, 'unpacked', 'aaaa-old', 'complete.json'));
+  const recent = write(path.join(paths.tmp, 'unpacked', 'bbbb-new', 'complete.json'));
+  const now = later(8);
+  fs.utimesSync(recent, new Date(now), new Date(now));
+  assert.equal(await pruneExpired(paths, now), 1);
+  assert.ok(!fs.existsSync(path.dirname(path.dirname(oldZip))), 'the old one goes');
+  assert.ok(fs.existsSync(recent), 'the recent one stays');
+  assert.ok(fs.existsSync(path.join(paths.tmp, 'unpacked')), 'and so does the folder that holds them');
+});
+
 test('a missing folder is fine, and a link in place of a folder is not followed', async () => {
   const paths = resolveDataPaths({ LARK_AGENT_USER_DIR: tempDir('ra-ret-') });
   assert.equal(await pruneExpired(paths, later(30)), 0);

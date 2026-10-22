@@ -140,20 +140,111 @@ function killTree(pid: number): Promise<void> {
   });
 }
 
+/** Whether a browser's DevTools endpoint answers on this port. */
+async function answers(port: number, timeoutMs = 3_000): Promise<boolean> {
+  try { return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(timeoutMs) })).ok; } catch { return false; }
+}
+
 /** Joins a browser that is already running on this profile (a login window left open by an earlier command), if there is one. */
-export async function attachBrowser(profileDir: string): Promise<BrowserHandle | undefined> {
+async function joinBrowser(profileDir: string): Promise<BrowserHandle | undefined> {
   const found = readActivePort(profileDir);
   if (!found) return undefined;
+  const url = `ws://127.0.0.1:${found.port}${found.path}`;
   let cdp: Cdp;
-  try { cdp = await Cdp.connect(`ws://127.0.0.1:${found.port}${found.path}`, 2_000); } catch { return undefined; }
+  try { cdp = await Cdp.connect(url, 2_000); } catch {
+    // The port file of a browser that was killed stays behind; a running one that is only slow to answer must not be taken for gone: a second
+    // browser started on its profile is handed over to it by Chrome and exits, and the port file deleted on the way leaves it unreachable.
+    if (!await answers(found.port)) return undefined;
+    try { cdp = await Cdp.connect(url, 15_000); } catch { throw new Blocked('这个用户的浏览器在运行，但调试接口没有响应；请稍后再试'); }
+  }
   return {
     cdp, launched: false,
     async close() {
       await cdp.send('Browser.close', {}, undefined, 5_000).catch(() => undefined);
       for (let waited = 0; !cdp.closed && waited < 8_000; waited += 100) await sleep(100);
       cdp.close();
+      // The connection drops before the browser has finished going; the next command must not meet one that is still on its way out.
+      for (let waited = 0; waited < 8_000 && await answers(found.port, 500); waited += 250) await sleep(250);
     },
   };
+}
+
+/*
+ * One command at a time drives a profile's browser. Two would share its first tab and one would close the browser under the other. The lock
+ * is a file beside the profile, held from opening the browser until this process lets go of it: by closing the browser, or only its
+ * connection when the browser is left running for a scan. A holder whose process has ended does not count. Within one process the lock is
+ * shared (nested opens of a profile are the caller's own business).
+ */
+const LOCK_WAIT_MS = 120_000, LOCK_STALE_MS = 15 * 60_000;
+const held = new Map<string, number>();
+
+function alive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/** Whether a lock file is of nobody any more: its process ended, it is very old, or it was never finished being written. */
+function abandoned(file: string, text: string): boolean {
+  let holder: { pid?: unknown; at?: unknown } | undefined;
+  try { holder = JSON.parse(text); } catch { /* half written */ }
+  if (typeof holder?.pid !== 'number' || typeof holder.at !== 'number') {
+    const age = Date.now() - (fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0);
+    return age > 10_000;
+  }
+  return !alive(holder.pid) || Date.now() - holder.at > LOCK_STALE_MS;
+}
+
+export async function lockProfile(profileDir: string, waitMs = LOCK_WAIT_MS): Promise<() => void> {
+  const file = `${path.resolve(profileDir)}.lock`;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    const left = (held.get(file) ?? 1) - 1;
+    if (left > 0) held.set(file, left);
+    else { held.delete(file); fs.rmSync(file, { force: true }); }
+  };
+  if (held.has(file)) { held.set(file, held.get(file)! + 1); return release; }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  for (const deadline = Date.now() + waitMs; ;) {
+    try {
+      fs.writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: 'wx' });
+      held.set(file, 1);
+      return release;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    let text = '';
+    try { text = fs.readFileSync(file, 'utf8'); } catch { continue; } // let go of a moment ago
+    if (abandoned(file, text)) {
+      // Taken away under a name of its own, so that of several waiters seeing the same dead lock none removes a lock just made by another.
+      const aside = `${file}.${process.pid}-${Math.random().toString(16).slice(2)}`;
+      try { fs.renameSync(file, aside); } catch { continue; }
+      let moved = '';
+      try { moved = fs.readFileSync(aside, 'utf8'); } catch { /* gone */ }
+      if (moved === text) fs.rmSync(aside, { force: true });
+      else { try { fs.renameSync(aside, file); } catch { fs.rmSync(aside, { force: true }); } }
+      continue;
+    }
+    if (Date.now() > deadline) {
+      throw new Blocked('这个用户的浏览器正被另一个命令使用：同一时间只能运行一个用到浏览器的命令（登录、检查登录、截图、素材上传），请等它结束后再运行');
+    }
+    await sleep(250);
+  }
+}
+
+/** The handle with the profile lock: let go of when the browser is closed, or when only its connection is (the browser left running). */
+function holding(handle: BrowserHandle, release: () => void): BrowserHandle {
+  let closing = false;
+  handle.cdp.onClose(() => { if (!closing) release(); });
+  return { ...handle, async close() { closing = true; try { await handle.close(); } finally { release(); } } };
+}
+
+/** Joins a browser that is already running on this profile (a login window left open by an earlier command), if there is one. */
+export async function attachBrowser(profileDir: string): Promise<BrowserHandle | undefined> {
+  const release = await lockProfile(profileDir);
+  try {
+    const handle = await joinBrowser(profileDir);
+    if (!handle) { release(); return undefined; }
+    return holding(handle, release);
+  } catch (error) { release(); throw error; }
 }
 
 export interface LaunchOptions {
@@ -227,8 +318,9 @@ async function closeSpareBlankTabs(cdp: Cdp): Promise<void> {
   } catch { /* the tabs are only tidied; the browser works either way */ }
 }
 
-/** Joins the browser on this profile or starts one. */
+/** Joins the browser on this profile or starts one; another command using the profile is waited for. */
 export async function openBrowser(options: LaunchOptions): Promise<BrowserHandle> {
-  return (await attachBrowser(options.profileDir)) ?? launchBrowser(options);
+  const release = await lockProfile(options.profileDir);
+  try { return holding((await joinBrowser(options.profileDir)) ?? await launchBrowser(options), release); } catch (error) { release(); throw error; }
 }
 

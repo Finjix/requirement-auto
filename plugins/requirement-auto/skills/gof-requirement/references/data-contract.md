@@ -63,11 +63,12 @@ gof batch record --batch <batch> --step <step> [--group 01] [--evidence file.jso
 gof batch cls-check --batch <batch> --group 01 --action save_draft|import_scripts --observations observations.json
 gof batch status --batch <batch>
 gof batch message --batch <batch>
-gof batch report --batch <batch> --output <new report>.json
+gof batch report --batch <batch> [--output <batch>/<new report>.json]
 ```
 
 - `plan` prints the plan JSON (plan_id, sheet/column mapping, append range, values, formulas, names, dropdown options). Historical duplicate numbers become `history_warnings`; an unreadable existing number that could clash stops it.
-- `verify` returns `complete`, `not_applied`, `partial` or `conflict` (history changed, wrong field or unplanned addition). Feishu may extend an existing filter to the new last row; other filter changes are `conflict`.
+- `verify` returns `complete`, `not_applied`, `partial` or `conflict` (history changed, wrong field or unplanned addition). Feishu may extend an existing filter to the new last row; other filter changes are `conflict`. For a batch written through the API (`gof feishu append`) only the appended rows and the written columns' dropdowns can make it `conflict`; colleagues' edits elsewhere come back as `foreign_changes`.
+- `report` prints the report (with `links`); `--output` saves a copy, which must lie inside the batch directory.
 - `record` steps: `append_started`, `append_verified`, `cls_started`, `cls_api_attempt`, `draft_saved`, `scripts_imported`, `handoff`, `blocked`, `resumed`, `requirement_number`. Events are append-only. Evidence containing credentials is rejected.
   - `append_verified` / `resumed`: `evidence.validations` = `{ "transport": "feishu_api", "proof": "<absolute path of this batch's rule proof>" }`.
   - `cls_api_attempt`: `action` (`save_draft` / `import_scripts`), `operation_id`, `observations`. One attempt per action per group.

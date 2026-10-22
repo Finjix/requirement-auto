@@ -10,7 +10,7 @@ import { itemsOf } from './request.ts';
 import { acceptance, buildWrites, dropdowns, ruleProjection, ruleProof, type ApiRule } from './rules.ts';
 import { checkSeal, seal } from './seal.ts';
 import { FIELD_HEADERS, headerMatches, Snapshot } from './snapshot.ts';
-import { Blocked, canonical, digest, NODE, need, readJson, TARGET, writeJsonNew } from './util.ts';
+import { Blocked, canonical, digest, NODE, need, readJson, TARGET, writeJsonNew, WriteSent } from './util.ts';
 
 /**
  * The allowlisted Feishu transport: it calls the SDK bridge in this process (the same code the bridge command runs) and
@@ -294,11 +294,13 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
     const reportPath = path.join(attempt, 'verification-report.json');
     writeJsonNew(reportPath, report(batchPath));
     return { status: 'append_verified', batch: batchPath, worksheet: manifest.plan.worksheet, sheet_id: context.sheet_id, sheet_url: sheetUrl(context.sheet_id),
-      range: manifest.plan.range, report: reportPath, calls: bridge.calls };
+      range: manifest.plan.range, report: reportPath, calls: bridge.calls, ...(result.foreign_changes ? { foreign_changes: result.foreign_changes } : {}) };
   } catch (error) {
     if (started && !status(batchPath).blocked) {
       record(batchPath, 'blocked', null, { reason: '飞书接口写入/验收失败或结果未知；先回读，不重试', transport: 'feishu_api' });
     }
+    // A refusal after the send reads much like one before it ("…期间出现并发变化"): say plainly that the rows may be in the sheet already.
+    if (started) throw new WriteSent(`写入已发出，行可能已在表里：只能用 gof feishu reconcile 回读核对，不能重新 prepare 或再次追加（${(error as Error).message}）`, batchPath);
     throw error;
   } finally {
     fresh?.close();
@@ -366,11 +368,22 @@ export async function reconcile(bridge: Bridge, dir: string): Promise<Obj> {
     fresh = await exportSnapshot(bridge, token, path.join(output, 'fresh.xlsx'));
     const rules = await readRules(bridge, token, await sheetsOf(bridge, token));
     need(before === await revisionOf(bridge, token), '回读期间表格变化，不能生成验收证据');
-    ruleProof(path.join(output, 'rule-proof.json'), fresh, rules, context, manifest.plan);
-    const evidence = { transport: 'feishu_api', proof: path.join(output, 'rule-proof.json') };
-    const result = verify(batchPath, fresh, evidence);
+    let evidence: Obj | undefined;
+    let result: Obj;
+    try {
+      ruleProof(path.join(output, 'rule-proof.json'), fresh, rules, context, manifest.plan);
+      evidence = { transport: 'feishu_api', proof: path.join(output, 'rule-proof.json') };
+      result = verify(batchPath, fresh, evidence);
+    } catch (error) {
+      if (!(error instanceof Blocked) || evidence) throw error;
+      // The new rows do not carry the planned dropdowns, so nothing proves a complete append; the values still tell whether none, part or all
+      // of it landed, which is what the user has to be told. (A complete set of values without the dropdowns stays a refusal.)
+      let values: Obj;
+      try { values = verify(batchPath, fresh); } catch { throw error; }
+      result = { ...values, rule_issue: error.message };
+    }
     writeJsonNew(path.join(output, 'readback-report.json'), { verification: result, revision: before, snapshot_digest: fresh.fingerprint, calls: bridge.calls });
-    return { ...result, snapshot: fresh.path, validation_evidence: evidence, report: path.join(output, 'readback-report.json') };
+    return { ...result, snapshot: fresh.path, ...(evidence ? { validation_evidence: evidence } : {}), report: path.join(output, 'readback-report.json') };
   } finally {
     fresh?.close();
   }

@@ -141,7 +141,12 @@ export async function unpackZip(file: string, root: string, keep: (name: string)
   const dir = path.join(base, 'files');
   const done = path.join(base, 'complete.json');
   const label = (name: string) => `${path.basename(file)}：${name}`;
-  if (fs.existsSync(done)) return { dir, skipped: JSON.parse(fs.readFileSync(done, 'utf8')).skipped };
+  if (fs.existsSync(done)) {
+    // Used again: it is in use, so the retention sweep (which judges each unpacked zip by its newest file) must not take it before the upload runs.
+    const now = new Date();
+    fs.utimesSync(done, now, now);
+    return { dir, skipped: JSON.parse(fs.readFileSync(done, 'utf8')).skipped };
+  }
   fs.rmSync(base, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   const entries = (await listZip(file)).filter(e => !e.directory && !e.name.startsWith('__MACOSX/') && !JUNK.test(path.posix.basename(e.name)));

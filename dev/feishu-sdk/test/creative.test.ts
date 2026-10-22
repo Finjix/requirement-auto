@@ -219,6 +219,26 @@ test('a create that did not happen is reported as not found yet, and a later run
   } finally { fake.close(); }
 });
 
+test('a creative of the same name made by hand after a lost create is not taken for this batch\'s, and is left as it is', async () => {
+  const fake = await fakeCreative();
+  try {
+    const deps = depsFor();
+    fake.createMode = 'hang-up';
+    const file = await approvedPlan(fake, deps, { files: [materials({ 'a.mp4': 'aa' })], creator: '张天伟', producers: ['丁杰'] });
+    assert.equal((await runUpload(online(fake), file, deps)).status, 'unknown');
+    // Meanwhile the user uploads something called "a" on the page, with other people and a tag.
+    const byHand = { id: 99, name: 'a', upload_user_id: ACCOUNT.id, user_id: 1104, user_ids: [1104], producers: [1405], types: ['aigc'], custom_tags: ['手动标签'],
+      confirmed: true, materials: [{ id: 990, name: 'a', file_hash: 'f'.repeat(32) }] };
+    fake.creatives.set(99, structuredClone(byHand));
+    fake.createMode = 'normal';
+    const again = await runUpload(online(fake), file, deps);
+    assert.equal(again.status, 'unknown');
+    assert.deepEqual(again.missing.map((m: any) => m.name), ['a']);
+    assert.deepEqual(fake.creatives.get(99), byHand, 'not annotated');
+    assert.equal(writes(fake, 'multiple-edit'), 0);
+  } finally { fake.close(); }
+});
+
 test('a file CLS already has (same MD5) is reported, the rest go up', async () => {
   const fake = await fakeCreative();
   try {

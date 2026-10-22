@@ -14,7 +14,7 @@ import { context } from './context.ts';
 import { addOption, Bridge, execute, login, planSummary, planWithApi, probe, reconcile, recomputePlan, takeSnapshot } from './feishu.ts';
 import { makePlan } from './plan.ts';
 import { Snapshot } from './snapshot.ts';
-import { Blocked, checkTarget, isInside, need, readJson, writeJsonNew } from './util.ts';
+import { Blocked, checkTarget, isInside, need, readJson, writeJsonNew, WriteSent } from './util.ts';
 
 /*
  * The one entry point of the skill's scripts (server/dist/gof.mjs): `gof.mjs batch …`, `gof.mjs feishu …`, `gof.mjs cls …`.
@@ -289,6 +289,8 @@ export async function main(argv: string[], bridge: Bridge = new Bridge(), via: o
       return { result: { status: 'blocked', reason: error.message, ...(error.kind === 'unknown' ? { unknown_result: true } : {}),
         ...(error.draftId ? { draft_id: error.draftId } : {}), ...(error.operationId ? { operation_id: error.operationId } : {}) }, code: 2 };
     }
+    // After a write went out the caller must read back, never plan again: said in a field, not only in the wording of the reason.
+    if (error instanceof WriteSent) return { result: { status: 'blocked', reason: error.message, write_sent: true, batch: error.batch }, code: 2 };
     if (error instanceof Blocked || error instanceof Error) return { result: { status: 'blocked', reason: error.message }, code: 2 };
     return { result: { status: 'blocked', reason: String(error) }, code: 2 };
   }
