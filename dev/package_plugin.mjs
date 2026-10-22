@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PLUGIN = path.join(ROOT, 'plugins', 'requirement-auto');
-const SKILL = path.join(PLUGIN, 'skills', 'gof-requirement');
+const SKILLS = ['gof-requirement', 'gof-creative-upload'];
 const MARKETPLACE = path.join(ROOT, '.agents', 'plugins', 'marketplace.json');
 const FORBIDDEN_PARTS = new Set(['__pycache__', 'node_modules', '.state', '.git', '.codex', 'browser-profile']);
 const FORBIDDEN_NAMES = new Set(['auth.json', 'login.json', 'app.json', 'refresh.lock', '.env', 'account.json', 'login-qr.json']);
@@ -19,7 +19,7 @@ const FORBIDDEN_EXTENSIONS = ['.py', '.pyc', '.pyd', '.dll', '.exe', '.png'];
 const ENTRY_POINTS = ['bridge', 'gof'].map(name => `server/dist/${name}.mjs`);
 const REQUIRED_FILES = [
   'plugin.json', ...ENTRY_POINTS,
-  'skills/gof-requirement/SKILL.md', 'skills/gof-requirement/agents/openai.yaml',
+  ...SKILLS.flatMap(skill => [`skills/${skill}/SKILL.md`, `skills/${skill}/agents/openai.yaml`]),
   'skills/gof-requirement/assets/csv-template.csv', 'skills/gof-requirement/references/feishu-sdk-workflow.md',
 ];
 
@@ -49,10 +49,12 @@ export function problems() {
   } catch (error) {
     found.push(`plugin.json / marketplace.json unreadable: ${error.message}`);
   }
-  const skill = path.join(SKILL, 'SKILL.md');
-  const text = fs.existsSync(skill) ? fs.readFileSync(skill, 'utf8').replace(/\r\n/g, '\n') : '';
-  if (!/^---\nname: gof-requirement\ndescription: /.test(text)) found.push('SKILL.md: front matter must start with name: gof-requirement and a description');
-  if (/\.py\b|python/i.test(text)) found.push('SKILL.md: still mentions Python');
+  for (const name of SKILLS) {
+    const skill = path.join(PLUGIN, 'skills', name, 'SKILL.md');
+    const text = fs.existsSync(skill) ? fs.readFileSync(skill, 'utf8').replace(/\r\n/g, '\n') : '';
+    if (!new RegExp(`^---\\nname: ${name}\\ndescription: `).test(text)) found.push(`${name}/SKILL.md: front matter must start with name: ${name} and a description`);
+    if (/\.py\b|python/i.test(text)) found.push(`${name}/SKILL.md: still mentions Python`);
+  }
   if (fs.existsSync(PLUGIN)) {
     for (const file of walk(PLUGIN)) {
       const rel = path.relative(PLUGIN, file).split(path.sep);

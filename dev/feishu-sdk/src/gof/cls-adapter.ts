@@ -5,7 +5,8 @@ import { canonical, Blocked, CSV_HEADERS } from './util.ts';
 /*
  * The restricted CLS client: the only code that talks to CLS. It is built for one logged-in session and can do exactly what the
  * skill is allowed to do there: read the options, create an unpublished draft, import this batch's CSV into that draft, and read
- * the draft back. Publishing, deleting, updating existing requirements and uploading materials have no method and no allowed path.
+ * the draft back. Publishing, deleting, updating existing requirements and uploading materials have no method and no allowed path
+ * (the material upload is a separate client with its own allowed paths: creative-adapter.ts).
  * Every write is checked against a sealed operation file first and is never retried; whatever it answers is read back and compared.
  */
 

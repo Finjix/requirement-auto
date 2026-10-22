@@ -17,14 +17,27 @@ start.cmd
 - 以后改了插件：重复上面的复制和重启。内容变了（版本号没变也算）会自动整体替换；把文件夹从 `plugins/` 删掉就卸载；文件夹改名加 `_` 前缀就是停用。
 - 服务运行中复制没有效果，只在启动时扫描。
 
-用户不需要任何配置。用户在飞书里提出素材需求，Codex 会按技能描述自己选用 `requirement-auto:gof-requirement`；需要飞书登录时，Codex 运行 `gof.mjs feishu login start` 和 `gof.mjs feishu authorize --qr`，把二维码发给用户。
+用户不需要任何配置。用户在飞书里提出素材需求，Codex 会按技能描述自己选用 `requirement-auto:gof-requirement`；发来素材要求上传时选用 `requirement-auto:gof-creative-upload`。需要飞书登录时，Codex 运行 `gof.mjs feishu login start` 和 `gof.mjs feishu authorize --qr`，把二维码发给用户。
+
+### 素材上传与附件
+
+上传技能从 lark-agent 的附件说明里拿文件：lark-agent 把用户发来的附件下载到 `user/<名>/workspace/input/<原文件名>`，在提示开头写 `Files the user attached to this message …` 并列出绝对路径。技能只读这些文件，不移动、不改名；zip 解压到插件自己的 `tmp/unpacked/`；上传结束后的创意列表截图写进工作目录，随回复发回。lark-agent 一侧（2026-10-21 起）：
+
+| 情况 | 现在怎么处理 |
+|---|---|
+| 单独发送的视频（`media` 消息） | 按文件接收，保留原文件名 |
+| 文件和视频不超过 2 GB，图片不超过 100 MB | 超过 100 MB 的按飞书规定用 Range 分段（每段 30 MB）下载；太大时任务失败并把原因告诉用户 |
+| 每条消息最多 10 个附件；有任务在执行时，用户再发的消息被丢弃 | 未改；用 zip 一次发完 |
+| 文件夹（`folder` 消息，或图文里的文件夹） | 飞书的资源接口不支持文件夹（`type=file` 返回 500/40009，`type=folder` 返回 234001，与权限无关），机器人回复请用户压缩成 zip 再发 |
+
+批量素材的做法：把文件夹压缩成 zip 发给机器人，插件解压后按文件逐个建创意。
 
 ## 约定（宿主给插件什么）
 
 | 项目 | 内容 |
 |---|---|
 | 清单 | 文件夹里的 `plugin.json` 必须带 `$schema`（Agent Plugins），或者用 `.codex-plugin/plugin.json`。**不带 `$schema` 的根 `plugin.json`，Codex 报 `missing plugin.json`**（实测）；lark-agent 会在日志和 `doctor` 里说明原因 |
-| 插件在 Codex 里的名字 | `requirement-auto@lark-agent`；技能 `requirement-auto:gof-requirement` |
+| 插件在 Codex 里的名字 | `requirement-auto@lark-agent`；技能 `requirement-auto:gof-requirement`、`requirement-auto:gof-creative-upload` |
 | 每个用户每一轮的环境变量 | `LARK_AGENT_USER_DIR`（`user/<名>`，不是其中的 `workspace`）、`LARK_AGENT_USER_OPEN_ID`（飞书 Open ID）、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`（机器人的应用）。Codex 的 shell 工具拿得到，`gof.mjs` 直接读取 |
 | MCP 服务 | 插件不带 `mcp.json`，没有 MCP 服务。lark-agent 的 `mcpServers()` 读不到 `mcp.json` 时返回空，不注册、也不关闭任何服务；这段逻辑留着给以后声明了 MCP 的插件用 |
 | 数据位置 | `user/<名>/requirement-auto/{feishu,cls,batches,tmp}`。不在 `workspace/` 里，所以不在 lark-agent 的清理范围内，也不会被当作交付文件发给用户。登录（`feishu`、`cls`）一直保留；`batches` 和 `tmp` 由插件自己清理：每次运行 `gof` 开始时，删除 7 天（环境变量 `REQUIREMENT_AUTO_RETENTION_DAYS` 可改，整数天）内没有任何文件被创建、修改或移动过的批次目录和 tmp 文件（`src/retention.ts`）。批次整个删或整个不删，所以超过 7 天的未完成批次不能再恢复 |

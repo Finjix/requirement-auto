@@ -1,0 +1,6 @@
+interface:
+  display_name: "GOFCN 素材上传"
+  short_description: "把素材上传到 CLS 创意列表：默认双端共用-视频，创意人/制作人来自审核人/供应商，返回创意列表截图"
+  default_prompt: "Use $gof-creative-upload to upload my materials to CLS 我的创意 > 创意列表 > 上传创意: 上传目录 双端共用-视频, 创意人 = 创意者脚本审核人, 制作人 = 设计师供应商, 素材类型 by file kind, no 创意标签. Work out what you can, show one plan, and once I approve it upload, save and send me a screenshot of the creative list."
+policy:
+  allow_implicit_invocation: true

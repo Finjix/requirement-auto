@@ -1,6 +1,6 @@
 # requirement-auto
 
-GOFCN 素材需求自动化的 **Codex 插件**（可被 ChatGPT/Codex 桌面版或 lark-agent 加载）：通过飞书 SDK 防覆盖追加创意进度表并验收，生成 CSV，保存 CLS 未发布草稿、导入脚本，生成可复制群消息。飞书用户登录用设备授权，登录信息按用户隔离存放。
+GOFCN 素材需求自动化的 **Codex 插件**（可被 ChatGPT/Codex 桌面版或 lark-agent 加载）：通过飞书 SDK 防覆盖追加创意进度表并验收，生成 CSV，保存 CLS 未发布草稿、导入脚本，生成可复制群消息；另有素材上传技能，把用户给的一批素材按 CLS「上传创意」页面的规则上传到创意列表并返回截图。飞书用户登录用设备授权，登录信息按用户隔离存放。
 
 ## 目录
 
@@ -9,7 +9,8 @@ GOFCN 素材需求自动化的 **Codex 插件**（可被 ChatGPT/Codex 桌面版
 plugins/requirement-auto/            插件本体，安装和打包的就是这个目录
   plugin.json                        可移植插件清单（Agent Plugins 1.0.0）
   server/dist/                       桥和技能命令行 gof.mjs 的打包产物（提交入库，装好即用）
-  skills/gof-requirement/            技能：SKILL.md、references/、assets/（CSV 模板）
+  skills/gof-requirement/            技能：需求自动化（SKILL.md、references/、assets/CSV 模板）
+  skills/gof-creative-upload/        技能：素材上传到 CLS 创意列表（SKILL.md）
 dev/                                 开发专用，不进入发布包
   feishu-sdk/                        桥和 gof 命令行的 TypeScript 源码（src/gof/ 是业务逻辑）、esbuild 脚本、测试和 XLSX 夹具
   package_plugin.mjs                 插件结构检查和打包
@@ -28,6 +29,17 @@ docs/lark-agent-integration.md       放进 lark-agent：怎么放、两边的�
 - **每个任务都检查登录，不只是第一次**：`gof.mjs login check` 真实地检查飞书和 CLS，**先飞书后 CLS、一次只向用户要一个登录**：飞书没登录时只返回飞书的 `todo`，CLS 记为 `not_checked`（不启动浏览器），飞书登录好后下一次检查才轮到 CLS 二维码。飞书登录也在这个无头浏览器里完成：`gof.mjs feishu authorize --qr` 在浏览器里打开设备授权链接，浏览器没有飞书网页登录态时停在飞书扫码页并把二维码交给用户，扫码后 `gof.mjs feishu authorize` 自动点飞书授权页的【授权】，再 `gof.mjs feishu login poll` 收登录；因为浏览器资料目录与 CLS 共用，这一次扫码同时让 CLS 的单点登录通过，CLS 不再要第二次扫码（真实环境实测：扫码一次，`login check` 4 秒内两边都 ok）。飞书是向飞书服务器验证（只看本地过期时间会漏掉用户在飞书里撤销授权的情况；令牌过期会自动续一次，也把闲置的登录续期，刷新令牌 7 天不用就失效），CLS 是在无头浏览器里取一次真实会话。返回 `ok`、`login_required`（带 `todo`，说明该让用户做什么）、`blocked`（账号不一致、授权页不对等，重新登录解决不了）或 `unknown`（暂时连不上飞书，不说明登录失效）；只读，退出码非 0 表示有问题。技能规定每个任务开始、用户批准计划之后第一次写入之前、进入 CLS 阶段之前、任何命令报登录失效时、中断恢复时都要运行它。
 - **多用户共用一台电脑的保护**（`src/gof/cls-guard.ts`）：第一次登录的 CLS 账号按用户记在 `cls/account.json`，之后换了账号就拒绝。宿主给了 `LARK_AGENT_USER_OPEN_ID` 却没有 `LARK_AGENT_USER_DIR` 时，所有命令直接拒绝，不回落到共用目录。
 - **没有 MCP 服务**：登录和业务都是 `gof.mjs` 命令，由 Codex 的 shell 工具运行，直接继承宿主给 Codex 进程的环境变量（用户目录、Open ID、应用凭证）。插件声明的 MCP 进程拿不到这些变量（Codex 0.163.0 实测），曾需要宿主每轮另行注册，所以去掉了。
+
+## 素材上传（gof-creative-upload）
+
+用户发来或指定一批素材（视频、图片、文件夹），技能按 CLS **我的创意 > 创意列表 > 上传创意** 的规则上传：一个文件一个创意，名称是去掉扩展名的文件名；上传目录默认 `双端共用-视频`；创意人取需求的**创意者脚本审核人**、制作人取**设计师供应商**（依次来自用户的话、本次对话里处理过的需求、按文件名里的 GOFCN 素材编号查进度表那一行，都没有才问）；素材类型按文件判断（图片 → 图片，视频 → 视频，其余 → 其他）；创意标签不填。先给一份计划请用户确认，确认后上传、保存标注、回读核对，最后返回创意列表截图。
+
+- **走页面自己的 HTTP 接口，不用开放 API**：前端源码（webpack 带源码的包）里“上传创意”页的调用依次是 `GET /api/game/adsdesk/dirs`（上传目录树）、`/api/game/recommend-filters`（创意人、制作人候选）、`/api/material/filters?fields=types`（素材类型）→ `POST /api/qcloud/signed-url`（每个文件一个腾讯云 COS 预签名 PUT 链接，只签 host，约 61 分钟有效）→ 直接 `PUT` 到 COS（不带 CLS 凭证）→ `POST /api/creative/multiple-upload?confirmed=1`（= 页面的【下一步】，按名称建创意并指定上传目录）→ `POST /api/creative/multiple-edit`（= 【保存】：`sponsor` 创意人、`producers` 制作人、`types` 素材类型、`custom_tags` 留空）。全部用 CLS 登录取得的 `Authorization: Bearer`，Node 直接调用已实测可用（2026-10-21）。飞书知识库里的《CLS OPEN_API》要 `X-Api-Key`、必须给 `primary_tag`、没有上传目录和素材类型，不符合这里的需求，没有使用。
+- **实测到的规则**：签名阶段只要有一个名称在 CLS 已存在，整批被拒（HTTP 200、业务码 403、`以下创意已存在: …`），所以计划阶段先按名称查重；CLS 只给 mp4/mov/avi/m4v、jpg/jpeg/png/gif/webp/bmp、html、mp3/wav 签链接（mkv、webm、flv、wmv、tif、heic、psd、pdf、txt 等没有）；压缩包按页面说明不能直接上传（插件先解压 zip，再按里面的文件上传）；建创意时 MD5 相同的文件会被拒（`fail`）。指定了上传目录的创意会由 CLS 自动同步到 AdsDesk 的该目录（实测已有创意约 2 分钟后同步）。
+- **命令**：`gof creative options [--find 目录名]`、`gof creative plan --request … --output …`（只读：哈希文件、读 CLS 选项、按需读进度表、名称查重，写出加封的计划）、`gof creative run --plan …`（执行；再次运行同一计划会接着做）、`gof creative status --plan …`、`gof creative screenshot --output x.png [--rows N]`。
+- **安全边界**（`src/gof/creative-adapter.ts`，和需求流程的 CLS 客户端分开，后者仍然不能上传）：路径白名单，只有读选项、签名、PUT 到本次签出的 COS 链接、建创意、保存标注和页面同样的上传日志；没有删除、发布、确认、改标签。建创意每批只发一次（发出前独占创建标记文件），结果未知就按名称回读查找，永不重发；标注只是赋值，只在回读显示没生效时补发，最多 3 次。签名链接只在进程内存里，不写盘不打印。计划加封，执行前核对文件哈希、账号、目录、人员和类型仍然有效。
+- **截图**：在该用户自己的无头 CLS 浏览器里打开应用，用应用自己的路由进入创意列表（直接整页打开 `/creativities` 会在权限加载前被挡到“无权限”页），列表筛选设为“上传人 = 当前账号、按更新时间倒序”（写在该浏览器资料的本地存储里），等行和缩略图画完再截 2000px 宽的图；不点击、不输入，CLS 里不改任何东西。
+- **进度表查找**：`"progress": true` 读插件的进度表（就是需求流程写入的那个测试节点，目前编号到 GOFCN66386，更新的素材查不到），或给用户提供的进度表链接（只读导出）。同一编号多行、没有编号、查不到都会列出来要求写明。
 
 ## 安装与使用
 
@@ -72,10 +84,12 @@ npm test                                # 类型检查 → 打包到 plugins/...
 4. **CLS 写入**：从二维码到登录的整条路已在真实 CLS 上验证（2026-10-20，本机 Edge，无头）：生成二维码并发给用户 → 用户用飞书手机端扫码 → 浏览器停在 `dsc_admin` 授权页 → `cls session` 自动点【授权】并取到登录（3 秒）→ 之后连续的静默检查成功，二维码图片和等待的浏览器都已清理；令牌只带 Authorization 头就被 `/api/userinfo` 和 `cls catalog` 接受，另一个用户目录仍是未登录。还没做的是写入：用独立的测试草稿走一遍 `cls observe → run`。
 5. 在测试进度表上走一遍全流程。
 6. **从需求链接自动整理**：读需求文档和 `context` 已在真实的四份示例文档和测试进度表上只读跑过（行数 15/14/7 正确，供应商历史、下拉选项、以前的批次都读得出来）；CLS 名称匹配用真实目录验证过（丁杰、杨燃、冯彦蓉都能对上）。还没在真实表格上做过的写入：给创意形式、供应商（多选列）、审核人列 `dropdown-add`，以及一次含多种行（`items`）的完整追加和建单。
+7. **素材上传**：已在真实 CLS 上只读验证（2026-10-21）：`creative options`（GOFCN、上传权限、默认目录 `双端共用-视频` id 1585089、72 个创意人、144 个制作人、11 种素材类型）、`creative plan`（含进度表查找：GOFCN66367 → 26年1月-GOFCN 第 9960 行，创意人 张天伟、制作人 谢振文）、签名接口（只申请链接、没有上传）、`creative screenshot`（与页面一致）。**还没做的是真实写入**：PUT 到 COS、`multiple-upload` 建创意、`multiple-edit` 保存标注。真实上传会在 GOFCN 创意列表里新建创意并自动同步到 AdsDesk；能不能删掉不确定（账号角色 `creative_plan` 没有 `creative.delete`，GOFCN 分组角色 `creative_plan_junior` 有），AdsDesk 里已同步的副本会不会跟着删也不清楚，所以要先经你同意、用你认可的素材做一次。
 
 ## 已知限制
 
 - CLS 登录靠用户在自己的手机上扫码，不需要有人在运行机器人的电脑前，也不需要桌面；这台电脑要装 Chrome 或 Edge。没有弹窗口登录这条路，渠道看不到图片时就无法登录。
+- 素材在 lark-agent 里只能作为附件到达：飞书不允许机器人下载用户拖进来的**文件夹**（资源接口只认图片和文件，与权限无关，2026-10-21 实测全部接口都不行），所以文件夹要压缩成 zip 发送，插件在计划阶段流式解压（支持 zip64、UTF-8 与 GBK 文件名、CRC 校验；只取顶层或唯一一层文件夹里的文件）。单独发的视频、2 GB 以内的文件 lark-agent 都能收（超过 100 MB 的按飞书规定分段下载）；一条消息最多 10 个附件，任务进行中发来的消息仍会被丢弃（见 [docs/lark-agent-integration.md](docs/lark-agent-integration.md)）。
 - 夹具来自 openpyxl 生成的文件，不是飞书真实导出的 XLSX。解析器对共享公式、内联字符串、x14 下拉扩展等做了处理，但真实导出的样式/验证写法只有拿到一份真实文件才能确认；建议把一份真实导出的进度表加进夹具。
 
 ## 依赖版本

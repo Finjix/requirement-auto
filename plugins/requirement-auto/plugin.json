@@ -1,20 +1,21 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "requirement-auto",
-  "version": "1.0.0",
-  "description": "GOFCN 素材需求自动化：追加创意进度表并验收、生成 CSV、保存 CLS 未发布草稿，配套按用户隔离的飞书设备授权登录。",
-  "keywords": ["feishu", "lark", "gofcn", "requirement", "automation"],
+  "version": "1.1.0",
+  "description": "GOFCN 素材需求自动化：追加创意进度表并验收、生成 CSV、保存 CLS 未发布草稿；素材上传到 CLS 创意列表并返回截图；配套按用户隔离的飞书设备授权登录。",
+  "keywords": ["feishu", "lark", "gofcn", "requirement", "automation", "cls", "upload"],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "GOFCN 需求自动化",
-        "shortDescription": "追加创意进度表并验收，生成 CSV，保存 CLS 草稿，飞书登录按用户隔离",
-        "longDescription": "处理 GOFCN 素材需求：用户给出一份或多份飞书需求链接后（多份文档一次完成），自动整理条数、标签、供应商、审核人和 CLS 字段，推不出的才问；确认完整计划后通过飞书 SDK 防覆盖追加创意进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 未发布草稿、导入脚本并给出一条汇总所有需求的可复制群消息。飞书用户授权通过设备授权完成，登录信息只保存在当前用户自己的目录里。",
+        "shortDescription": "追加创意进度表并验收，保存 CLS 草稿；上传素材到 CLS 创意列表；飞书登录按用户隔离",
+        "longDescription": "处理 GOFCN 素材需求：用户给出一份或多份飞书需求链接后（多份文档一次完成），自动整理条数、标签、供应商、审核人和 CLS 字段，推不出的才问；确认完整计划后通过飞书 SDK 防覆盖追加创意进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 未发布草稿、导入脚本并给出一条汇总所有需求的可复制群消息。素材上传：用户发来或指定一批素材后，按 CLS 我的创意 > 创意列表 > 上传创意 的规则上传（默认上传目录 双端共用-视频，创意人取创意者脚本审核人，制作人取设计师供应商，可按素材编号查进度表，素材类型按文件判断），确认计划后上传、保存标注、回读核对，并返回创意列表截图。飞书用户授权通过设备授权完成，登录信息只保存在当前用户自己的目录里。",
         "developerName": "requirement-auto",
         "category": "Productivity",
         "capabilities": ["Read", "Write"],
         "defaultPrompt": [
-          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with the scripts imported, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end."
+          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with the scripts imported, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end.",
+          "Use $gof-creative-upload to upload my materials to CLS 创意列表 (上传目录 双端共用-视频, 创意人 = 创意者脚本审核人, 制作人 = 设计师供应商, 素材类型 by file kind, no 创意标签): show one plan, and once I approve it upload, save and send me a screenshot of the creative list."
         ]
       }
     }

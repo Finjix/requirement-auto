@@ -17,7 +17,7 @@ function unique<T>(items: T[], predicate: (item: T) => boolean, label: string): 
 }
 
 /** The short names a CLS name carries: in brackets ("…（丁杰）") or after a final dash ("…（个体工商户）-杨燃"). */
-function aliases(name: string): string[] {
+export function aliases(name: string): string[] {
   const found = [...name.matchAll(/[（(]([^（）()]+)[）)]/g)].map(m => m[1]!);
   const dash = /[-－—]\s*([^-－—（）()]+)$/.exec(name);
   if (dash) found.push(dash[1]!.trim());
@@ -30,7 +30,7 @@ function aliases(name: string): string[] {
  * 达治 → 达治（武汉）文化传媒有限公司). A name the request gives the CLS way (`cls.supplier` / `cls.creator`) must match exactly. The first
  * level that finds anyone decides, and it must find exactly one.
  */
-function matchUser(users: Obj[], wanted: string, exact: boolean, label: string): Obj {
+export function matchUser(users: Obj[], wanted: string, exact: boolean, label: string): Obj {
   const levels: ((user: Obj) => boolean)[] = [user => user.name === wanted];
   if (!exact) {
     levels.push(user => aliases(String(user.name)).includes(wanted), user => [...wanted].length >= 2 && String(user.name).includes(wanted));

@@ -6,6 +6,7 @@ import { clsCheck, message, preflight, prepare, record, report, status, verify }
 import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
+import * as creative from './creative-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
 import { readBrief } from './brief.ts';
 import { context } from './context.ts';
@@ -214,6 +215,24 @@ function clsCommand(args: string[]): Result {
   return { status: 'operation_ready', operation: output, operation_id: op.operation_id, native_defaults: op.native_defaults };
 }
 
+/** The material upload (see creative-online.ts): options and plan only read; run uploads what an approved plan says. */
+async function creativeCommand(command: string, args: string[], bridge: Bridge, via: online.Online): Promise<Result> {
+  switch (command) {
+    case 'options': return creative.uploadOptions(via, str(parse(args, { find: { type: 'string' } }).values.find));
+    case 'plan': {
+      const { values } = parse(args, { request: { type: 'string' }, output: { type: 'string' } });
+      return creative.planUpload(via, bridge, mustHave(values.request, 'request'), mustHave(values.output, 'output'));
+    }
+    case 'run': return creative.runUpload(via, mustHave(parse(args, { plan: { type: 'string' } }).values.plan, 'plan'));
+    case 'status': return creative.uploadStatus(mustHave(parse(args, { plan: { type: 'string' } }).values.plan, 'plan'));
+    case 'screenshot': {
+      const { values } = parse(args, { output: { type: 'string' }, rows: { type: 'string' } });
+      return creative.listPicture(via, mustHave(values.output, 'output'), values.rows === undefined ? undefined : intOf(values.rows, 'rows'));
+    }
+    default: throw new Blocked(`未知的 creative 子命令：${command}`);
+  }
+}
+
 /**
  * The two logins, checked for real: Feishu by asking Feishu, CLS by looking in the browser that holds its session. Each task starts
  * with this, and so does each stage that follows a wait (see SKILL.md), so that a login that has lapsed is found before any work
@@ -249,8 +268,11 @@ export async function main(argv: string[], bridge: Bridge = new Bridge(), via: o
     else if (group === 'feishu') result = await feishuCommand(command ?? '', rest, bridge, web);
     else if (group === 'login' && command === 'check') result = await loginCheck(bridge, via);
     else if (group === 'cls') result = CLS_ONLINE.includes(command ?? '') ? await clsOnlineCommand(command!, rest, via) : clsCommand(argv.slice(1));
-    else throw new Blocked('用法：gof.mjs <batch|feishu|cls|login> <命令> [参数]');
-    const blocked = ['conflict', 'partial', 'not_applied'].includes(result.status) || (group === 'feishu' && result.status === 'blocked') || (group === 'login' && result.status !== 'ok');
+    else if (group === 'creative') result = await creativeCommand(command ?? '', rest, bridge, via);
+    else throw new Blocked('用法：gof.mjs <batch|feishu|cls|creative|login> <命令> [参数]');
+    const blocked = ['conflict', 'not_applied'].includes(result.status) || (result.status === 'partial' && group !== 'creative')
+      || (group === 'feishu' && result.status === 'blocked') || (group === 'login' && result.status !== 'ok')
+      || (group === 'creative' && ['blocked', 'unknown'].includes(result.status));
     return { result, code: blocked ? 2 : 0 };
   } catch (error) {
     if (error instanceof ClsError) {
