@@ -33,8 +33,10 @@ export const DIRS = [{ id: 1572252, name: '无尽冬日 - NEW', children: [
   { id: 1573590, name: '营销素材', children: [{ id: 1585181, name: '双端共通', children: [] }, { id: 1585190, name: '图片', children: [] }] },
 ] }];
 export const PEOPLE = {
-  creative_users: [{ id: 653, name: '张天伟' }, { id: 1104, name: '雷佳威' }, { id: 1565, name: '钟丰骏-实习生' }, { id: 1233, name: '李晨阳' }, { id: 492, name: '李晨阳' }],
-  producers: [{ id: 663, name: '北京柒曦文化传媒有限公司（丁杰）' }, { id: 1405, name: '谢振文' }, { id: 1163, name: '盂县丰创智慧技术服务工作室（个体工商户）-杨燃' }, { id: 653, name: '张天伟' }],
+  creative_users: [{ id: 653, name: '张天伟' }, { id: 1104, name: '雷佳威' }, { id: 1565, name: '钟丰骏-实习生' }, { id: 1233, name: '李晨阳' }, { id: 492, name: '李晨阳' }, { id: 2001, name: '金莉' }],
+  producers: [{ id: 663, name: '北京柒曦文化传媒有限公司（丁杰）' }, { id: 1405, name: '谢振文' }, { id: 1163, name: '盂县丰创智慧技术服务工作室（个体工商户）-杨燃' }, { id: 653, name: '张天伟' },
+    // The progress sheet calls this supplier 廿十一.
+    { id: 2002, name: '长沙廿拾一文化传媒有限公司' }],
 };
 export const TYPES = [{ id: 'video', name: '视频' }, { id: '2d_video', name: '2D视频' }, { id: 'image', name: '图片' }, { id: 'aigc', name: 'AI生成' }, { id: 'other', name: '其他' }];
 

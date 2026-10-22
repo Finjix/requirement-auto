@@ -7,6 +7,7 @@ import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
 import * as creative from './creative-online.ts';
+import { parseNumbers } from './creative.ts';
 import { draftPicture, sheetPicture } from './shots-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
 import { readBrief } from './brief.ts';
@@ -224,10 +225,18 @@ function clsCommand(args: string[]): Result {
   return { status: 'operation_ready', operation: output, operation_id: op.operation_id, native_defaults: op.native_defaults };
 }
 
-/** The material upload (see creative-online.ts): options and plan only read; run uploads what an approved plan says. */
+/** The material upload (see creative-online.ts): options, rows and plan only read; run uploads what an approved plan says. */
 async function creativeCommand(command: string, args: string[], bridge: Bridge, via: online.Online): Promise<Result> {
   switch (command) {
     case 'options': return creative.uploadOptions(via, str(parse(args, { find: { type: 'string' } }).values.find));
+    case 'rows': {
+      const { values } = parse(args, { numbers: { type: 'string' }, find: { type: 'string' }, progress: { type: 'string' } });
+      const numbers = str(values.numbers) ? parseNumbers(str(values.numbers)!) : [];
+      const texts = (str(values.find) ?? '').split(/[,，、]+/).map(t => t.trim()).filter(Boolean);
+      need(texts.length <= 20 && texts.every(t => [...t].length <= 50), '--find 最多 20 段文字（逗号分开），每段 50 字以内');
+      const progress = str(values.progress);
+      return creative.findRows(bridge, { numbers, texts, ...(progress ? { progress } : {}) });
+    }
     case 'plan': {
       const { values } = parse(args, { request: { type: 'string' }, output: { type: 'string' } });
       return creative.planUpload(via, bridge, mustHave(values.request, 'request'), mustHave(values.output, 'output'));

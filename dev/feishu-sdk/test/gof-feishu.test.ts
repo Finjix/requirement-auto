@@ -598,3 +598,23 @@ test('plan --output saves the whole plan and prints only what the user is shown,
   const again = await main(args, bridge);
   assert.deepEqual([again.code, again.result.reason], [2, '计划文件已存在，不覆盖']);
 });
+
+test('the plan shows each row\'s 提炼词 and says how many rows have none of their own (the default 关键词), for the user to confirm', async () => {
+  const { bridge } = await approvedBatch();
+  const dir = tmp(), cls = { direction: '方向一', task_type: 'creative_a' };
+  // The 终稿库 example: each piece is headed "GOFCN56890 企鹅保龄球 V15", and the 国风配乐 version is a second 围炉煮冰 row.
+  const request = { groups: [
+    { supplier: '供应商丙', reviewer: '张三', script_url: 'https://centurygames.feishu.cn/docx/ABC123def', primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频', cls,
+      items: [{ quantity: 1, keyword: '企鹅保龄球' }, { quantity: 1, keyword: '冻鱼飞盘' }, { quantity: 2, keyword: '围炉煮冰' }] },
+    { supplier: '供应商甲', reviewer: '李四', script_url: 'https://centurygames.feishu.cn/wiki/XYZ789', primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频', quantity: 2, cls },
+  ] };
+  fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify(request));
+  const { result, code } = await main(['feishu', 'plan', '--request', path.join(dir, 'request.json'), '--snapshot', path.join(fixtures, 'base.xlsx'), '--output', path.join(dir, 'plan.json')], bridge);
+  assert.equal(code, 0, JSON.stringify(result));
+  assert.deepEqual(result.groups[0].items.map((i: any) => [i.quantity, i.first, i.last]), [
+    [1, 'GOFCN1011_玩法_卖点_视频_企鹅保龄球', 'GOFCN1011_玩法_卖点_视频_企鹅保龄球'], [1, 'GOFCN1012_玩法_卖点_视频_冻鱼飞盘', 'GOFCN1012_玩法_卖点_视频_冻鱼飞盘'],
+    [2, 'GOFCN1013_玩法_卖点_视频_围炉煮冰', 'GOFCN1014_玩法_卖点_视频_围炉煮冰']]);
+  assert.equal(result.groups[0].default_keyword_rows, undefined, 'every row has a 提炼词 of its own');
+  assert.equal(result.groups[1].default_keyword_rows, 2);
+  assert.equal(result.groups[1].items[0].first, 'GOFCN1015_玩法_卖点_视频_关键词');
+});

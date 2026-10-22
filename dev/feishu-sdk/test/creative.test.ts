@@ -4,16 +4,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildUploadPlan, creativeName, findDirectory, loadUploadPlan, materialNumber, normalizeUploadRequest, progressRowsFrom, scanMaterials,
-  uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
+  buildUploadPlan, creativeName, findDirectory, formulaText, loadUploadPlan, materialNumber, normalizeUploadRequest, parseNumbers, progressRowsFrom,
+  scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
 } from '../src/gof/creative.ts';
 import { createCreativeAdapter } from '../src/gof/creative-adapter.ts';
-import { planUpload, runUpload, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
+import { findRows, planUpload, runUpload, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
 import type { Online } from '../src/gof/cls-online.ts';
+import type { Bridge } from '../src/gof/feishu.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
-import { Blocked } from '../src/gof/util.ts';
+import { Blocked, NODE } from '../src/gof/util.ts';
 import { ACCOUNT, DIRS, fakeCreative, GAME, PEOPLE, TYPES, type FakeCreative } from './helpers/fake-creative.ts';
 import { tempDir } from './helpers/tmp.ts';
+import { makeXlsx } from './helpers/xlsx-writer.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OPTIONS: UploadOptions = { account: ACCOUNT, game: { id: GAME.id, code: GAME.code, name: GAME.name }, can_upload: true, directories: DIRS, creators: PEOPLE.creative_users, producers: PEOPLE.producers, types: TYPES };
@@ -40,13 +42,48 @@ const online = (fake: FakeCreative, account = ACCOUNT): Online => ({
 });
 const depsFor = (): UploadDeps => ({ adapter: { uploadHost: /^127\.0\.0\.1$/, allowHttpUpload: true }, batchRoot: tempDir('upload-batches-'), tmpDir: tempDir('upload-tmp-'), sleep: async () => undefined, reconcileTries: 1 });
 
-async function approvedPlan(fake: FakeCreative, deps: UploadDeps, request: Record<string, unknown>): Promise<string> {
+/** A plan the user approved. These tests are about the run, so the files keep their names unless the request asks for the progress sheet. */
+async function approvedPlan(fake: FakeCreative, deps: UploadDeps, request: Record<string, unknown>, bridge?: Bridge): Promise<string> {
   const dir = tempDir('upload-plan-');
-  fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify(request));
-  const summary = await planUpload(online(fake), undefined, path.join(dir, 'request.json'), path.join(dir, 'plan.json'), deps);
+  fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ progress: false, ...request }));
+  const summary = await planUpload(online(fake), bridge, path.join(dir, 'request.json'), path.join(dir, 'plan.json'), deps);
   assert.equal(summary.status, 'upload_plan');
   return summary.plan;
 }
+
+/**
+ * The progress sheet of the 终稿库 example (玩法AI迭代素材.zip): the two originals the new pieces build on, the four rows the
+ * requirement appended for them (围炉煮冰 twice: the V90 and its 国风配乐 version), and a row named by SUBSTITUTE as some newer rows are.
+ */
+const HEADER = ['', '创意批次', '素材编号', '提炼词', '片头引用（初版编号）', '创意引用（海外汉化解说/迭代）（初版编号）', '素材名称', '一级标签（方向）',
+  '二级标签（卖点）', '创意表达（可多选）', '创意形式（制作形式）', '客户端', '设计师供应商', '创意者脚本审核人'];
+function progressRow(row: number, number: number, keyword: string, tags: [string, string, string], people: [string, string], substitute = false) {
+  const inner = `CONCATENATE("GOFCN",C${row},"_",H${row},"_",I${row},"_",K${row},"_",D${row},L${row})`;
+  return [null, null, number, keyword, null, null, { f: substitute ? `SUBSTITUTE(${inner},"__","_")` : inner }, tags[0], tags[1], null, tags[2] || null, null, people[0], people[1]];
+}
+function finalCutSheet(): string {
+  const file = path.join(tempDir('progress-'), 'progress.xlsx');
+  fs.writeFileSync(file, makeXlsx([{ name: '26年1月-GOFCN', rows: [HEADER,
+    progressRow(2, 56890, '火车运输御敌-斜', ['汉化', '竞争对抗', '3D'], ['廿十一', '金莉']),
+    progressRow(3, 44065, '转斧杀熊烤肉', ['汉化', '资源城建', '3D'], ['廿十一', '金莉']),
+    progressRow(4, 67680, '企鹅保龄球', ['AI生成', '设定3.0', '3D'], ['廿十一', '金莉']),
+    progressRow(5, 67681, '冻鱼飞盘', ['AI生成', '设定3.0', '3D'], ['廿十一', '金莉']),
+    progressRow(6, 67682, '围炉煮冰', ['AI生成', '设定3.0', '3D'], ['廿十一', '金莉']),
+    progressRow(7, 67683, '围炉煮冰', ['AI生成', '设定3.0', '3D'], ['廿十一', '金莉']),
+    progressRow(8, 67684, '关键词', ['AI生成', '设定3.0', ''], ['菲比', '钱程'], true),
+  ] }]));
+  return file;
+}
+/** Feishu as far as the progress lookup goes: the plugin's sheet node, exported as the given workbook. */
+const sheetBridge = (xlsx: string, exports: string[] = []): Bridge => ({
+  doctor: async () => ({ status: 'ok' }),
+  apiRead: async () => ({ node: { node_token: NODE, obj_type: 'sheet', obj_token: 'shtTEST' } }),
+  exportSheet: async (_token: string, output: string) => { exports.push(output); fs.copyFileSync(xlsx, output); return { status: 'exported' }; },
+}) as unknown as Bridge;
+/** The four videos of 玩法AI迭代素材.zip, under their names there, and which row each is according to the 终稿库 document. */
+const FINAL_CUT_FILES = { 'g44065_gf_v90.mp4': 'guofeng', 'g44065_v90.mp4': 'cartoon', 'g56890_a_v15.mp4': 'penguin', 'g56890_c_v21.mp4': 'fish' };
+const FINAL_CUT_ITEMS = [{ file: 'g56890_a_v15.mp4', number: 67680 }, { file: 'g56890_c_v21.mp4', number: 67681 },
+  { file: 'g44065_v90.mp4', number: 67682 }, { file: 'g44065_gf_v90.mp4', number: 'GOFCN67683' }];
 
 const writes = (fake: FakeCreative, suffix: string) => fake.requests.filter(r => r.method === 'POST' && r.path.endsWith(suffix)).length;
 
@@ -71,7 +108,38 @@ test('the request takes only the known fields, each in its form', () => {
   assert.throws(() => normalizeUploadRequest({ files: [] }), /files/);
   assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], producers: '丁杰' }), /producers/);
   assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', creater: 'x' }] }), /未知字段：creater/);
-  assert.deepEqual(normalizeUploadRequest({ files: ['a.mp4'], progress: false }), { files: ['a.mp4'] });
+  assert.deepEqual(normalizeUploadRequest({ files: ['a.mp4'], progress: false }), { files: ['a.mp4'], progress: false });
+  assert.deepEqual(normalizeUploadRequest({ files: ['a.mp4'] }), { files: ['a.mp4'], progress: true }, 'the progress sheet is read unless the request says not to');
+  assert.deepEqual(normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: 'GOFCN67680' }, { file: 'b.mp4', number: 67681 }] }).items!.map(i => i.number), [67680, 67681]);
+  assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: 'GOFCN20261022001' }] }), /GOFCN 素材编号/);
+  for (const bad of [20261022001, 67680.5, 0, -3, '企鹅保龄球']) assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: bad }] }), /GOFCN 素材编号/);
+  assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', name: '新名称' }] }), /素材名称，不能另起/, 'with the sheet the name is never typed in');
+  assert.equal(normalizeUploadRequest({ files: ['a.mp4'], progress: false, items: [{ file: 'a.mp4', name: '新名称' }] }).items![0]!.name, '新名称');
+  assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], progress: false, items: [{ file: 'a.mp4', number: 67680 }] }), /只在按进度表上传时有用/);
+});
+
+test('material numbers on the command line: single, ranges as CLS names them, with or without GOFCN', () => {
+  assert.deepEqual(parseNumbers('67680-67683,67690'), [67680, 67681, 67682, 67683, 67690]);
+  assert.deepEqual(parseNumbers('GOFCN67680-GOFCN67682 GOFCN67680'), [67680, 67681, 67682]);
+  assert.deepEqual(parseNumbers('67682、67680'), [67682, 67680]);
+  assert.throws(() => parseNumbers('67683-67680'), /范围不对/);
+  assert.throws(() => parseNumbers('1-1000'), /范围不对/);
+  assert.throws(() => parseNumbers('企鹅'), /看不懂的编号/);
+});
+
+test('naming formulas read as the sheet shows them: CONCATENATE with empty arguments, SUBSTITUTE around it, a cell of another row', () => {
+  const cells: Record<string, string | null> = { C9: '67651', H9: 'AI生成', I9: '设定3.0', K9: '', D9: '关键词', L9: '', F8: 'GOFCN23972', G7: null };
+  const at = (coord: string) => (coord in cells ? cells[coord]! : '');
+  assert.equal(formulaText('=CONCATENATE("GOFCN",C9,"_",H9,"_",I9,"_",K9,"_",D9,L9)', at), 'GOFCN67651_AI生成_设定3.0__关键词');
+  assert.equal(formulaText('=SUBSTITUTE(CONCATENATE("GOFCN",C9,"_",H9,"_",I9,"_",K9,"_",D9,L9),"__","_")', at), 'GOFCN67651_AI生成_设定3.0_关键词');
+  assert.equal(formulaText('=CONCATENATE("GOFCN",$C$9,"_",H9,"_",D9,,L9)', at), 'GOFCN67651_AI生成_关键词', 'an empty argument is an empty text');
+  assert.equal(formulaText('=concat("GOFCN",C9,"_迭代_",F8)', at), 'GOFCN67651_迭代_GOFCN23972', 'another row is just another cell');
+  assert.equal(formulaText('=CONCATENATE("say ""hi""",1)', at), 'say "hi"1');
+  assert.equal(formulaText('=CONCATENATE("GOFCN",G7)', at), null, 'a cell that is itself a formula is not followed');
+  assert.equal(formulaText('=CONCATENATE("GOFCN",C9,"_",A1:0)', at), null, 'a range is no text');
+  assert.equal(formulaText('=TRIM(CONCATENATE("GOFCN",C9))', at), null, 'other functions are not guessed');
+  assert.equal(formulaText('=CONCATENATE("GOFCN",C9', at), null);
+  assert.equal(formulaText('GOFCN67651', at), null);
 });
 
 test('an upload directory is found by its name, a path ending or its ID, and only when that is unique', () => {
@@ -85,7 +153,7 @@ test('an upload directory is found by its name, a path ending or its ID, and onl
 test('the plan: the default directory, 素材类型 by file kind, short names matched to CLS people, a file setting over the request', async () => {
   const dir = materials({ 'a.mp4': 'video-a', 'b.jpg': 'image-b', 'c.mp3': 'audio-c' });
   const { materials: found, skipped } = await hashed([dir]);
-  const request = normalizeUploadRequest({ files: [dir], creator: '张天伟', producers: ['丁杰'], items: [{ file: 'b.jpg', creator: '雷佳威', producers: ['杨燃', '谢振文'], directory: '常规素材/图片' }] });
+  const request = normalizeUploadRequest({ files: [dir], progress: false, creator: '张天伟', producers: ['丁杰'], items: [{ file: 'b.jpg', creator: '雷佳威', producers: ['杨燃', '谢振文'], directory: '常规素材/图片' }] });
   const plan = buildUploadPlan({ request, options: OPTIONS, materials: found, skipped, existing: new Set() });
   const by = Object.fromEntries(plan.items.map((i: any) => [i.name, i]));
   assert.equal(by.a.type.name, '视频');
@@ -106,7 +174,7 @@ test('the plan says everything that is not settled, at once: no 创意人, ambig
   const dir = materials({ 'a.mp4': '1', 'x.mp4': '2', 'x.png': '3' });
   const { materials: found, skipped } = await hashed([dir]);
   const build = (request: Record<string, unknown>, existing = new Set<string>()) =>
-    buildUploadPlan({ request: normalizeUploadRequest({ files: [dir], ...request }), options: OPTIONS, materials: found, skipped, existing });
+    buildUploadPlan({ request: normalizeUploadRequest({ files: [dir], progress: false, ...request }), options: OPTIONS, materials: found, skipped, existing });
   assert.throws(() => build({ producers: ['丁杰'] }), (error: Error) => error instanceof Blocked && /创意人未定/.test(error.message) && /同一个创意名称“x”/.test(error.message));
   assert.throws(() => build({ creator: '李晨阳', producers: ['丁杰'], items: [{ file: 'x.png', skip: true }] }), /李晨阳.*不唯一/);
   const byId = build({ creator: '492', producers: ['丁杰'], items: [{ file: 'x.png', skip: true }] });
@@ -115,13 +183,18 @@ test('the plan says everything that is not settled, at once: no 创意人, ambig
   assert.throws(() => build({ creator: '张天伟', producers: ['丁杰'], items: [{ file: 'x.png', skip: true }] }, new Set(["a"])), /CLS 已有同名创意.*：a$/);
   const renamed = build({ creator: '张天伟', producers: ['丁杰'], items: [{ file: 'x.png', name: 'x_封面' }] });
   assert.deepEqual(renamed.items.map((i: any) => i.name).sort(), ['a', 'x', 'x_封面']);
+  const cover = renamed.items.find((i: any) => i.name === 'x_封面');
+  assert.deepEqual([cover.renamed_from, cover.upload_name], ['x', 'x_封面.png'], 'a renamed file goes up under the new name too');
+  assert.equal(renamed.items.find((i: any) => i.name === 'a').upload_name, undefined);
 });
 
-test('the progress sheet gives 创意人 (创意者脚本审核人) and 制作人 (设计师供应商) by material number; a missing or doubled number is asked', async () => {
+test('the progress sheet gives the name (素材名称), 创意人 (创意者脚本审核人) and 制作人 (设计师供应商) by material number; a missing or doubled number is asked', async () => {
   const snapshot = new Snapshot(path.join(here, 'fixtures', 'base.xlsx'));
   const rows = progressRowsFrom(snapshot, [1001, 1002, 1004, 9999]);
   assert.equal(rows.get(1001)!.length, 2, 'a number on two rows is two rows');
-  assert.deepEqual(rows.get(1004), [{ sheet: 'GOFCN创意进度 26年3月', row: 2, number: 1004, supplier: '供应商甲', reviewer: '张三', name: rows.get(1004)![0]!.name }]);
+  assert.equal(rows.get(1004)!.length, 1);
+  const { sheet, row, number, supplier, reviewer } = rows.get(1004)![0]!;
+  assert.deepEqual({ sheet, row, number, supplier, reviewer }, { sheet: 'GOFCN创意进度 26年3月', row: 2, number: 1004, supplier: '供应商甲', reviewer: '张三' });
   assert.match(rows.get(1004)![0]!.name!, /^GOFCN1004_/, 'the name comes out of the naming formula');
   assert.equal(rows.get(1002)![0]!.name, 'GOFCN1002_玩法_卖点_视频_爆点B');
   assert.equal(rows.has(9999), false);
@@ -133,8 +206,11 @@ test('the progress sheet gives 创意人 (创意者脚本审核人) and 制作�
   assert.equal(plan.items[0].creator.name, '张三');
   assert.deepEqual(plan.items[0].producers, [{ id: 9002, name: '某某公司（供应商甲）' }]);
   assert.equal(plan.items[0].source.progress_row.row, 2);
+  assert.equal(plan.items[0].source.progress_row.by, 'file_name');
+  assert.equal(plan.items[0].name, rows.get(1004)![0]!.name, 'a file named otherwise goes up as its row is named');
+  assert.deepEqual([plan.items[0].renamed_from, plan.items[0].upload_name], ['GOFCN1004_成片', `${rows.get(1004)![0]!.name}.mp4`]);
 
-  for (const [file, pattern] of [['GOFCN1001_x.mp4', /有 2 行/], ['GOFCN9999_x.mp4', /进度表里没有 GOFCN9999/], ['无编号.mp4', /没有 GOFCN 素材编号/]] as const) {
+  for (const [file, pattern] of [['GOFCN1001_x.mp4', /有 2 行/], ['GOFCN9999_x.mp4', /进度表里没有 GOFCN9999（编号取自文件名）/], ['无编号.mp4', /也不带 GOFCN 编号/]] as const) {
     const other = materials({ [file]: 'b' });
     const scanned = await hashed([other]);
     assert.throws(() => buildUploadPlan({ request: normalizeUploadRequest({ files: [other], progress: true }), options: people, ...scanned, existing: new Set(), progress: rows }), pattern);
@@ -348,12 +424,116 @@ test('a zipped folder (how a folder reaches lark-agent) is planned and uploaded 
     const zip = path.join(tempDir('zip-input-'), '新建文件夹.zip');
     fs.writeFileSync(zip, makeZip([{ name: '新建文件夹/P01.mp4', data: 'video' }, { name: '新建文件夹/封面.png', data: 'png' }, { name: '新建文件夹/说明.txt', data: 't' }]));
     const dir = tempDir('upload-plan-');
-    fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ files: [zip], creator: '张天伟', producers: ['丁杰'] }));
+    fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ files: [zip], progress: false, creator: '张天伟', producers: ['丁杰'] }));
     const summary = await planUpload(online(fake), undefined, path.join(dir, 'request.json'), path.join(dir, 'plan.json'), deps);
     assert.deepEqual(summary.items.map((i: any) => [i.name, i.type]).sort(), [['P01', '视频'], ['封面', '图片']]);
     assert.deepEqual(summary.skipped, [{ file: '新建文件夹.zip：新建文件夹/说明.txt', reason: 'CLS 不支持这种格式（.txt）' }]);
     const result = await runUpload(online(fake), summary.plan, deps);
     assert.equal(result.status, 'uploaded', JSON.stringify(result));
     assert.deepEqual(fake.requests.find(r => r.path === '/api/qcloud/signed-url')!.body!.files.sort(), ['P01/P01.mp4', '封面/封面.png']);
+  } finally { fake.close(); }
+});
+
+test('the 终稿库 example: each video goes up named as the row the requirement says it is, two rows of one name told apart by their numbers', async () => {
+  const snapshot = new Snapshot(finalCutSheet());
+  const rows = progressRowsFrom(snapshot, [56890, 44065, 67680, 67681, 67682, 67683, 67684]);
+  assert.equal(rows.get(67682)![0]!.name, 'GOFCN67682_AI生成_设定3.0_3D_围炉煮冰');
+  assert.equal(rows.get(67683)![0]!.name, 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰');
+  assert.equal(rows.get(67684)![0]!.name, 'GOFCN67684_AI生成_设定3.0_关键词', 'SUBSTITUTE(CONCATENATE(…),"__","_") as the sheet shows it');
+  const { materials: found, skipped } = await hashed([materials(FINAL_CUT_FILES)]);
+  const build = (request: Record<string, unknown>, existing = new Set<string>()) =>
+    buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], ...request }), options: OPTIONS, materials: found, skipped, existing, progress: rows });
+
+  // As they come out of the zip, none of the names is a 素材名称 and none carries a GOFCN number: all four are asked about at once.
+  assert.throws(() => build({}), (error: Error) => /也不带 GOFCN 编号.*g44065_gf_v90\.mp4、g44065_v90\.mp4、g56890_a_v15\.mp4、g56890_c_v21\.mp4/.test(error.message));
+  // The sheet's supplier is not CLS's name for it: the refusal says so and how to name it.
+  assert.throws(() => build({ items: FINAL_CUT_ITEMS }), /制作人“廿十一”.*进度表 GOFCN6768\d 的设计师供应商.*producers 写明 CLS 的名字/);
+
+  const plan = build({ producers: ['长沙廿拾一文化传媒有限公司'], items: FINAL_CUT_ITEMS });
+  const by = Object.fromEntries(plan.items.map((i: any) => [i.file_name, i]));
+  assert.deepEqual(Object.fromEntries(Object.entries(by).map(([file, i]: [string, any]) => [file, [i.name, i.upload_name]])), {
+    'g56890_a_v15.mp4': ['GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球.mp4'],
+    'g56890_c_v21.mp4': ['GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘', 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘.mp4'],
+    'g44065_v90.mp4': ['GOFCN67682_AI生成_设定3.0_3D_围炉煮冰', 'GOFCN67682_AI生成_设定3.0_3D_围炉煮冰.mp4'],
+    'g44065_gf_v90.mp4': ['GOFCN67683_AI生成_设定3.0_3D_围炉煮冰', 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰.mp4'],
+  });
+  assert.ok(plan.items.every((i: any) => i.creator.name === '金莉' && i.source.creator === 'progress' && i.source.progress_row.by === 'item'));
+  assert.equal(by['g56890_a_v15.mp4'].renamed_from, 'g56890_a_v15');
+  assert.equal(by['g56890_a_v15.mp4'].number, 67680);
+  const summary = uploadPlanSummary(plan, 'plan.json');
+  assert.equal(summary.renamed, 4);
+  assert.deepEqual(summary.items.find((i: any) => i.file === 'g44065_gf_v90.mp4'),
+    { file: 'g44065_gf_v90.mp4', name: 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰', renamed: true, type: '视频', creator: '金莉', producers: ['长沙廿拾一文化传媒有限公司'], progress_row: '26年1月-GOFCN 第 7 行', row_from: 'request' });
+});
+
+test('binding a file to a row: one file per row, an original\'s number in a file name is caught, a file already named right is left as it is', async () => {
+  const rows = progressRowsFrom(new Snapshot(finalCutSheet()), [56890, 44065, 67680, 67681, 67682, 67683]);
+  const plan = async (files: Record<string, string>, request: Record<string, unknown>, existing: string[] = []) => {
+    const { materials: found, skipped } = await hashed([materials(files)]);
+    return buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['长沙廿拾一文化传媒有限公司'], ...request }), options: OPTIONS,
+      materials: found, skipped, existing: new Set(existing), progress: rows });
+  };
+  await assert.rejects(plan({ 'a.mp4': '1', 'b.mp4': '2' }, { items: [{ file: 'a.mp4', number: 67682 }, { file: 'b.mp4', number: 67682 }] }), /两个文件对应进度表同一行 GOFCN67682（a\.mp4、b\.mp4）/);
+  await assert.rejects(plan({ 'a.mp4': '1' }, { items: [{ file: 'a.mp4', number: 67999 }] }), (error: Error) => /进度表里没有 GOFCN67999：a\.mp4/.test(error.message));
+  // Named like the 终稿库 headings, the number is the original the piece builds on (GOFCN56890), whose creative CLS has long had.
+  const original = 'GOFCN56890_汉化_竞争对抗_3D_火车运输御敌-斜';
+  await assert.rejects(plan({ 'GOFCN56890_企鹅保龄球_V15.mp4': 'p' }, {}, [original]), /文件名里的编号可能是参考的初版编号.*GOFCN56890_企鹅保龄球_V15\.mp4 → GOFCN56890_汉化_竞争对抗_3D_火车运输御敌-斜/);
+  const bound = await plan({ 'GOFCN56890_企鹅保龄球_V15.mp4': 'p' }, { items: [{ file: 'GOFCN56890_企鹅保龄球_V15.mp4', number: 67680 }] }, [original]);
+  assert.equal(bound.items[0].name, 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', 'the row the request names wins over the number in the file name');
+  await assert.rejects(plan({ 'x.mp4': 'p' }, { items: [{ file: 'x.mp4', number: 67680 }] }, ['GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球']), /CLS 已有这一行的创意/);
+  const right = await plan({ 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘.mp4': 'f' }, {});
+  assert.equal(right.items[0].name, 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘');
+  assert.equal(right.items[0].renamed_from, undefined);
+  assert.equal(right.items[0].upload_name, undefined);
+  assert.equal(uploadPlanSummary(right, 'p.json').renamed, undefined);
+});
+
+test('rows: by number and by text in 素材名称 or 提炼词, newest first; numbers not on the sheet are said', async () => {
+  const snapshot = new Snapshot(finalCutSheet());
+  const found = searchProgressRows(snapshot, [67683, 99999], ['围炉煮冰', '企鹅保龄球']);
+  assert.deepEqual(found.rows.map(r => r.number), [67683, 67682, 67680], 'the numbers asked for first, then the text hits not already listed');
+  assert.deepEqual(found.not_found, [99999]);
+  assert.equal(found.rows[0]!.keyword, '围炉煮冰');
+  assert.deepEqual(searchProgressRows(snapshot, [], ['转斧杀熊']).rows.map(r => [r.number, r.name, r.primary_tag, r.supplier, r.reviewer]),
+    [[44065, 'GOFCN44065_汉化_资源城建_3D_转斧杀熊烤肉', '汉化', '廿十一', '金莉']]);
+  const exports: string[] = [];
+  const listed = await findRows(sheetBridge(finalCutSheet(), exports), { numbers: [67680, 67681], texts: [] }, { tmpDir: tempDir('rows-tmp-') });
+  assert.equal(listed.status, 'progress_rows');
+  assert.deepEqual(listed.rows.map((r: any) => [r.number, r.name, r.where]), [
+    [67680, 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', '26年1月-GOFCN 第 4 行'], [67681, 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘', '26年1月-GOFCN 第 5 行']]);
+  assert.equal(exports.length, 1);
+  assert.ok(!fs.existsSync(exports[0]!), 'the export is removed again');
+  await assert.rejects(findRows(sheetBridge(finalCutSheet()), { numbers: [], texts: [] }), /--numbers 或 --find/);
+});
+
+test('the 终稿库 zip end to end: planned from the progress sheet, uploaded under the 素材名称, the files on disk untouched', async () => {
+  const { makeZip } = await import('./helpers/zip-writer.ts');
+  const fake = await fakeCreative();
+  try {
+    const deps = depsFor();
+    const zip = path.join(tempDir('zip-input-'), '玩法AI迭代素材.zip');
+    fs.writeFileSync(zip, makeZip(Object.entries(FINAL_CUT_FILES).map(([name, data]) => ({ name, data }))));
+    const before = fs.readFileSync(zip);
+    const file = await approvedPlan(fake, deps, { files: [zip], progress: true, producers: ['长沙廿拾一文化传媒有限公司'], items: FINAL_CUT_ITEMS }, sheetBridge(finalCutSheet()));
+    const result = await runUpload(online(fake), file, deps);
+    assert.equal(result.status, 'uploaded', JSON.stringify(result));
+    const signed: string[] = fake.requests.find(r => r.path === '/api/qcloud/signed-url')!.body!.files;
+    assert.deepEqual([...signed].sort(), [
+      'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球/GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球.mp4',
+      'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘/GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘.mp4',
+      'GOFCN67682_AI生成_设定3.0_3D_围炉煮冰/GOFCN67682_AI生成_设定3.0_3D_围炉煮冰.mp4',
+      'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰/GOFCN67683_AI生成_设定3.0_3D_围炉煮冰.mp4',
+    ]);
+    assert.ok([...fake.objects.keys()].every(key => /\/GOFCN6768[0-3]_AI生成_设定3\.0_3D_.+\.mp4$/.test(key)), 'the stored files carry the new names');
+    assert.deepEqual([...fake.requests.find(r => r.path === '/api/creative/multiple-upload')!.body!.names].sort(), signed.map(k => k.split('/')[0]).sort());
+    assert.deepEqual(Object.fromEntries(result.uploaded.map((u: any) => [u.file, u.name])), {
+      'g56890_a_v15.mp4': 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', 'g56890_c_v21.mp4': 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘',
+      'g44065_v90.mp4': 'GOFCN67682_AI生成_设定3.0_3D_围炉煮冰', 'g44065_gf_v90.mp4': 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰',
+    });
+    // The 国风配乐 version is a creative of its own: the same name as the V90 but for its number, and its own file.
+    const guofeng = [...fake.creatives.values()].find(c => c.name === 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰')!;
+    assert.equal(guofeng.materials[0].file_hash, (await hashFile(path.join(materials({ x: 'guofeng' }), 'x'))).md5);
+    assert.ok(result.uploaded.every((u: any) => u.creator === '金莉' && u.producers[0] === '长沙廿拾一文化传媒有限公司'));
+    assert.ok(fs.readFileSync(zip).equals(before), 'the zip the user sent is not changed');
   } finally { fake.close(); }
 });

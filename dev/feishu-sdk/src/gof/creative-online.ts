@@ -4,8 +4,8 @@ import { ClsError } from './cls-adapter.ts';
 import { createCreativeAdapter, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import {
   appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, materialRefusal,
-  normalizeUploadRequest, progressRowsFrom, scanMaterials, shownFile, uploadEvents, uploadPlanSummary, type DirNode, type ProgressRow, type Skipped,
-  type UploadOptions, type UploadRequest,
+  normalizeUploadRequest, progressRowsFrom, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary, type DirNode,
+  type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
 } from './creative.ts';
 import { unpackZip } from './unzip.ts';
 import type { Online, Session } from './cls-online.ts';
@@ -18,8 +18,8 @@ import { UNPACKED } from '../retention.ts';
 import { Blocked, feishuDocPath, need, readJson, writeJsonNew } from './util.ts';
 
 /*
- * The commands of the material upload that go online: `gof.mjs creative options | plan | run | status`.
- * `plan` only reads (CLS options, existing names, and the progress sheet when asked); `run` does the upload the approved plan describes.
+ * The commands of the material upload that go online: `gof.mjs creative options | rows | plan | run | status`.
+ * `plan` and `rows` only read (CLS options, existing names, the progress sheet); `run` does the upload the approved plan describes.
  * A run keeps its record in the user's batch directory, so running it again goes on from where it stopped: before the create, the files
  * are simply put up again; once the create has been sent it is never sent again, and what it did is read back instead.
  */
@@ -111,8 +111,8 @@ async function sheetToken(bridge: Bridge, url: string): Promise<{ token: string;
   return { token: node.obj_token, title: String(node.title ?? '') };
 }
 
-/** The progress sheet rows of these numbers: read from a fresh export of the plugin's progress sheet, or of the sheet the user linked. */
-export async function progressLookup(bridge: Bridge, source: true | string, numbers: number[], tmpDir: string): Promise<{ rows: Map<number, ProgressRow[]>; label: string }> {
+/** A fresh export of the plugin's progress sheet, or of the sheet the user linked, read by `use` and removed again. */
+async function readProgressSheet<T>(bridge: Bridge, source: true | string, tmpDir: string, use: (snapshot: Snapshot, label: string) => T): Promise<T> {
   await bridge.doctor();
   const { token, title } = source === true ? { token: await target(bridge), title: '' } : await sheetToken(bridge, source);
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -120,9 +120,33 @@ export async function progressLookup(bridge: Bridge, source: true | string, numb
   await bridge.exportSheet(token, file);
   need(fs.existsSync(file), '进度表导出没有落盘');
   try {
-    const snapshot = new Snapshot(file);
-    return { rows: progressRowsFrom(snapshot, numbers), label: source === true ? '插件进度表' : `${title || '用户给的进度表'}（${source}）` };
+    return use(new Snapshot(file), source === true ? '插件进度表' : `${title || '用户给的进度表'}（${source}）`);
   } finally { fs.rmSync(file, { force: true }); }
+}
+
+/** The progress sheet rows of these numbers: read from a fresh export of the plugin's progress sheet, or of the sheet the user linked. */
+export async function progressLookup(bridge: Bridge, source: true | string, numbers: number[], tmpDir: string): Promise<{ rows: Map<number, ProgressRow[]>; label: string }> {
+  return readProgressSheet(bridge, source, tmpDir, (snapshot, label) => ({ rows: progressRowsFrom(snapshot, numbers), label }));
+}
+
+/**
+ * `gof creative rows`: the progress sheet rows of the given numbers and those whose 素材名称 or 提炼词 contains one of the texts, for
+ * working out which row each file is before planning. Reads only.
+ */
+export async function findRows(bridge: Bridge, query: { numbers: number[]; texts: string[]; progress?: true | string }, deps: UploadDeps = {}): Promise<Obj> {
+  need(query.numbers.length > 0 || query.texts.length > 0, 'rows 需要 --numbers 或 --find');
+  return readProgressSheet(bridge, query.progress ?? true, deps.tmpDir ?? resolveDataPaths().tmp, (snapshot, label) => {
+    const { rows, not_found, more } = searchProgressRows(snapshot, query.numbers, query.texts);
+    return {
+      status: 'progress_rows', source: label, count: rows.length,
+      rows: rows.map(r => ({
+        number: r.number, name: r.name, keyword: r.keyword, head_reference: r.head_reference, creative_reference: r.creative_reference,
+        primary_tag: r.primary_tag, secondary_tag: r.secondary_tag, creative_form: r.creative_form, supplier: r.supplier, reviewer: r.reviewer,
+        where: `${r.sheet} 第 ${r.row} 行`,
+      })),
+      ...(not_found.length ? { not_found } : {}), ...(more ? { more } : {}),
+    };
+  });
 }
 
 /** The zips among the given files (or directly inside a given folder), unpacked: zip path → its folder, and what inside cannot go up. */
@@ -167,7 +191,8 @@ export async function planUpload(online: Online, bridge: Bridge | undefined, req
   let progressSource: string | undefined;
   if (request.progress) {
     need(bridge, '这个环境不能读飞书进度表');
-    const numbers = hashed.map(m => m.number).filter((n): n is number => n !== null);
+    // Every row a file may be: the one the request names for it, and the one its file name's number points at.
+    const numbers = [...new Set([...(request.items ?? []).map(i => i.number), ...hashed.map(m => m.number)].filter((n): n is number => typeof n === 'number'))];
     const lookup = await progressLookup(bridge, request.progress, numbers, deps.tmpDir ?? resolveDataPaths().tmp);
     progress = lookup.rows;
     progressSource = lookup.label;
@@ -317,7 +342,8 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
     const mapped = new Map<string, string>();
     const finished: string[] = [];
     for (const group of chunks(items)) {
-      const keys = group.map(i => `${i.name}/${i.file_name}`);
+      // The page signs "<creative name>/<file name>"; a file the plan renames goes up under its new name.
+      const keys = group.map(i => `${i.name}/${i.upload_name ?? i.file_name}`);
       const signed = await api.sign(gameId, keys);
       const byKey = new Map(signed.files.map(f => [f.key, f]));
       const missing = keys.filter(k => !byKey.has(k));
@@ -325,7 +351,7 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
       record('signed', { keys, objects: signed.files.map(f => f.object), mapping: signed.mapping });
       await api.log(`${session.account.name}获取预签名链接: ${JSON.stringify(keys)}（requirement-auto）`);
       for (const item of group) {
-        const key = `${item.name}/${item.file_name}`;
+        const key = `${item.name}/${item.upload_name ?? item.file_name}`;
         let link = byKey.get(key)!;
         let receipt: Obj | undefined;
         for (let attempt = 1; !receipt; attempt++) {

@@ -6,7 +6,7 @@ import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status,
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
 import { business, makePlan, type Plan } from './plan.ts';
-import { itemsOf } from './request.ts';
+import { DEFAULT_KEYWORD, itemsOf } from './request.ts';
 import { acceptance, buildWrites, dropdowns, ruleProjection, ruleProof, type ApiRule } from './rules.ts';
 import { checkSeal, seal } from './seal.ts';
 import { FIELD_HEADERS, headerMatches, Snapshot } from './snapshot.ts';
@@ -502,9 +502,12 @@ export function planSummary(result: Obj, file: string): Obj {
         offset += item.quantity;
         return { quantity: item.quantity, first: names[0], last: names[names.length - 1] };
       });
+      // Rows whose 提炼词 is the default: the document named none for them, which the user is asked to confirm.
+      const defaults = itemsOf(g.request).filter(item => item.keyword === DEFAULT_KEYWORD).reduce((n, item) => n + item.quantity, 0);
       // `message_kind` is how the group message will name this requirement ("素人剧情*25"), shown in the plan so it can be corrected before.
       return { group: g.id, quantity: g.request.quantity, requirement_name: requirementName(g.names), supplier: g.request.supplier,
-        reviewer: g.request.reviewer, script_url: g.request.script_url, message_kind: kindOf(g.request), items };
+        reviewer: g.request.reviewer, script_url: g.request.script_url, message_kind: kindOf(g.request), items,
+        ...(defaults ? { default_keyword_rows: defaults } : {}) };
     }),
     // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.
     new_options: (api.dropdowns as Obj[]).flatMap(d => (d.missing as string[]).map(option => ({ field: OPTION_NAMES[d.field] ?? d.field, option }))),
