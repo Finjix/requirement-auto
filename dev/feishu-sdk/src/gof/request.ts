@@ -61,6 +61,8 @@ function item(raw: Record<string, any>, inherited: Record<string, any>, where: s
   const keyword = cellText(value('keyword', DEFAULT_KEYWORD), 'keyword');
   need(form.trim() !== '', '缺少 creative_form');
   need(keyword.trim() !== '', '缺少 keyword');
+  // It ends up in the 素材名称, which is also the creative's name in CLS, where / and \ cannot be: such a row could never be uploaded.
+  need(!/[\\/]/.test(keyword), `提炼词“${keyword}”不能含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）：换成别的写法`);
   const result: Record<string, any> = { quantity: q, creative_form: form, keyword };
   const suffix = `_${form}_${keyword}`;
   const given = value('material_name', undefined);

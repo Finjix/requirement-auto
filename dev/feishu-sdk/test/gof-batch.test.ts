@@ -283,6 +283,10 @@ test('提炼词 defaults to 关键词 and the material name is built from the ta
   // A one-item list is the same group too.
   const listed = makePlan(open('base.xlsx'), { groups: [derived({ items: [{ quantity: 2, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频' }] })] });
   assert.deepEqual(listed, plan);
+  // The 素材名称 is the creative's name in CLS too, which cannot hold / or \: such a row could never be uploaded.
+  for (const keyword of ['横版/竖版', 'A\\B']) {
+    assert.throws(() => makePlan(open('base.xlsx'), { groups: [derived({ quantity: 1, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频', keyword })] }), /不能含 \/ 或 \\/);
+  }
 });
 
 test('a group can hold rows of several kinds: they keep their order, share one CSV and one CLS ticket, and are counted by kind', () => {

@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  buildUploadPlan, creativeName, findDirectory, formulaText, loadUploadPlan, materialNumber, normalizeUploadRequest, parseNumbers, progressRowsFrom,
-  scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
+  buildUploadPlan, creativeName, findDirectory, formulaText, loadUploadPlan, materialNumber, materialRefusal, normalizeUploadRequest, parseNumbers,
+  progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
 } from '../src/gof/creative.ts';
+import { unpackZip } from '../src/gof/unzip.ts';
 import { createCreativeAdapter } from '../src/gof/creative-adapter.ts';
 import { findRows, planUpload, runUpload, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
 import type { Online } from '../src/gof/cls-online.ts';
@@ -113,7 +114,8 @@ test('the request takes only the known fields, each in its form', () => {
   assert.deepEqual(normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: 'GOFCN67680' }, { file: 'b.mp4', number: 67681 }] }).items!.map(i => i.number), [67680, 67681]);
   assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: 'GOFCN20261022001' }] }), /GOFCN 素材编号/);
   for (const bad of [20261022001, 67680.5, 0, -3, '企鹅保龄球']) assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: bad }] }), /GOFCN 素材编号/);
-  assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', name: '新名称' }] }), /素材名称，不能另起/, 'with the sheet the name is never typed in');
+  assert.equal(normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: 1001, name: '新名称' }] }).items![0]!.name, '新名称', 'checked against its row in the plan');
+  assert.equal(normalizeUploadRequest({ files: ['a.mp4'], items: [{ file: 'a.mp4', number: 1001, sheet: '26年3月-GOFCN' }] }).items![0]!.sheet, '26年3月-GOFCN');
   assert.equal(normalizeUploadRequest({ files: ['a.mp4'], progress: false, items: [{ file: 'a.mp4', name: '新名称' }] }).items![0]!.name, '新名称');
   assert.throws(() => normalizeUploadRequest({ files: ['a.mp4'], progress: false, items: [{ file: 'a.mp4', number: 67680 }] }), /只在按进度表上传时有用/);
 });
@@ -202,18 +204,22 @@ test('the progress sheet gives the name (素材名称), 创意人 (创意者脚�
   const people = { ...OPTIONS, creators: [...OPTIONS.creators, { id: 9001, name: '张三' }], producers: [...OPTIONS.producers, { id: 9002, name: '某某公司（供应商甲）' }] };
   const dir = materials({ 'GOFCN1004_成片.mp4': 'a' });
   const { materials: found, skipped } = await hashed([dir]);
-  const plan = buildUploadPlan({ request: normalizeUploadRequest({ files: [dir], progress: true }), options: people, materials: found, skipped, existing: new Set(), progress: rows });
+  const request = (items?: unknown[]) => normalizeUploadRequest({ files: [dir], progress: true, ...(items ? { items } : {}) });
+  assert.throws(() => buildUploadPlan({ request: request(), options: people, materials: found, skipped, existing: new Set(), progress: rows }),
+    /文件名里的 GOFCN1004 那一行的素材名称是.*和文件名不同.*用 items\[\]\.number 写明/, 'a file not named as its row is never placed by the number in its name');
+  const plan = buildUploadPlan({ request: request([{ file: 'GOFCN1004_成片.mp4', number: 1004 }]), options: people, materials: found, skipped, existing: new Set(), progress: rows });
   assert.equal(plan.items[0].creator.name, '张三');
   assert.deepEqual(plan.items[0].producers, [{ id: 9002, name: '某某公司（供应商甲）' }]);
   assert.equal(plan.items[0].source.progress_row.row, 2);
-  assert.equal(plan.items[0].source.progress_row.by, 'file_name');
+  assert.equal(plan.items[0].source.progress_row.by, 'item');
   assert.equal(plan.items[0].name, rows.get(1004)![0]!.name, 'a file named otherwise goes up as its row is named');
   assert.deepEqual([plan.items[0].renamed_from, plan.items[0].upload_name], ['GOFCN1004_成片', `${rows.get(1004)![0]!.name}.mp4`]);
 
-  for (const [file, pattern] of [['GOFCN1001_x.mp4', /有 2 行/], ['GOFCN9999_x.mp4', /进度表里没有 GOFCN9999（编号取自文件名）/], ['无编号.mp4', /也不带 GOFCN 编号/]] as const) {
+  for (const [file, items, pattern] of [['GOFCN1001_x.mp4', [{ file: 'GOFCN1001_x.mp4', number: 1001 }], /有 2 行，内容不同.*同一个分表里重号/],
+    ['GOFCN9999_x.mp4', undefined, /进度表里没有 GOFCN9999（编号取自文件名）/], ['无编号.mp4', undefined, /也不带 GOFCN 编号/]] as const) {
     const other = materials({ [file]: 'b' });
     const scanned = await hashed([other]);
-    assert.throws(() => buildUploadPlan({ request: normalizeUploadRequest({ files: [other], progress: true }), options: people, ...scanned, existing: new Set(), progress: rows }), pattern);
+    assert.throws(() => buildUploadPlan({ request: normalizeUploadRequest({ files: [other], progress: true, ...(items ? { items } : {}) }), options: people, ...scanned, existing: new Set(), progress: rows }), pattern);
   }
 });
 
@@ -475,9 +481,12 @@ test('binding a file to a row: one file per row, an original\'s number in a file
   };
   await assert.rejects(plan({ 'a.mp4': '1', 'b.mp4': '2' }, { items: [{ file: 'a.mp4', number: 67682 }, { file: 'b.mp4', number: 67682 }] }), /两个文件对应进度表同一行 GOFCN67682（a\.mp4、b\.mp4）/);
   await assert.rejects(plan({ 'a.mp4': '1' }, { items: [{ file: 'a.mp4', number: 67999 }] }), (error: Error) => /进度表里没有 GOFCN67999：a\.mp4/.test(error.message));
-  // Named like the 终稿库 headings, the number is the original the piece builds on (GOFCN56890), whose creative CLS has long had.
+  // Named like the 终稿库 headings, the number is the original the piece builds on (GOFCN56890). Whether or not CLS has that creative under
+  // the row's name (earlier uploads were named after their files), the file is not put up under the original's name.
   const original = 'GOFCN56890_汉化_竞争对抗_3D_火车运输御敌-斜';
-  await assert.rejects(plan({ 'GOFCN56890_企鹅保龄球_V15.mp4': 'p' }, {}, [original]), /文件名里的编号可能是参考的初版编号.*GOFCN56890_企鹅保龄球_V15\.mp4 → GOFCN56890_汉化_竞争对抗_3D_火车运输御敌-斜/);
+  for (const existing of [[original], [], ['GOFCN56890_火车运输_终版']]) {
+    await assert.rejects(plan({ 'GOFCN56890_企鹅保龄球_V15.mp4': 'p' }, {}, existing), /这个编号可能是它参考的初版.*：GOFCN56890_企鹅保龄球_V15\.mp4/);
+  }
   const bound = await plan({ 'GOFCN56890_企鹅保龄球_V15.mp4': 'p' }, { items: [{ file: 'GOFCN56890_企鹅保龄球_V15.mp4', number: 67680 }] }, [original]);
   assert.equal(bound.items[0].name, 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', 'the row the request names wins over the number in the file name');
   await assert.rejects(plan({ 'x.mp4': 'p' }, { items: [{ file: 'x.mp4', number: 67680 }] }, ['GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球']), /CLS 已有这一行的创意/);
@@ -486,6 +495,58 @@ test('binding a file to a row: one file per row, an original\'s number in a file
   assert.equal(right.items[0].renamed_from, undefined);
   assert.equal(right.items[0].upload_name, undefined);
   assert.equal(uploadPlanSummary(right, 'p.json').renamed, undefined);
+  await assert.rejects(plan({ 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘.mp4': 'f' }, {}, ['GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘']), /这个文件像是已经传过/, 'sent again: already up');
+});
+
+test('rows the sheet cannot name: alike duplicates are one row, items[].sheet picks a tab, and only a row without a usable name takes items[].name', async () => {
+  const file = path.join(tempDir('progress-dup-'), 'progress.xlsx');
+  fs.writeFileSync(file, makeXlsx([
+    { name: '26年1月-GOFCN', rows: [HEADER, progressRow(2, 66909, '饮料睡袋', ['AI生成', '设定3.0', '2D'], ['廿十一', '金莉']),
+      progressRow(3, 66910, '冰雕', ['AI生成', '设定3.0', '2D'], ['廿十一', '金莉']),
+      [null, null, 66913, '丁杰的片子', null, null, null, 'AI生成', '设定3.0', null, '2D', null, '廿十一', '金莉'],
+      [null, null, 66914, '横版', null, null, 'GOFCN66914_AI生成_横版/竖版', 'AI生成', '设定3.0', null, '2D', null, '廿十一', '金莉']] },
+    { name: '26年2月-GOFCN', rows: [HEADER, progressRow(2, 66909, '饮料睡袋', ['AI生成', '设定3.0', '2D'], ['廿十一', '金莉']),
+      progressRow(3, 66910, '冰雕', ['AI生成', '设定3.0', '2D'], ['长沙廿拾一文化传媒有限公司', '金莉'])] },
+  ]));
+  const rows = progressRowsFrom(new Snapshot(file), [66909, 66910, 66913, 66914]);
+  const plan = async (items: Record<string, unknown>[]) => {
+    const { materials: found, skipped } = await hashed([materials({ 'a.mp4': 'a' })]);
+    return buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['长沙廿拾一文化传媒有限公司'], items }), options: OPTIONS,
+      materials: found, skipped, existing: new Set(), progress: rows });
+  };
+  assert.equal((await plan([{ file: 'a.mp4', number: 66909 }])).items[0].name, 'GOFCN66909_AI生成_设定3.0_2D_饮料睡袋', 'carried into the next month alike: one row');
+  await assert.rejects(plan([{ file: 'a.mp4', number: 66910 }]), /GOFCN66910 有 2 行，内容不同.*用 items\[\]\.sheet 写明/);
+  const picked = await plan([{ file: 'a.mp4', number: 66910, sheet: '26年2月-GOFCN' }]);
+  assert.deepEqual([picked.items[0].source.progress_row.sheet, picked.items[0].name], ['26年2月-GOFCN', 'GOFCN66910_AI生成_设定3.0_2D_冰雕']);
+  await assert.rejects(plan([{ file: 'a.mp4', number: 66910, sheet: '25年12月-GOFCN' }]), /分表“25年12月-GOFCN”里没有 GOFCN66910（它在 26年1月-GOFCN、26年2月-GOFCN）/);
+  await assert.rejects(plan([{ file: 'a.mp4', number: 66913 }]), /GOFCN66913.*素材名称为空或算不出来：请用户在进度表补正后重新做计划，或确认一个名称后用 items\[\]\.name 写明/);
+  const confirmed = await plan([{ file: 'a.mp4', number: 66913, name: 'GOFCN66913_AI生成_设定3.0_2D_丁杰的片子' }]);
+  assert.deepEqual([confirmed.items[0].name, confirmed.items[0].source.name], ['GOFCN66913_AI生成_设定3.0_2D_丁杰的片子', 'item']);
+  await assert.rejects(plan([{ file: 'a.mp4', number: 66914 }]), /素材名称含 \/ 或 \\/);
+  assert.equal((await plan([{ file: 'a.mp4', number: 66914, name: 'GOFCN66914_AI生成_横版竖版' }])).items[0].name, 'GOFCN66914_AI生成_横版竖版');
+  await assert.rejects(plan([{ file: 'a.mp4', number: 66909, name: '另起的名字' }]), /名称以进度表为准：去掉 items\[\]\.name/);
+});
+
+test('files of the same name in two zips are told apart by zip, and a refusal names every file that needs a row', async () => {
+  const { makeZip } = await import('./helpers/zip-writer.ts');
+  const root = tempDir('zip-same-'), a = path.join(root, '供应商A.zip'), b = path.join(root, '供应商B.zip');
+  fs.writeFileSync(a, makeZip([{ name: '01.mp4', data: 'a' }]));
+  fs.writeFileSync(b, makeZip([{ name: '01.mp4', data: 'b' }, ...Array.from({ length: 11 }, (_, i) => ({ name: `${String(i + 2).padStart(2, '0')}.mp4`, data: `b${i}` }))]));
+  const unpacked = new Map<string, string>();
+  for (const zip of [a, b]) unpacked.set(zip.toLowerCase(), (await unpackZip(zip, path.join(root, 'unpacked'), materialRefusal)).dir);
+  const scanned = scanMaterials([a, b], unpacked);
+  const found: Awaited<ReturnType<typeof hashed>>['materials'] = [];
+  for (const m of scanned.materials) found.push({ ...m, ...(await hashFile(m.file)) });
+  const rows = progressRowsFrom(new Snapshot(finalCutSheet()), [67680, 67681]);
+  const plan = (items: Record<string, unknown>[]) => buildUploadPlan({ request: normalizeUploadRequest({ files: [a, b], producers: ['长沙廿拾一文化传媒有限公司'], items }),
+    options: OPTIONS, materials: found, skipped: scanned.skipped, existing: new Set(), progress: rows });
+  assert.throws(() => plan([{ file: '01.mp4', number: 67680 }]), /items 里的“01\.mp4”对应多个文件（供应商A\.zip：01\.mp4、供应商B\.zip：01\.mp4），写成其中一个/);
+  assert.throws(() => plan([]), (error: Error) => ['供应商A.zip：01.mp4', '供应商B.zip：01.mp4', '供应商B.zip：12.mp4'].every(f => error.message.includes(f)) && !error.message.includes('等 '),
+    'all 13 files are named, by zip');
+  const rest = Array.from({ length: 11 }, (_, i) => ({ file: `${String(i + 2).padStart(2, '0')}.mp4`, skip: true }));
+  const done = plan([{ file: '供应商A.zip：01.mp4', number: 67680 }, { file: '供应商B.zip：01.mp4', number: 67681 }, ...rest]);
+  assert.deepEqual(done.items.map((i: any) => [i.origin, i.name]), [['供应商A.zip：01.mp4', 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球'], ['供应商B.zip：01.mp4', 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘']]);
+  assert.deepEqual(uploadPlanSummary(done, 'p.json').items.map((i: any) => i.file), ['供应商A.zip：01.mp4', '供应商B.zip：01.mp4']);
 });
 
 test('rows: by number and by text in 素材名称 or 提炼词, newest first; numbers not on the sheet are said', async () => {
