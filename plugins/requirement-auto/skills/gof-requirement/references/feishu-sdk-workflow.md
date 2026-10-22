@@ -37,7 +37,7 @@ gof feishu append --batch <batch>                  # uses the shipped assets/ove
 gof feishu reconcile --batch <batch>
 ```
 
-The target is the test Wiki node `YFyywzwLsiT07EkpBaecr8nIncn`; the bridge resolves the real spreadsheet.
+The target is the test Wiki node `GH7cwIxzZi3gVdk2s3tc1dDbnQc`; the bridge resolves the real spreadsheet.
 
 - `document` reads a company `wiki`, `docx` or `sheets` link: `title`, wiki `path` (folders above, outermost first), and for a sheet the `?sheet=` tab (else the last visible tab, `chosen_by: last`; `--sheet` picks another), `tabs`, `columns`, `header`, non-empty `rows` (`row` = sheet row; attachments `[附件:<name>]`, images `[图片]`), cells clipped at 300 characters unless `--full`, up to 300 rows (`more_rows`). For a docx: `text` (clipped at 30,000 characters unless `--full`).
 - `context`: target sheet and its ID, `next_number`, current dropdown `options` of the five fields (read from the API rules; the XLSX's lists are unreliable).

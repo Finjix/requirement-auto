@@ -24,7 +24,7 @@ export function need(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Blocked(message);
 }
 
-export const NODE = 'YFyywzwLsiT07EkpBaecr8nIncn';
+export const NODE = 'GH7cwIxzZi3gVdk2s3tc1dDbnQc';
 export const TARGET = `https://centurygames.feishu.cn/wiki/${NODE}`;
 export const FIXED_TAG = '玩法卖点（单选，必选）/展示向/展示向';
 export const CSV_HEADERS = ['脚本名称', '脚本内容', '创意标签'];
