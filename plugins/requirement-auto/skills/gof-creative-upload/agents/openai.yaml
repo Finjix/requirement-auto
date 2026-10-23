@@ -1,6 +1,6 @@
 interface:
   display_name: "GOFCN 上传素材"
-  short_description: "把做好的素材登记进创意进度表（每个文件追加一行并验收，已有的行不重复登记），再按素材名称上传到 CLS 创意列表；不建需求单，回传进度表和创意列表截图"
-  default_prompt: "Use $gof-creative-upload to upload my finished materials: register each file in the progress sheet (its row from the file name or my documents; files already in the sheet are not appended again), then upload it to CLS 我的创意 > 创意列表 > 上传创意 named as its 素材名称 (上传目录 双端共用-视频, 创意人 = 创意者脚本审核人, 制作人 = 设计师供应商, 素材类型 by file kind, no 创意标签). No CLS requirement ticket. Show one plan, and once I approve it append the rows, upload, save and send me screenshots of the progress sheet and the creative list."
+  short_description: "把做好的素材登记进创意进度表（每个文件追加一行并验收，已有的行不重复登记），再按素材名称上传到 CLS 创意列表，回传进度表和创意列表截图"
+  default_prompt: "Use $gof-creative-upload to upload my finished materials: register each file in the progress sheet (its row from the file name or my documents; files already in the sheet are not appended again), then upload it to CLS 我的创意 > 创意列表 > 上传创意 named as its 素材名称 (上传目录 双端共用-视频, 创意人 = 创意者脚本审核人, 制作人 = 设计师供应商, 素材类型 by file kind, no 创意标签). Show one plan, and once I approve it append the rows, upload, save and send me screenshots of the progress sheet and the creative list."
 policy:
   allow_implicit_invocation: true
