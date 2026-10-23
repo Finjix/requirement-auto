@@ -47,6 +47,12 @@ export function namingPattern(formula: string, row: number, cols: Columns): stri
   try { return concatenate(formula, shown); } catch { return formula; }
 }
 
+/**
+ * What the 设计师供应商 cell of a group's rows holds: its supplier, or nothing when the supplier is the 创意者脚本审核人 too (the sheet leaves
+ * the cell empty then). The request keeps the supplier itself, for CLS, the group message and the uploads' 制作人.
+ */
+export const supplierCell = (g: { supplier: string; reviewer: string }): string => (g.supplier === g.reviewer ? '' : g.supplier);
+
 /** Plans the rows to append: the next material numbers, the naming formula, the dropdown options to extend. */
 export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: string | null): Plan {
   const request = normalizeRequest(requestInput);
@@ -76,8 +82,8 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
   const forms = request.groups.flatMap(g => itemsOf(g).map(item => item.creative_form !== ''));
   need(forms.every(Boolean) || !forms.some(Boolean),
     '这一批有的行写了创意形式、有的没写（追加时一列一次写完，不能留空）：都不写创意形式、把它放在提炼词前面（素材名称不变），或分两次追加');
-  const suppliers = request.groups.map(g => g.supplier !== '');
-  need(suppliers.every(Boolean) || !suppliers.some(Boolean), '这一批有的需求写了设计师供应商、有的没写（追加时一列一次写完，不能留空）：分两次追加');
+  const suppliers = request.groups.map(g => supplierCell(g) !== '');
+  need(suppliers.every(Boolean) || !suppliers.some(Boolean), '这一批有的需求写了设计师供应商、有的没写（追加时一列一次写完，不能留空；供应商就是审核人本人时那格留空）：分两次追加');
   const withoutForm = !forms.some(Boolean);
   const naming = namingPattern(rowFormula(snapshot, sheet, cols, startRow, withoutForm), startRow, cols);
   const rows: Plan[] = [];
@@ -96,7 +102,7 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
         for (let c = left; c <= right; c++) values[coordOf(c, r)] = null;
         for (const field of used) {
           if (field === 'name') continue;
-          const value = (ITEM_FIELDS.includes(field) ? item[field as keyof Item] : g[field]) as string;
+          const value = (ITEM_FIELDS.includes(field) ? item[field as keyof Item] : field === 'supplier' ? supplierCell(g) : g[field]) as string;
           values[coordOf(cols[field]!, r)] = field === 'number' ? number : (value !== '' ? value : null);
         }
         const nameCoord = coordOf(cols.name!, r);
@@ -122,7 +128,7 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
   });
   const dropdowns: Plan[] = [];
   for (const field of ['primary_tag', 'secondary_tag', 'creative_form', 'client', 'supplier', 'creator', 'creative_expression']) {
-    const wanted = fieldValues(request.groups, field);
+    const wanted = field === 'supplier' ? [...new Set(request.groups.map(supplierCell).filter(Boolean))] : fieldValues(request.groups, field);
     if (wanted.length === 0 || !(field in cols)) continue;
     const existing = optionsFor(ws, cols[field]!, startRow - 1);
     need(wanted.every(v => !v.includes(',') && !v.includes('"')), '下拉标签含逗号/引号，需人工核对规则');

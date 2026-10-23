@@ -31,7 +31,7 @@ const MAIN = 'GOFCN创意进度 26年3月';
 // JSON.parse cannot tell 2.0 from 2, so the Python check for an integral float is not reproducible.
 const KNOWN_DIVERGENT = new Set(['base.xlsx|float-quantity|']);
 // Refusals whose rule changed after the port: 设计师供应商 may be left open, but not in one group of a batch and not the other.
-const CHANGED_REFUSALS: Record<string, string> = { 'base.xlsx|missing-field|': '这一批有的需求写了设计师供应商、有的没写（追加时一列一次写完，不能留空）：分两次追加' };
+const CHANGED_REFUSALS: Record<string, string> = { 'base.xlsx|missing-field|': '这一批有的需求写了设计师供应商、有的没写（追加时一列一次写完，不能留空；供应商就是审核人本人时那格留空）：分两次追加' };
 // No longer refused: a sheet without a naming formula to copy gets the sheet's naming written by the plan.
 const NOW_PLANNED = new Set(['plan-no-formula.xlsx|basic|']);
 
@@ -537,6 +537,20 @@ test('rows for finished materials whose write landed unverified are not appended
   // Files of other names are another batch of materials.
   const other = makePlan(now, finished(['GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_横版']));
   assert.equal(prepare(other, now, { outputRoot: base }).status, 'prepared');
+});
+
+test('a supplier who is also the 创意者脚本审核人 leaves the 设计师供应商 cell empty; the request, CLS and the message keep the person', () => {
+  const snapshot = liveSheet();
+  const self = { groups: [{ ...finished(['GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版']).groups[0], supplier: '张三' }] };
+  const plan = makePlan(snapshot, self);
+  assert.deepEqual([plan.rows[0].values.M5, plan.rows[0].values.N5, plan.groups[0].request.supplier], [null, '张三', '张三']);
+  assert.ok(!plan.dropdowns.some((d: Plan) => d.field === 'supplier'), 'no supplier option is added for a cell left empty');
+  const ticketed = makePlan(snapshot, { groups: [derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', supplier: '张三' })] });
+  assert.equal(ticketed.rows[0].values.M5, null);
+  assert.match(composeMessage(ticketed.groups, [{ group: '01', step: 'draft_saved', evidence: {} }]).message, /\n供应商：张三\n/);
+  // The column is written in one go: one group's cell empty and another's filled is two appends.
+  assert.throws(() => makePlan(snapshot, { groups: [derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', supplier: '张三' }),
+    derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', script_url: 'https://centurygames.feishu.cn/docx/Other123' })] }), /供应商就是审核人本人时那格留空/);
 });
 
 test('a requirement without a 设计师供应商 leaves its cell empty; the group message says 待定供应商', () => {

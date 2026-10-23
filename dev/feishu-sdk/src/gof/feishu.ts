@@ -6,7 +6,7 @@ import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status,
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
 import { lookupRows } from './creative.ts';
-import { business, makePlan, type Plan } from './plan.ts';
+import { business, makePlan, type Plan, supplierCell } from './plan.ts';
 import { DEFAULT_KEYWORD, itemsOf } from './request.ts';
 import { acceptance, buildWrites, dropdowns, ruleProjection, ruleProof, type ApiRule } from './rules.ts';
 import { checkSeal, seal } from './seal.ts';
@@ -524,7 +524,9 @@ export function planSummary(result: Obj, file: string): Obj {
       // A group without a CLS ticket (rows only, e.g. for finished materials) has neither a requirement name nor a group message.
       const ticket = Object.keys(g.request.cls ?? {}).length > 0;
       return { group: g.id, quantity: g.request.quantity, ...(ticket ? { requirement_name: requirementName(g.names) } : {}),
-        supplier: g.request.supplier || null, reviewer: g.request.reviewer, ...(g.request.script_url ? { script_url: g.request.script_url } : {}),
+        supplier: g.request.supplier || null, reviewer: g.request.reviewer,
+        // The supplier is the reviewer: the sheet's 设计师供应商 cell stays empty (supplierCell).
+        ...(g.request.supplier !== '' && supplierCell(g.request) === '' ? { supplier_cell_empty: true } : {}), ...(g.request.script_url ? { script_url: g.request.script_url } : {}),
         ...(ticket ? { message_kind: kindOf(g.request) } : {}), items, ...(defaults ? { default_keyword_rows: defaults } : {}) };
     }),
     // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.

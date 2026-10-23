@@ -641,7 +641,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
       const rowProducers = row ? splitNames(row.supplier) : [];
       const producerNames = item.producers ?? request.producers ?? (rowProducers.length ? rowProducers : undefined);
       need(creatorName && creatorName.trim(), `创意人未定${row ? `（进度表 GOFCN${row.number} 的创意者脚本审核人为空）` : ''}`);
-      need(producerNames && producerNames.length > 0, `制作人未定${row ? `（进度表 GOFCN${row.number} 的设计师供应商为空：问用户素材是谁做的，写在 items[].producers）` : ''}`);
+      need(producerNames && producerNames.length > 0, `制作人未定${row ? `（进度表 GOFCN${row.number} 的设计师供应商为空，供应商就是审核人本人时进度表留空：问用户素材是谁做的（多半是审核人本人），写在 items[].producers）` : ''}`);
       // The sheet's short names are not always CLS's (廿十一 / 长沙廿拾一文化传媒有限公司): a refusal says where the name came from, and to
       // name the person for this file only, since a top-level field would replace every other file's people from its own row too.
       const sheetSays = (field: 'creator' | 'producers', column: string) =>

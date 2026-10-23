@@ -493,7 +493,7 @@ test('the 终稿库 example: each video goes up named as the row the requirement
   const open = new Map([...rows].map(([n, list]) => [n, list.map(r => ({ ...r, supplier: '' }))]));
   const options = { ...OPTIONS, producers: [...OPTIONS.producers, { id: 51, name: '待定供应商' }] };
   assert.throws(() => buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], items: FINAL_CUT_ITEMS }), materials: found, skipped,
-    options, existing: new Set<string>(), progress: open }), /制作人未定（进度表 GOFCN67680 的设计师供应商为空：问用户素材是谁做的/);
+    options, existing: new Set<string>(), progress: open }), /制作人未定（进度表 GOFCN67680 的设计师供应商为空，供应商就是审核人本人时进度表留空：问用户素材是谁做的/);
   const named = buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['廿拾一文化'], items: FINAL_CUT_ITEMS }), materials: found, skipped,
     options, existing: new Set<string>(), progress: open });
   assert.ok(named.items.every((i: any) => i.producers.map((p: any) => p.name).join() === '长沙廿拾一文化传媒有限公司' && i.source.producers === 'request'));
