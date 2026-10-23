@@ -28,6 +28,8 @@ The tools enforce the data rules themselves (append only into empty rows with `a
 
 Short and plain, business language only: what will be done, what happened, what they must do. One line per stage ("正在追加进度表", "正在创建 CLS 草稿"). Leave out internals (IDs, revisions, receipts, snapshots, batches, files, checks) unless asked. When something stops: what is done, what is not, what they must do, and the concrete reason with the system's code (e.g. "HTTP 200，业务错误码 403，创意需求名称已存在"; Feishu: error kind and code), naming the conflicting value.
 
+**No padding.** Ask only for what is missing, as plain questions ("制作人和创意人分别是谁？"). Never add conditions, defaults or instructions to a question ("如果是同一人，请说明", "未提供则留空", "如不需要请告知"): work such cases out from the answer itself (one name given for both, "都是 X" = the same person). Do not name the skill or describe how you are going to work ("我会按…技能处理"), do not repeat what an earlier message already said, and do not report a step that changes nothing for the user. Before sending, cut every sentence the user could do without.
+
 If `append` rejects the overwrite receipt, tell the user "写入功能暂时不可用，请联系维护人员" (re-probing is the maintainers' job).
 
 ## Local files

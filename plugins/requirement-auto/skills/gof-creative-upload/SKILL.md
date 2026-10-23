@@ -24,6 +24,8 @@ The tools enforce the data rules themselves (append only into empty rows with `a
 
 Short and plain, business language only: what will be done, what happened, what they must do. One line per stage ("正在追加进度表", "正在上传素材"). Leave out internals (IDs, hashes, revisions, batches, plan files, checks) unless asked. When something stops: what is done, what is not, what they must do, and the concrete reason with the system's code (e.g. "HTTP 200，业务码 403，以下创意已存在: …"; Feishu: error kind and code).
 
+**No padding.** Ask only for what is missing, as plain questions ("制作人和创意人分别是谁？"). Never add conditions, defaults or instructions to a question ("如果是同一人，请说明", "未提供则留空", "如不需要请告知"): work such cases out from the answer itself (one name given for both, "都是 X" = the same person). Do not name the skill or describe how you are going to work ("我会按…技能处理"), do not repeat what an earlier message already said, and do not report a step that changes nothing for the user. Before sending, cut every sentence the user could do without.
+
 If `append` rejects the overwrite receipt, tell the user "写入功能暂时不可用，请联系维护人员" (re-probing is the maintainers' job).
 
 ## Local files
@@ -56,7 +58,7 @@ A GOFCN number in a file name that is not its row's 素材名称 (`GOFCN67680_�
 **People** (first source that answers wins: the user's message; this conversation; the documents, the folder or zip name; else ask):
 - **设计师供应商** (who made the materials) is also the uploads' **制作人**. **Required**: finished materials were made by someone, so it is always named; when the message, conversation, documents or folder/zip name do not say who, ask (with the other open points). Never leave it empty and never use `待定供应商` (that is only for a requirement whose supplier is not decided yet). Spelled as in `options`.
 - **创意者脚本审核人** is also the uploads' **创意人**. Required.
-- **Same person** (the reviewer made the materials): give `supplier` as that person anyway; the plan leaves the sheet's 设计师供应商 cell empty (`supplier_cell_empty`), and the 制作人 is still that person, so give it at the top-level `producers` of the upload request (its CLS name). An existing row whose 设计师供应商 is empty is often this case: ask whether the reviewer made it, and give the answer in `items[].producers`.
+- **Same person** (the reviewer made the materials; judge it from what the user says, never ask whether they are the same): give `supplier` as that person anyway; the plan leaves the sheet's 设计师供应商 cell empty (`supplier_cell_empty`), and the 制作人 is still that person, so give it at the top-level `producers` of the upload request (its CLS name). An existing row whose 设计师供应商 is empty is often this case: ask who made it ("GOFCN67680 是谁做的？"), and give the answer in `items[].producers`.
 - The sheet spells people short, CLS in full: `gof creative options --creator <审核人> --producers <供应商>[,<供应商>…]` matches them as the upload will (`people`: each name's CLS name, or the problem). One it cannot match: the name in its `creators` / `producers` lists that is clearly the same (廿十一 → 长沙廿拾一文化传媒有限公司), or ask; two people of one name: their CLS user ID, or ask.
 
 **Upload fields:**
