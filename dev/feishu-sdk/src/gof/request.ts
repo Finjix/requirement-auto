@@ -148,8 +148,10 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     const link = pick(raw, 'script_url', '');
     need(typeof link === 'string' && (link.trim() !== '' || !ticket), '缺少 script_url');
     g.script_url = cellText(link, 'script_url');
-    // 设计师供应商 may be left open: the sheet's cell stays empty and CLS takes its 待定供应商 (cls.ts).
+    // 设计师供应商 may be left open only for a requirement whose supplier is not decided yet: the sheet's cell stays empty and CLS takes its
+    // 待定供应商 (cls.ts). Finished materials (no script link) were made by someone, who is also their 制作人.
     g.supplier = cellText(pick(raw, 'supplier', ''), 'supplier').trim();
+    need(g.supplier !== '' || g.script_url !== '', `第 ${index} 组缺少设计师供应商：已做好的素材要写明是谁做的（也是上传的制作人）`);
     g.creator = g.reviewer; // Same person for progress reviewer, CLS creator and message.
     need(pick(raw, 'creator', g.reviewer) === g.reviewer, '审核人与进度表创意者字段不一致');
     for (const key of ['client', ...OPTIONAL_FIELDS]) {

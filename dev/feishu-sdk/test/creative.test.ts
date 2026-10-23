@@ -489,11 +489,14 @@ test('the 终稿库 example: each video goes up named as the row the requirement
   assert.equal(summary.renamed, 4);
   assert.deepEqual(summary.items.find((i: any) => i.file === 'g44065_gf_v90.mp4'),
     { file: 'g44065_gf_v90.mp4', name: 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰', renamed: true, type: '视频', creator: '金莉', producers: ['长沙廿拾一文化传媒有限公司'], progress_row: '26年1月-GOFCN 第 7 行', row_from: 'request' });
-  // Rows without a 设计师供应商: the 制作人 is CLS's 待定供应商, as their requirement had.
+  // Rows without a 设计师供应商: finished materials were made by someone, so the 制作人 is asked for, never CLS's 待定供应商.
   const open = new Map([...rows].map(([n, list]) => [n, list.map(r => ({ ...r, supplier: '' }))]));
-  const pending = buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], items: FINAL_CUT_ITEMS }), materials: found, skipped,
-    options: { ...OPTIONS, producers: [...OPTIONS.producers, { id: 51, name: '待定供应商' }] }, existing: new Set<string>(), progress: open });
-  assert.ok(pending.items.every((i: any) => i.producers.map((p: any) => p.name).join() === '待定供应商' && i.source.producers === 'pending'));
+  const options = { ...OPTIONS, producers: [...OPTIONS.producers, { id: 51, name: '待定供应商' }] };
+  assert.throws(() => buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], items: FINAL_CUT_ITEMS }), materials: found, skipped,
+    options, existing: new Set<string>(), progress: open }), /制作人未定（进度表 GOFCN67680 的设计师供应商为空：问用户素材是谁做的/);
+  const named = buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['廿拾一文化'], items: FINAL_CUT_ITEMS }), materials: found, skipped,
+    options, existing: new Set<string>(), progress: open });
+  assert.ok(named.items.every((i: any) => i.producers.map((p: any) => p.name).join() === '长沙廿拾一文化传媒有限公司' && i.source.producers === 'request'));
 });
 
 test('binding a file to a row: one file per row, an original\'s number in a file name is caught, a file already named right is left as it is', async () => {

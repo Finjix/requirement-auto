@@ -506,6 +506,11 @@ test('rows registered for finished materials need no script link: they get no CS
   assert.throws(() => normalizeRequest({ groups: [unlinked] }), (e: Error) => e instanceof Blocked && e.message === '第 1 组缺少需求字段：脚本内容链接');
   assert.throws(() => normalizeRequest({ groups: [{ ...unlinked, script_url: ' ' }] }), (e: Error) => e instanceof Blocked && e.message === '缺少 script_url');
   assert.throws(() => normalizeRequest({ groups: [{ ...finished(names).groups[0], script_url: 'https://example.com/x' }] }), /脚本链接必须是当前确认的飞书文档/);
+  // Finished materials were made by someone: their 设计师供应商 (the uploads' 制作人) is never left open.
+  const { supplier, ...unmade } = finished(names).groups[0]!;
+  for (const group of [unmade, { ...unmade, supplier: ' ' }]) {
+    assert.throws(() => normalizeRequest({ groups: [group] }), (e: Error) => e instanceof Blocked && e.message === '第 1 组缺少设计师供应商：已做好的素材要写明是谁做的（也是上传的制作人）');
+  }
 });
 
 test('rows for finished materials whose write landed unverified are not appended again; other files are', () => {

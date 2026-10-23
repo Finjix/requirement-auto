@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { columnLetter } from './a1.ts';
-import { matchUser, PENDING_SUPPLIER } from './cls.ts';
+import { matchUser } from './cls.ts';
 import { checkSeal, rejectSecrets, seal } from './seal.ts';
 import { scanSheets, type Columns, type Snapshot } from './snapshot.ts';
 import type { SheetData } from './xlsx.ts';
@@ -635,13 +635,13 @@ export function buildUploadPlan(input: PlanInput): Obj {
       need(!/[\\/]/.test(name), '创意名称不能含 / 或 \\');
       const directory = item.directory ? findDirectory(options.directories, item.directory) : defaultDirectory;
       const type = materialType(options.types, item.type, material.kind);
-      // 创意人 / 制作人: the file's own setting, then the request's, then the file's row of the progress sheet (a row without a 设计师供应商:
-      // CLS's 待定供应商, as its requirement had).
+      // 创意人 / 制作人: the file's own setting, then the request's, then the file's row of the progress sheet. A finished material was made
+      // by someone: a row without a 设计师供应商 gives no 制作人 (never CLS's 待定供应商), which is then to be named.
       const creatorName = item.creator ?? request.creator ?? row?.reviewer;
       const rowProducers = row ? splitNames(row.supplier) : [];
-      const producerNames = item.producers ?? request.producers ?? (row ? (rowProducers.length ? rowProducers : [PENDING_SUPPLIER]) : undefined);
+      const producerNames = item.producers ?? request.producers ?? (rowProducers.length ? rowProducers : undefined);
       need(creatorName && creatorName.trim(), `创意人未定${row ? `（进度表 GOFCN${row.number} 的创意者脚本审核人为空）` : ''}`);
-      need(producerNames && producerNames.length > 0, '制作人未定');
+      need(producerNames && producerNames.length > 0, `制作人未定${row ? `（进度表 GOFCN${row.number} 的设计师供应商为空：问用户素材是谁做的，写在 items[].producers）` : ''}`);
       // The sheet's short names are not always CLS's (廿十一 / 长沙廿拾一文化传媒有限公司): a refusal says where the name came from, and to
       // name the person for this file only, since a top-level field would replace every other file's people from its own row too.
       const sheetSays = (field: 'creator' | 'producers', column: string) =>
@@ -652,7 +652,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
       const source = {
         name: row && !why ? 'progress' : item.name !== undefined ? 'item' : 'file',
         creator: item.creator !== undefined ? 'item' : request.creator !== undefined ? 'request' : 'progress',
-        producers: item.producers !== undefined ? 'item' : request.producers !== undefined ? 'request' : rowProducers.length ? 'progress' : 'pending',
+        producers: item.producers !== undefined ? 'item' : request.producers !== undefined ? 'request' : 'progress',
         ...(bound ? { progress_row: { sheet: bound.row.sheet, row: bound.row.row, number: bound.row.number, name: bound.row.name,
           supplier: bound.row.supplier, reviewer: bound.row.reviewer, by: bound.by } } : {}),
       };
