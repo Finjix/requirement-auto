@@ -5,11 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildUploadPlan, creativeName, findDirectory, formulaText, loadUploadPlan, materialNumber, materialRefusal, normalizeUploadRequest, parseNumbers,
-  progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
+  lookupRows, nameParts, pendingBody, progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
 } from '../src/gof/creative.ts';
 import { unpackZip } from '../src/gof/unzip.ts';
 import { createCreativeAdapter } from '../src/gof/creative-adapter.ts';
-import { findRows, planUpload, runUpload, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
+import { findRows, listFiles, planUpload, runUpload, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
 import type { Online } from '../src/gof/cls-online.ts';
 import type { Bridge } from '../src/gof/feishu.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
@@ -597,4 +597,66 @@ test('the 终稿库 zip end to end: planned from the progress sheet, uploaded un
     assert.ok(result.uploaded.every((u: any) => u.creator === '金莉' && u.producers[0] === '长沙廿拾一文化传媒有限公司'));
     assert.ok(fs.readFileSync(zip).equals(before), 'the zip the user sent is not changed');
   } finally { fake.close(); }
+});
+
+/** The production sheet after the files of 玩法AI迭代素材 were registered: rows named GOFCN<编号>_<一级>_<二级>_<提炼词>, the newest formula. */
+function registeredSheet(extra: unknown[][] = []): string {
+  const file = path.join(tempDir('progress-'), 'progress.xlsx');
+  const row = (r: number, number: number, tags: [string, string], keyword: string) =>
+    [null, null, number, keyword, null, null, { f: `CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",D${r})` }, tags[0], tags[1], null, null, null, '廿十一', '金莉'];
+  fs.writeFileSync(file, makeXlsx([{ name: '26年1月-GOFCN', rows: [HEADER,
+    row(2, 67738, ['AI玩法优化', '搂冰块抢资源'], '割资源冰块对抗_竖版'),
+    row(3, 67739, ['AI玩法优化', '火车运输御敌'], '兵临城下塔防_企鹅_竖版'),
+    row(4, 67740, ['AI玩法优化', '火车运输御敌'], '兵临城下塔防_冻鱼_竖版'),
+    ...extra.map((cells, i) => (cells as any[]).length ? row(5 + i, ...(cells as [number, [string, string], string])) : []),
+  ] }]));
+  return file;
+}
+const PENDING = { 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版.mp4': 'ice', 'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版.mp4': 'penguin',
+  'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版.mp4': 'fish' };
+
+test('files named GOFCNxxxxx_… before their rows existed go up as those rows once they do, the number filled in', async () => {
+  assert.deepEqual([pendingBody('GOFCNxxxxx_AI玩法优化_搂冰块'), pendingBody('GOFCN_a_b'), pendingBody('GOFCN67738_a_b'), pendingBody('01')], ['AI玩法优化_搂冰块', 'a_b', null, null]);
+  // Read the way materials are named: 一级_二级_创意形式_提炼词, sometimes _竖版 / _横版 after it; fewer parts cannot be told apart.
+  assert.deepEqual(nameParts('AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版'),
+    { primary_tag: 'AI玩法优化', secondary_tag: '火车运输御敌', creative_form: '兵临城下塔防', keyword: '企鹅', orientation: '竖版' });
+  assert.deepEqual(nameParts('AI生成_设定3.0_3D_围炉_煮冰_横板'), { primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D', keyword: '围炉_煮冰', orientation: '横板' });
+  assert.deepEqual(nameParts('AI生成_设定3.0_3D_企鹅'), { primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D', keyword: '企鹅' });
+  assert.ok('unclear' in nameParts('AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版'));
+  const dir = materials(PENDING);
+  const listed = await listFiles([dir], { tmpDir: tempDir('files-tmp-') });
+  assert.equal(listed.files.find((f: any) => f.name.includes('企鹅')).parts.creative_form, '兵临城下塔防');
+  assert.deepEqual(listed.files.map((f: any) => [f.name_without_number, f.pending_number, f.kind]).sort(), Object.keys(PENDING)
+    .map(name => [name.replace(/^GOFCNxxxxx_/, '').replace(/.mp4$/, ''), true, 'video']).sort());
+  const fake = await fakeCreative();
+  try {
+    const deps = depsFor();
+    const file = await approvedPlan(fake, deps, { files: [dir], progress: true, producers: ['长沙廿拾一文化传媒有限公司'] }, sheetBridge(registeredSheet()));
+    const plan = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(plan.items.map((i: any) => [i.name, i.source.progress_row.by, i.renamed_from !== undefined]).sort(), [
+      ['GOFCN67738_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', 'name', true], ['GOFCN67739_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版', 'name', true],
+      ['GOFCN67740_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版', 'name', true]]);
+    assert.ok(plan.items.every((i: any) => i.creator.name === '金莉'), '创意人 from the row');
+    const result = await runUpload(online(fake), file, deps);
+    assert.equal(result.status, 'uploaded', JSON.stringify(result));
+    assert.ok(fake.requests.find(r => r.path === '/api/qcloud/signed-url')!.body!.files
+      .includes('GOFCN67739_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版/GOFCN67739_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版.mp4'));
+  } finally { fake.close(); }
+});
+
+test('a GOFCNxxxxx_… file without its row is to be registered first, and one of two rows of its name is named by number', async () => {
+  const snapshot = new Snapshot(registeredSheet([[67741, ['AI玩法优化', '搂冰块抢资源'], '割资源冰块对抗_竖版']]));
+  const plan = async (files: Record<string, string>, items: Record<string, unknown>[] = []) => {
+    const { materials: found, skipped } = await hashed([materials(files)]);
+    const bodies = found.map(m => pendingBody(m.name)).filter((b): b is string => b !== null);
+    const { byNumber, byBody } = lookupRows(snapshot, items.map(i => Number(i.number)).filter(Boolean), bodies);
+    return buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['长沙廿拾一文化传媒有限公司'], items }), options: OPTIONS,
+      materials: found, skipped, existing: new Set(), progress: byNumber, named: byBody });
+  };
+  await assert.rejects(plan({ 'GOFCNxxxxx_AI玩法优化_转斧杀熊烤肉_杀熊订单_国风配乐_竖版.mp4': 'g' }),
+    /进度表里还没有素材名称为“GOFCN<编号>_AI玩法优化_转斧杀熊烤肉_杀熊订单_国风配乐_竖版”的行：这批素材要先登记/);
+  const twice = { 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版.mp4': 'ice' };
+  await assert.rejects(plan(twice), /有 2 行的素材名称是“GOFCN<编号>_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版”（GOFCN67738、GOFCN67741）：用 items\[\]\.number 写明/);
+  const picked = await plan(twice, [{ file: 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版.mp4', number: 67741 }]);
+  assert.deepEqual([picked.items[0].name, picked.items[0].source.progress_row.by], ['GOFCN67741_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', 'item']);
 });

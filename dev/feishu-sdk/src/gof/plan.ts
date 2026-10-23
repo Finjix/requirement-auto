@@ -1,9 +1,29 @@
 import { CellRange, columnLetter, coordOf, translateFormula } from './a1.ts';
 import { fieldValues, ITEM_FIELDS, itemsOf, normalizeRequest, OPTIONAL_FIELDS, type Item } from './request.ts';
-import { chooseSheet, collectIds, concatenate, optionsFor, REQUIRED_HEADERS, type Snapshot } from './snapshot.ts';
-import { digest, need, safeFilename, TARGET } from './util.ts';
+import { chooseSheet, collectIds, concatenate, FIELD_HEADERS, formulaRefs, optionsFor, REQUIRED_HEADERS, type Columns, type Snapshot } from './snapshot.ts';
+import type { CellData } from './xlsx.ts';
+import { Blocked, digest, need, safeFilename, TARGET } from './util.ts';
 
 export type Plan = Record<string, any>;
+
+/** The naming formula a new row copies: the nearest one above it in the 素材名称 column. */
+export function namingFormula(snapshot: Snapshot, sheet: string, cols: Columns, below: number): CellData {
+  for (let r = below - 1; r > 1; r--) {
+    const cell = snapshot.cell(sheet, r, cols.name!);
+    if (cell?.kind === 'f' && cell.value !== null) return cell;
+  }
+  throw new Blocked('没有可继承的命名公式');
+}
+
+/**
+ * How the sheet names a row, in its own words ("GOFCN<素材编号>_<一级标签>_<二级标签>_<提炼词>"): the sheet decides what a 素材名称 is
+ * made of, and colleagues change it (创意形式 and 客户端 were dropped from it in October 2026).
+ */
+export function namingPattern(formula: string, row: number, cols: Columns): string {
+  const fields = new Map(Object.entries(cols).map(([field, col]) => [coordOf(col, row), FIELD_HEADERS[field]!]));
+  const shown = Object.fromEntries(formulaRefs(formula).map(coord => [coord, `<${fields.get(coord) ?? coord}>`]));
+  try { return concatenate(formula, shown); } catch { return formula; }
+}
 
 /** Plans the rows to append: the next material numbers, the naming formula copied down, the dropdown options to extend. */
 export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: string | null): Plan {
@@ -30,12 +50,11 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
     need(merged.maxRow < area.minRow || merged.minRow > area.maxRow || merged.maxCol < area.minCol || merged.minCol > area.maxCol,
       '追加范围与合并单元格相交');
   }
-  let formulaCell;
-  for (let r = startRow - 1; r > 1; r--) {
-    const cell = snapshot.cell(sheet, r, cols.name!);
-    if (cell?.kind === 'f' && cell.value !== null) { formulaCell = cell; break; }
-  }
-  need(formulaCell, '没有可继承的命名公式');
+  const formulaCell = namingFormula(snapshot, sheet, cols, startRow);
+  const naming = namingPattern(translateFormula(formulaCell.value!, formulaCell.coord, coordOf(cols.name!, startRow)), startRow, cols);
+  // The API writes a column in one go: a column of some rows with a 创意形式 and some without would be a write with holes.
+  const forms = request.groups.flatMap(g => itemsOf(g).map(item => item.creative_form !== ''));
+  need(forms.every(Boolean) || !forms.some(Boolean), '这一批有的行写了创意形式、有的没写：创意形式要么都写，要么都不写');
   const rows: Plan[] = [];
   const groups: Plan[] = [];
   let cursor = 0;
@@ -57,9 +76,14 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
         }
         const nameCoord = coordOf(cols.name!, r);
         const formula = translateFormula(formulaCell.value!, formulaCell.coord, nameCoord);
+        // The name is what the sheet's own formula makes of the row; a name the request gives (a file named for its row) must come out exactly.
         const name = concatenate(formula, values);
         need(name.startsWith(`GOFCN${number}_`), '命名公式未产生正确 GOFCN 编号');
-        need(name === `GOFCN${number}_${item.material_name}`, '命名公式/推理标签与用户素材名称不一致，请澄清');
+        // Without SUBSTITUTE(…,"__","_") around it, a formula that still names rows by 创意形式 leaves an empty part where it is missing.
+        need(item.creative_form !== '' || !name.includes('__'), `进度表的素材名称用到创意形式（${naming}）：第 ${index} 组要写明创意形式`);
+        need(item.material_name === undefined || name === `GOFCN${number}_${item.material_name}`,
+          `按进度表现在的命名（${naming}），这一行会叫“${name}”，不是要求的“GOFCN${number}_${item.material_name}”：核对一级标签、二级标签和提炼词`);
+        need(!/[\\/]/.test(name), `素材名称“${name}”含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）`);
         values[nameCoord] = formula;
         rows.push({ row: r, number, name, values, group: id });
         names.push(name);
@@ -68,7 +92,7 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
       }
     }
     const first = itemsOf(g)[0]!;
-    const filename = `创意脚本_${id}_${safeFilename(first.topic)}_${safeFilename(first.creative_form)}_${safeFilename(g.supplier)}.csv`;
+    const filename = `创意脚本_${[id, first.topic, first.creative_form, g.supplier].filter(Boolean).map(safeFilename).join('_')}.csv`;
     groups.push({ id, csv: filename, names, rows: groupRows, request: g });
   });
   const dropdowns: Plan[] = [];
@@ -85,7 +109,7 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
   const plan: Plan = {
     schema: 1, target: TARGET, worksheet: sheet, current_sheet: current ?? null, request, baseline_digest: snapshot.fingerprint,
     columns: cols, range: area.toString(), quantity: total, first_number: startNumber, last_number: startNumber + total - 1,
-    rows, groups, dropdowns, history_warnings: warnings,
+    rows, groups, dropdowns, history_warnings: warnings, naming,
   };
   plan.plan_id = digest(plan).slice(0, 24);
   return plan;

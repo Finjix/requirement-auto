@@ -10,6 +10,8 @@ import { normalizeRequest } from '../src/gof/request.ts';
 import { clsCheck, composeMessage, loadBatch, message, preflight, prepare, record, report, status, verify } from '../src/gof/batch.ts';
 import { Blocked, canonical, digest, readJson, writeJsonNew } from '../src/gof/util.ts';
 import { rejectSecrets } from '../src/gof/seal.ts';
+import { sameNameRows } from '../src/gof/feishu.ts';
+import { makeXlsx } from './helpers/xlsx-writer.ts';
 
 /*
  * The fixtures and golden.json were produced by the Python implementation this code replaced (dev/tests/make_fixtures.py in
@@ -21,7 +23,8 @@ const fixtures = path.join(here, 'fixtures');
 const golden = readJson(path.join(fixtures, 'golden.json'));
 const fx = (name: string) => path.join(fixtures, name);
 const request = (name: string) => readJson(path.join(fixtures, 'requests', `${name}.json`));
-const strip = (plan: Plan) => { const { plan_id, baseline_digest, ...rest } = plan; return rest; };
+// `naming` (how the sheet names a row, shown in the plan) came after the port.
+const strip = (plan: Plan) => { const { plan_id, baseline_digest, naming, ...rest } = plan; return rest; };
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'gof-batch-'));
 const MAIN = 'GOFCN创意进度 26年3月';
 // JSON.parse cannot tell 2.0 from 2, so the Python check for an integral float is not reproducible.
@@ -272,14 +275,15 @@ const derived = (over: Record<string, unknown> = {}) => ({
   cls: { direction: '方向一', task_type: 'creative_a' }, ...over,
 });
 
-test('提炼词 defaults to 关键词 and the material name is built from the tags, form and keyword', () => {
+test('提炼词 defaults to 关键词 and the material name is what the sheet\'s naming formula makes of the tags, form and keyword', () => {
   const plan = makePlan(open('base.xlsx'), { groups: [derived({ quantity: 2, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频' })] });
   assert.deepEqual(plan.rows.map((r: Plan) => r.name), ['GOFCN1011_玩法_卖点_视频_关键词', 'GOFCN1012_玩法_卖点_视频_关键词']);
+  assert.equal(plan.naming, 'GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>');
   const g = plan.groups[0].request;
-  assert.deepEqual([g.keyword, g.material_name, g.topic, 'items' in g], ['关键词', '玩法_卖点_视频_关键词', '玩法_卖点', false]);
-  // Written out in full, the same request gives the same plan.
+  assert.deepEqual([g.keyword, g.material_name, g.topic, 'items' in g], ['关键词', undefined, '玩法_卖点', false]);
+  // Written out in full, the same request gives the same rows; the name it gives is kept, to be checked against the formula.
   const same = makePlan(open('base.xlsx'), { groups: [derived({ quantity: 2, material_name: 'GOFCN1_玩法_卖点_视频_关键词', creative_form: '视频', keyword: '关键词' })] });
-  assert.deepEqual(same, plan);
+  assert.deepEqual([same.rows, same.groups[0].request.material_name], [plan.rows, '玩法_卖点_视频_关键词']);
   // A one-item list is the same group too.
   const listed = makePlan(open('base.xlsx'), { groups: [derived({ items: [{ quantity: 2, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频' }] })] });
   assert.deepEqual(listed, plan);
@@ -378,9 +382,83 @@ test('a request with rows of several kinds is refused when an item is incomplete
   assert.equal(refused({ items: [] }), '第 1 组的 items 需要至少一项');
   assert.equal(refused({ items: [item, { ...item, extra: 1 }] }), '第 1 组第 2 项有未知字段');
   assert.equal(refused({ items: [item, { quantity: 1, primary_tag: '玩法', creative_form: '视频' }] }), '第 1 组第 2 项缺少一级/二级标签');
-  assert.equal(refused({ items: [item, { quantity: 1, primary_tag: '玩法', secondary_tag: '卖点' }] }), '第 1 组第 2 项缺少创意形式');
+  assert.equal(refused({ items: [item, { quantity: 1, primary_tag: '玩法', secondary_tag: '卖点' }] }), '这一批有的行写了创意形式、有的没写：创意形式要么都写，要么都不写');
+  assert.equal(refused({ items: [{ quantity: 1, primary_tag: '玩法', secondary_tag: '卖点' }] }),
+    '进度表的素材名称用到创意形式（GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>）：第 1 组要写明创意形式');
+  assert.equal(refused({ items: [{ ...item, secondary_tag: '卖点_体验' }] }), '第 1 组第 1 项的二级标签“卖点_体验”不能含 _：素材名称按 _ 分段，标签各占一段，其余写进提炼词');
   assert.equal(refused({ items: [{ ...item, quantity: 0 }] }), 'quantity 必须是正整数');
-  assert.equal(refused({ items: [{ ...item, material_name: '玩法_卖点_图文_关键词' }] }), '素材名称与创意形式/提炼词不一致，请澄清');
+  assert.equal(refused({ items: [{ ...item, material_name: '玩法_卖点_图文_关键词' }] }),
+    '按进度表现在的命名（GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>），这一行会叫“GOFCN1011_玩法_卖点_视频_关键词”，不是要求的“GOFCN1011_玩法_卖点_图文_关键词”：核对一级标签、二级标签和提炼词');
+  assert.equal(refused({ items: [{ quantity: 1, material_name: '玩法_卖点_图文_关键词', creative_form: '视频' }] }), '素材名称与创意形式/提炼词不一致，请澄清');
   assert.equal(refused({ quantity: 1, creative_form: '视频' }), '第 1 组缺少一级/二级标签');
   assert.equal(refused({ ...item, script_url: 'https://centurygames.feishu.cn/sheets/shtABC123?sheet=x' }), 'no error');
+});
+
+// ---- the sheet names rows its own way: since 2026-10-22 the production sheet's formula leaves 创意形式 and 客户端 out
+
+const LIVE_HEADER = ['', '创意批次', '素材编号', '提炼词', '片头引用（初版编号）', '创意引用（海外汉化解说/迭代）（初版编号）', '素材名称', '一级标签（方向）',
+  '二级标签（卖点）', '创意表达（可多选）', '创意形式（制作形式）', '客户端', '设计师供应商', '创意者脚本审核人'];
+/** A progress sheet like the production one: rows named GOFCN<编号>_<一级>_<二级>_<提炼词>, the last ones by the formula given. */
+function liveSheet(last: (row: number) => string = row => `CONCATENATE("GOFCN",C${row},"_",H${row},"_",I${row},"_",D${row})`): Snapshot {
+  const row = (r: number, number: number, keyword: string, tags: [string, string], formula: string, form: string | null = null) =>
+    [null, null, number, keyword, null, null, { f: formula }, tags[0], tags[1], null, form, null, '达治', '靳筱萌'];
+  const old = (r: number) => `CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",K${r},"_",D${r},L${r})`;
+  const file = path.join(tmp(), 'live.xlsx');
+  fs.writeFileSync(file, makeXlsx([{ name: '26年1月-GOFCN', rows: [LIVE_HEADER,
+    row(2, 67679, '关键词', ['AI迭代', '题材片头'], old(2), '2D'),
+    row(3, 67736, '3D_BJAI片头矿工冰层版CN60141', ['AI片头衔接', '模拟经营'], last(3)),
+    row(4, 67737, '割资源冰块对抗_竖版', ['AI玩法优化', '搂冰块抢资源'], last(4)),
+  ] }]));
+  return new Snapshot(file);
+}
+const fromFiles = (names: string[]): { groups: Record<string, any>[] } => ({ groups: [derived({ label: 'AI玩法优化', items: names.map(name => {
+  const [primary, secondary, ...rest] = name.replace(/^GOFCNx+_/, '').split('_');
+  return { quantity: 1, primary_tag: primary, secondary_tag: secondary, keyword: rest.join('_'), material_name: name };
+}) })] });
+
+test('the name is what the sheet\'s own formula makes of a row: 创意形式 stays empty when the formula leaves it out', () => {
+  const snapshot = liveSheet();
+  const plan = makePlan(snapshot, { groups: [derived({ quantity: 2, primary_tag: 'AI生成', secondary_tag: '设定3.0', keyword: '企鹅保龄球' })] });
+  assert.equal(plan.naming, 'GOFCN<素材编号>_<一级标签>_<二级标签>_<提炼词>');
+  assert.deepEqual(plan.rows.map((r: Plan) => r.name), ['GOFCN67738_AI生成_设定3.0_企鹅保龄球', 'GOFCN67739_AI生成_设定3.0_企鹅保龄球']);
+  assert.deepEqual([plan.rows[0].values.K5, plan.rows[0].values.G5], [null, '=CONCATENATE("GOFCN",C5,"_",H5,"_",I5,"_",D5)']);
+  // A form, when known, is still written to its column, for every row of the batch or for none.
+  assert.equal(makePlan(snapshot, { groups: [derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D' })] }).rows[0].values.K5, '3D');
+  // Rows named by SUBSTITUTE(CONCATENATE(…),"__","_") are named the same way.
+  const wrapped = makePlan(liveSheet(r => `SUBSTITUTE(CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",K${r},"_",D${r},L${r}),"__","_")`),
+    { groups: [derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', keyword: '冻鱼飞盘' })] });
+  assert.deepEqual([wrapped.rows[0].name, wrapped.naming], ['GOFCN67738_AI生成_设定3.0_冻鱼飞盘', 'GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词><客户端>']);
+});
+
+test('files named for rows not appended yet (GOFCNxxxxx_…) become rows of exactly those names, checked against the formula', () => {
+  const snapshot = liveSheet();
+  const names = ['GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版', 'GOFCNxxxxx_AI玩法优化_转斧杀熊烤肉_杀熊订单_国风配乐_竖版'];
+  const plan = makePlan(snapshot, fromFiles(names));
+  assert.deepEqual(plan.rows.map((r: Plan) => r.name), ['GOFCN67738_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版', 'GOFCN67739_AI玩法优化_转斧杀熊烤肉_杀熊订单_国风配乐_竖版']);
+  assert.deepEqual(plan.groups[0].request.items.map((i: Plan) => i.material_name), names.map(n => n.replace('GOFCNxxxxx_', '')));
+  assert.deepEqual(plan.dropdowns.find((d: Plan) => d.field === 'secondary_tag').missing, ['火车运输御敌', '转斧杀熊烤肉']);
+  // Prepared again on the same sheet it is the same plan, and its CSV names the rows as the files are named.
+  const prepared = prepare(plan, snapshot, { outputRoot: tmp() });
+  assert.deepEqual(prepared.csv, ['创意脚本_01_AI玩法优化_火车运输御敌_供应商甲.csv']);
+  assert.ok(fs.readFileSync(path.join(prepared.batch, prepared.csv[0]), 'utf8').includes('\r\nGOFCN67739_AI玩法优化_转斧杀熊烤肉_杀熊订单_国风配乐_竖版,同上,'));
+  // A name the formula cannot make is refused with what the row would be called.
+  const wrong = fromFiles(names);
+  wrong.groups[0].items[0].keyword = '兵临城下塔防_企鹅';
+  assert.throws(() => makePlan(snapshot, wrong), (e: Error) => e instanceof Blocked && e.message
+    === '按进度表现在的命名（GOFCN<素材编号>_<一级标签>_<二级标签>_<提炼词>），这一行会叫“GOFCN67738_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅”，不是要求的“GOFCN67738_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版”：核对一级标签、二级标签和提炼词');
+  // A row of that name already in the sheet is said: the file has most likely been registered before.
+  const again = makePlan(snapshot, fromFiles(['GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', ...names]));
+  assert.deepEqual(sameNameRows(snapshot, again), [{ name: 'AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版',
+    rows: [{ number: 67737, name: 'GOFCN67737_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', where: '26年1月-GOFCN 第 4 行' }] }]);
+  assert.deepEqual(sameNameRows(snapshot, plan), []);
+});
+
+test('a file name holds 创意形式 even where the sheet\x27s formula does not: it goes to its column and leads the 提炼词, as colleagues write it', () => {
+  const name = 'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版';
+  const item = { quantity: 1, primary_tag: 'AI玩法优化', secondary_tag: '火车运输御敌', creative_form: '兵临城下塔防', material_name: name };
+  const plan = makePlan(liveSheet(), { groups: [derived({ items: [{ ...item, keyword: '兵临城下塔防_企鹅_竖版' }] })] });
+  assert.deepEqual([plan.rows[0].name, plan.rows[0].values.K5, plan.rows[0].values.D5], ['GOFCN67738_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版', '兵临城下塔防', '兵临城下塔防_企鹅_竖版']);
+  // Where the formula names rows by 创意形式 itself, the 提炼词 is only what follows it.
+  const old = (r: number) => `CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",K${r},"_",D${r},L${r})`;
+  assert.equal(makePlan(liveSheet(old), { groups: [derived({ items: [{ ...item, keyword: '企鹅_竖版' }] })] }).rows[0].name, 'GOFCN67738_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版');
 });

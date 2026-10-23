@@ -229,6 +229,11 @@ function clsCommand(args: string[]): Result {
 async function creativeCommand(command: string, args: string[], bridge: Bridge, via: online.Online): Promise<Result> {
   switch (command) {
     case 'options': return creative.uploadOptions(via, str(parse(args, { find: { type: 'string' } }).values.find));
+    case 'files': {
+      const { positionals } = parse(args, {}, true);
+      need(positionals.length > 0, 'creative files 需要文件、文件夹或 zip 的路径');
+      return creative.listFiles(positionals);
+    }
     case 'rows': {
       const { values } = parse(args, { numbers: { type: 'string' }, find: { type: 'string' }, progress: { type: 'string' } });
       const numbers = str(values.numbers) ? parseNumbers(str(values.numbers)!) : [];

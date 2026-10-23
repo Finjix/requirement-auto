@@ -11,15 +11,18 @@ export const DEFAULT_KEYWORD = '关键词';
 /** The progress fields that make up a material name and may differ from row to row within one group. */
 export const ITEM_FIELDS = ['primary_tag', 'secondary_tag', 'creative_form', 'keyword'];
 
-/** A run of rows with the same name body: quantity, the tags, form and keyword, and the name without its number. */
+/**
+ * A run of rows with the same name body: quantity, the tags, form (empty when not given) and keyword, and, only when the request names
+ * them, the name the rows must get without its number (`material_name`, e.g. from files named for their rows).
+ */
 export interface Item {
   quantity: number;
-  material_name: string; topic: string; primary_tag: string; secondary_tag: string; creative_form: string; keyword: string;
+  material_name?: string; topic: string; primary_tag: string; secondary_tag: string; creative_form: string; keyword: string;
 }
 
 export interface Group {
   quantity: number;
-  material_name: string; keyword: string; creative_form: string; supplier: string; reviewer: string; script_url: string;
+  material_name?: string; keyword: string; creative_form: string; supplier: string; reviewer: string; script_url: string;
   topic: string; primary_tag: string; secondary_tag: string; creator: string; client: string; brief: string;
   creative_expression: string; creative_batch: string; head_reference: string; creative_reference: string;
   cls: Record<string, string | number>;
@@ -49,28 +52,37 @@ export function fieldValues(groups: Record<string, any>[], field: string): strin
 }
 
 /**
- * One run of rows. `raw` holds the item's own keys and `inherited` the group's defaults for the tags, form and keyword. The name is
- * either given (a sample with an old number is fine) and checked against the form and keyword, or built from the tags.
+ * The name a request gives without its number: a number in front is an old one (a sample, never a new ID), and so is a number not given
+ * yet (`GOFCNxxxxx_…`, how a file is named before its row exists).
+ */
+export const PENDING_NUMBER = /^GOFCN(?:\d+|[xX×*＊?？#]*)_/;
+
+/**
+ * One run of rows. `raw` holds the item's own keys and `inherited` the group's defaults for the tags, form and keyword. The tags are given;
+ * a request that gives only a name (`material_name`, the way the sheet used to name rows: 一级_二级_创意形式_提炼词) has them read from it.
+ * A given name is the one the rows must get: the plan checks it against what the sheet's naming formula makes of the row.
  */
 function item(raw: Record<string, any>, inherited: Record<string, any>, where: string): Item {
   const q = raw.quantity;
   need(typeof q === 'number' && Number.isInteger(q) && q > 0, 'quantity 必须是正整数');
   const value = (key: string, fallback: unknown) => pick(raw, key, pick(inherited, key, fallback));
-  need(value('creative_form', undefined) !== undefined, `${where}缺少创意形式`);
-  const form = cellText(value('creative_form', ''), 'creative_form');
+  // 创意形式 is a column of its own; the sheet no longer names rows by it, and an empty one stays empty.
+  const form = cellText(value('creative_form', ''), 'creative_form').trim();
   const keyword = cellText(value('keyword', DEFAULT_KEYWORD), 'keyword');
-  need(form.trim() !== '', '缺少 creative_form');
   need(keyword.trim() !== '', '缺少 keyword');
   // It ends up in the 素材名称, which is also the creative's name in CLS, where / and \ cannot be: such a row could never be uploaded.
   need(!/[\\/]/.test(keyword), `提炼词“${keyword}”不能含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）：换成别的写法`);
   const result: Record<string, any> = { quantity: q, creative_form: form, keyword };
-  const suffix = `_${form}_${keyword}`;
   const given = value('material_name', undefined);
+  const tagged = ['primary_tag', 'secondary_tag'].every(key => typeof value(key, '') === 'string' && value(key, '').trim() !== '');
   if (given !== undefined) {
     need(typeof given === 'string' && given.trim() !== '', '缺少 material_name');
-    // A user-supplied historical number is a naming example, never a new ID.
-    result.material_name = cellText(given, 'material_name').replace(/^GOFCN\d+_/, '');
-    need(result.material_name.endsWith(suffix), '素材名称与创意形式/提炼词不一致，请澄清');
+    result.material_name = cellText(given, 'material_name').trim().replace(PENDING_NUMBER, '');
+    need(result.material_name !== '' && !/[\\/]/.test(result.material_name), `素材名称“${given}”不能为空，也不能含 / 或 \\`);
+  }
+  if (given !== undefined && !tagged) {
+    const suffix = `_${form}_${keyword}`;
+    need(form !== '' && result.material_name.endsWith(suffix), '素材名称与创意形式/提炼词不一致，请澄清');
     const topic = result.material_name.slice(0, result.material_name.length - suffix.length);
     result.topic = cellText(pick(raw, 'topic', topic), 'topic');
     need(result.topic === topic, '题材与素材名称不一致');
@@ -87,8 +99,11 @@ function item(raw: Record<string, any>, inherited: Record<string, any>, where: s
       result[key] = cellText(tag, key);
     }
     result.topic = `${result.primary_tag}_${result.secondary_tag}`;
-    result.material_name = `${result.topic}${suffix}`;
     if ('topic' in raw) need(raw.topic === result.topic, '题材与素材名称不一致');
+  }
+  // A 素材名称 is cut into its parts at _: a tag with one of its own would make a name that can be read two ways (no option has one).
+  for (const key of ['primary_tag', 'secondary_tag']) {
+    need(!result[key].includes('_'), `${where}的${key === 'primary_tag' ? '一级' : '二级'}标签“${result[key]}”不能含 _：素材名称按 _ 分段，标签各占一段，其余写进提炼词`);
   }
   return result as Item;
 }

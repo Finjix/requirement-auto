@@ -39,7 +39,19 @@ Values are placeholders.
 - `worksheet` (optional): default is the newest year-month GOFCN sheet with valid columns; a tie fails.
 - A **group** is one CSV and one CLS ticket: one supplier, reviewer, script link and set of CLS fields. Groups are appended in one range, numbers running on in order.
 - Rows: either all alike (`quantity` plus the fields on the group) or `items`, runs of rows in order, each with `quantity` and what differs (`primary_tag`, `secondary_tag`, `creative_form`, `keyword`; group values are defaults). With `items`, a group `quantity` is allowed only as their sum.
-- Per row: `primary_tag`, `secondary_tag`, `creative_form` required; `keyword` (提炼词) defaults to `关键词` (the user confirms that default; rows with 提炼词 of their own are `items` of `quantity` 1) and cannot contain `/` or `` (the name is also the CLS creative name). The name is `<一级>_<二级>_<创意形式>_<提炼词>` and the sheet's naming formula must produce `GOFCN<number>_<that>`. Older requests may give `material_name` instead of the tags (must end with `_<creative_form>_<keyword>`).
+- Per row: `primary_tag`, `secondary_tag` required, one part of the name each (no `_`); `creative_form` optional (empty stays empty; all rows of the request or none; needed only where the naming formula would leave an empty part); `keyword` (提炼词) defaults to `关键词` (the user confirms that default; rows with 提炼词 of their own are `items` of `quantity` 1) and cannot contain `/` or `` (the name is also the CLS creative name). The name is what the sheet's naming formula makes of the row: `context` and `plan` show it as `naming`, now `GOFCN<素材编号>_<一级标签>_<二级标签>_<提炼词>` (the sheet used to put `_<创意形式>` before the 提炼词).
+- `material_name` (optional, per item or group): the name the rows must get, without the number (a leading `GOFCN<digits>_` or `GOFCNxxxxx_` is dropped), e.g. a file named for its row; the plan refuses when the formula makes another name, saying which. Older requests give it instead of the tags, in the old `<一级>_<二级>_<创意形式>_<提炼词>` form, and the tags are read from it.
+
+Rows from files named `编号_一级_二级_创意形式_提炼词[_竖版|_横版]` (one item per file, in file order; `gof creative files` lists them with their `parts`). With today's `naming` (no 创意形式) the 创意形式 goes to its column and in front of the 提炼词, so the name stays the file's:
+
+```json
+{ "supplier": "廿十一", "reviewer": "金莉", "script_url": "https://centurygames.feishu.cn/docx/CurrentScript789", "label": "AI玩法优化",
+  "items": [
+    { "quantity": 1, "primary_tag": "AI玩法优化", "secondary_tag": "火车运输御敌", "creative_form": "兵临城下塔防", "keyword": "兵临城下塔防_企鹅_竖版",
+      "material_name": "GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版" }
+  ],
+  "cls": { "direction": "<direction>", "task_type": "<task type>", "supplier": "长沙廿拾一文化传媒有限公司" } }
+```
 - `quantity`: positive integer. `supplier`, `reviewer`, `script_url` (company `wiki`/`docx`/`sheets` link as given) are required.
 - `label` (optional, 1-20 characters, no brackets or stars): the requirement's short name in the group message; default the 一级标签. Printed by `plan` as `message_kind`.
 - `cls.direction`, `cls.task_type` are required unless the user excluded the ticket (then omit `cls`). `cls.requirement_name` is rejected: `gof cls` builds it as `GOFCN<first>-GOFCN<last>` (one row: `GOFCN<number>`).

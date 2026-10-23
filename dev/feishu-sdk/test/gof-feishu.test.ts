@@ -328,7 +328,7 @@ test('a whole append: plan, prepare, safety receipt, one write, read back and ve
   const result = await execute(bridge, dir, receipt);
   assert.equal(result.status, 'append_verified');
   assert.equal(result.range, 'A6:I8');
-  assert.equal(result.sheet_url, 'https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn?sheet=s3');
+  assert.equal(result.sheet_url, 'https://centurygames.feishu.cn/wiki/GH7cwIxzZi3gVdk2s3tc1dDbnQc?sheet=s3');
   assert.equal(readJson(result.report).links.progress_sheet, result.sheet_url);
   assert.equal(fake.productionWrites, 1);
   const state = status(dir);
@@ -527,6 +527,8 @@ test('the context gives the target sheet, the next number and the dropdown optio
   const base = new Snapshot(path.join(fixtures, 'base.xlsx'));
   const result = await context(bridge, base);
   assert.deepEqual([result.worksheet, result.sheet_id, result.next_number], ['GOFCN创意进度 26年3月', 's3', 1011]);
+  // How the next row will be named, so that files named for their rows can be split into its parts.
+  assert.equal(result.naming, 'GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>');
   assert.deepEqual(result.options, { primary_tag: ['玩法', '画面', '系统'], secondary_tag: ['卖点', '体验'], creative_form: ['视频', '图文'],
     supplier: ['供应商甲', '供应商乙'], creator: ['张三', '李四'] });
   assert.equal('recent' in result || 'past_requests' in result, false);

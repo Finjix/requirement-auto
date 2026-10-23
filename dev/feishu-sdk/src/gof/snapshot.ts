@@ -232,8 +232,30 @@ export function collectIds(snapshot: Snapshot, tables: Record<string, Columns>, 
   return identifiers;
 }
 
+/**
+ * The naming formula inside its SUBSTITUTE wrappers (the sheet has SUBSTITUTE(CONCATENATE(…),"__","_")), and the replacements they make,
+ * innermost first.
+ */
+function unwrapSubstitute(formula: string): [string, [string, string][]] {
+  const replacements: [string, string][] = [];
+  const literal = (token: string) => token.slice(1, -1).replaceAll('""', '"');
+  let body = formula;
+  for (let m; (m = /^=\s*SUBSTITUTE\s*\((.*),\s*("(?:[^"]|"")*")\s*,\s*("(?:[^"]|"")*")\s*\)$/i.exec(body));) {
+    need(literal(m[2]!) !== '', '命名公式的 SUBSTITUTE 不支持空的查找文字');
+    replacements.unshift([literal(m[2]!), literal(m[3]!)]);
+    body = `=${m[1]!.trim()}`;
+  }
+  return [body, replacements];
+}
+
+/** The cells a formula refers to (outside its texts), as plain coordinates. */
+export function formulaRefs(formula: string): string[] {
+  return (formula.replace(/"(?:[^"]|"")*"/g, '').match(/\$?[A-Z]+\$?\d+/gi) ?? []).map(ref => ref.replaceAll('$', '').toUpperCase());
+}
+
 export function concatenate(formula: string, rowValues: Record<string, string | number | null>): string {
-  const m = /^=(?:CONCATENATE|CONCAT)\((.*)\)$/i.exec(formula);
+  const [inner, replacements] = unwrapSubstitute(formula);
+  const m = /^=(?:CONCATENATE|CONCAT)\((.*)\)$/i.exec(inner);
   need(m, '命名公式不是受支持的 CONCATENATE/CONCAT，不能推测');
   const body = m[1]!;
   const tokens = body.match(/"(?:[^"]|"")*"|\$?[A-Z]+\$?\d+|,/gi) ?? [];
@@ -251,7 +273,7 @@ export function concatenate(formula: string, rowValues: Record<string, string | 
       output.push(value === null || value === undefined ? '' : String(value));
     }
   }
-  return output.join('');
+  return replacements.reduce((text, [old, replacement]) => text.replaceAll(old, replacement), output.join(''));
 }
 
 export function inlineOptions(rule: RuleData): string[] {

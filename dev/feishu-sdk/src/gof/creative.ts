@@ -61,6 +61,37 @@ export function materialNumber(name: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/**
+ * The rest of a name made for a row whose number is not known yet ("GOFCNxxxxx_AI玩法优化_…" → "AI玩法优化_…"), or null for any other
+ * name. Such a file is the row whose 素材名称 is GOFCN<its number>_<the rest>, once that row exists.
+ */
+export function pendingBody(name: string): string | null {
+  const m = /^GOFCN(?:[xX×*＊?？#]+)?_(.+)$/.exec(name);
+  return m ? m[1]! : null;
+}
+
+/** The orientation some names end in, after the 提炼词 ("…_企鹅_竖版"); 横板 is how 横版 is often typed. */
+const ORIENTATIONS = new Set(['竖版', '横版', '横板']);
+
+/**
+ * The parts of a material name without its number, read the way materials are named: 一级标签_二级标签_创意形式_提炼词, sometimes with
+ * _竖版 / _横版 after it (the 提炼词 may hold _ of its own). A name of fewer parts cannot be told apart: which of 创意形式 and 提炼词 is
+ * missing is for a person to say (`unclear`).
+ */
+export function nameParts(body: string): { primary_tag: string; secondary_tag: string; creative_form: string; keyword: string; orientation?: string } | { unclear: string } {
+  const parts = body.split('_');
+  const orientation = parts.length > 1 && ORIENTATIONS.has(parts[parts.length - 1]!) ? parts.pop()! : undefined;
+  if (parts.length < 4 || parts.some(p => p === '')) return { unclear: `“${body}”不是 一级标签_二级标签_创意形式_提炼词${orientation ? `_${orientation}` : ''} 的样子，分不清各段是什么` };
+  const [primary, secondary, form, ...keyword] = parts as [string, string, string, ...string[]];
+  return { primary_tag: primary, secondary_tag: secondary, creative_form: form, keyword: keyword.join('_'), ...(orientation ? { orientation } : {}) };
+}
+
+/** A 素材名称 without its number ("GOFCN67738_AI玩法优化_…" → "AI玩法优化_…"), or null when it does not start with one. */
+export function nameBody(name: string | null): string | null {
+  const m = name ? /^GOFCN\d+_(.+)$/.exec(name) : null;
+  return m ? m[1]! : null;
+}
+
 /** Why a file by this name cannot be a material, or null when it can (the same rule for files on disk and files inside a zip). */
 export function materialRefusal(fileName: string): string | null {
   if (fileName.startsWith('.')) return '隐藏文件';
@@ -310,6 +341,8 @@ export interface PlanInput {
   skipped: Skipped[];
   /** Rows of the progress sheet by material number (every number the request or a file name gives), unless `"progress": false`. */
   progress?: Map<number, ProgressRow[]>;
+  /** Rows of the progress sheet by their 素材名称 without the number, for the files named GOFCNxxxxx_… (see pendingBody). */
+  named?: Map<string, ProgressRow[]>;
   progressSource?: string;
   /** Names CLS already has a creative of (its signing refuses the whole batch for any of them). */
   existing: Set<string>;
@@ -417,15 +450,27 @@ function* progressRows(snapshot: Snapshot): Generator<ProgressRow> {
   }
 }
 
+/**
+ * The progress sheet rows of the wanted material numbers, and of the wanted 素材名称 without their number, from every usable GOFCN tab
+ * (a number on two rows is two rows), in one pass over the sheet.
+ */
+export function lookupRows(snapshot: Snapshot, numbers: Iterable<number>, bodies: Iterable<string> = []): { byNumber: Map<number, ProgressRow[]>; byBody: Map<string, ProgressRow[]> } {
+  const wanted = new Set(numbers);
+  const names = new Set(bodies);
+  const byNumber = new Map<number, ProgressRow[]>();
+  const byBody = new Map<string, ProgressRow[]>();
+  if (wanted.size === 0 && names.size === 0) return { byNumber, byBody };
+  for (const entry of progressRows(snapshot)) {
+    if (wanted.has(entry.number)) byNumber.set(entry.number, [...(byNumber.get(entry.number) ?? []), entry]);
+    const body = nameBody(entry.name);
+    if (body !== null && names.has(body)) byBody.set(body, [...(byBody.get(body) ?? []), entry]);
+  }
+  return { byNumber, byBody };
+}
+
 /** The progress sheet rows of the wanted material numbers, from every usable GOFCN tab (a number on two rows is two rows). */
 export function progressRowsFrom(snapshot: Snapshot, numbers: Iterable<number>): Map<number, ProgressRow[]> {
-  const wanted = new Set(numbers);
-  const found = new Map<number, ProgressRow[]>();
-  if (wanted.size === 0) return found;
-  for (const entry of progressRows(snapshot)) {
-    if (wanted.has(entry.number)) found.set(entry.number, [...(found.get(entry.number) ?? []), entry]);
-  }
-  return found;
+  return lookupRows(snapshot, numbers).byNumber;
 }
 
 const MAX_LISTED = 40;
@@ -483,16 +528,29 @@ const unusable = (name: string | null): string | null => !name ? '为空或算�
 const namedAs = (material: Material, name: string): boolean => name.replace(BIDI, '').toLowerCase() === material.name.toLowerCase();
 
 /**
+ * The number of the one row named GOFCN<number>_<body>, for a file named GOFCNxxxxx_<body>. Refused when there is none yet (the files
+ * are to be registered first: rows appended and a CLS ticket made) or several.
+ */
+function numberByName(body: string, named: Map<string, ProgressRow[]>): number {
+  const numbers = [...new Set((named.get(body) ?? []).map(r => r.number))].sort((a, b) => a - b);
+  need(numbers.length > 0, `文件名的 GOFCN 编号待定，进度表里还没有素材名称为“GOFCN<编号>_${body}”的行：这批素材要先登记（按需求流程追加进度表、建 CLS 单），再上传；已经登记、只是名称不同的，用 items[].number 写明是哪一行`);
+  need(numbers.length === 1, `进度表里有 ${numbers.length} 行的素材名称是“GOFCN<编号>_${body}”（${numbers.map(n => `GOFCN${n}`).join('、')}）：用 items[].number 写明是哪一行`);
+  return numbers[0]!;
+}
+
+/**
  * The progress sheet row a file is: the one the request names for it (`items[].number`, worked out from the requirement), else the one the
  * GOFCN number in its file name points at, but only when the file is already named as that row, since a number in a file name can be the
- * original the piece builds on. A number on several rows is one row when they all say the same (a row carried into another month's tab);
- * otherwise `items[].sheet` picks the tab. Refused, saying what to do, when there is no such row or it cannot be told which.
+ * original the piece builds on; a file named GOFCNxxxxx_… (its number not known when it was named) is the one row named so with a number.
+ * A number on several rows is one row when they all say the same (a row carried into another month's tab); otherwise `items[].sheet` picks
+ * the tab. Refused, saying what to do, when there is no such row or it cannot be told which.
  */
-function rowOf(material: Material, item: ItemRequest, rows: Map<number, ProgressRow[]>): { row: ProgressRow; by: 'item' | 'file_name' } {
-  const by = item.number !== undefined ? 'item' : 'file_name';
-  const number = item.number ?? material.number;
+function rowOf(material: Material, item: ItemRequest, rows: Map<number, ProgressRow[]>, named: Map<string, ProgressRow[]>): { row: ProgressRow; by: 'item' | 'file_name' | 'name' } {
+  const body = item.number === undefined ? pendingBody(material.name) : null;
+  const by = item.number !== undefined ? 'item' : body !== null ? 'name' : 'file_name';
+  const number = item.number ?? (body !== null ? numberByName(body, named) : material.number);
   need(number !== null, '文件名不是进度表里的素材名称，也不带 GOFCN 编号：按需求文档、脚本内容判断它是进度表的哪一行，用 items[].number 写明');
-  let found = rows.get(number) ?? [];
+  let found = rows.get(number) ?? named.get(body ?? '')?.filter(r => r.number === number) ?? [];
   need(found.length > 0, `进度表里没有 GOFCN${number}${by === 'file_name' ? '（编号取自文件名）' : ''}`);
   if (item.sheet !== undefined) {
     const tabs = [...new Set(found.map(r => r.sheet))];
@@ -503,7 +561,7 @@ function rowOf(material: Material, item: ItemRequest, rows: Map<number, Progress
   need(found.every(r => r.name === row.name && r.supplier === row.supplier && r.reviewer === row.reviewer),
     `进度表里 GOFCN${number} 有 ${found.length} 行，内容不同（${found.map(r => `${r.sheet} 第 ${r.row} 行`).join('、')}）：${
       new Set(found.map(r => r.sheet)).size === found.length ? '用 items[].sheet 写明是哪个分表的那一行' : '同一个分表里重号，请用户在进度表里核对后重新做计划'}`);
-  need(by === 'item' || !row.name || namedAs(material, row.name),
+  need(by !== 'file_name' || !row.name || namedAs(material, row.name),
     `文件名里的 GOFCN${number} 那一行的素材名称是“${row.name}”，和文件名不同：这个编号可能是它参考的初版。按需求文档判断这个文件是进度表的哪一行，用 items[].number 写明（确实是 GOFCN${number} 也要写明）`);
   return { row, by };
 }
@@ -532,7 +590,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
     if (item.skip) { skipped.push({ file: material.file, reason: '按要求不上传' }); continue; }
     const label = material.origin ?? material.file_name;
     let bound: ReturnType<typeof rowOf> | undefined;
-    try { bound = bySheet ? rowOf(material, item, input.progress!) : undefined; } catch (error) {
+    try { bound = bySheet ? rowOf(material, item, input.progress!, input.named ?? new Map()) : undefined; } catch (error) {
       if (!(error instanceof Blocked)) throw error;
       problems.push({ reason: error.message, file: label });
       continue;
@@ -556,7 +614,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
     } else named.set(key, label);
     if (existing.has(name)) {
       problems.push({ file: renamed ? `${label} → ${name}` : name, reason: !bound ? 'CLS 已有同名创意（CLS 会拒绝整批上传），请改名或不上传'
-        : bound.by === 'file_name' ? 'CLS 已有同名创意，这个文件像是已经传过（CLS 会拒绝整批上传）：已经传过的就不再传'
+        : bound.by !== 'item' ? 'CLS 已有同名创意，这个文件像是已经传过（CLS 会拒绝整批上传）：已经传过的就不再传'
         : 'CLS 已有这一行的创意（CLS 会拒绝整批上传）：已经传过的就不再传，否则核对 items[].number' });
     }
     try {
@@ -616,7 +674,7 @@ export const shownFile = (file: string): string => (path.isAbsolute(file) ? path
 /**
  * What the user is shown before approving: counts by type, creator and producer, the directory, how many files go up under another
  * name, and each file in short (its name in CLS, and the progress sheet row it is: `row_from` request = as the request said, file_name =
- * by the GOFCN number in the file name).
+ * by the GOFCN number in the file name, name = by the rest of a GOFCNxxxxx_… file name).
  */
 export function uploadPlanSummary(plan: Obj, file: string, limit = 40): Obj {
   const count = (values: string[]) => values.reduce<Record<string, number>>((acc, v) => ({ ...acc, [v]: (acc[v] ?? 0) + 1 }), {});
@@ -634,7 +692,7 @@ export function uploadPlanSummary(plan: Obj, file: string, limit = 40): Obj {
       file: i.origin ?? i.file_name, name: i.name, ...(i.renamed_from !== undefined ? { renamed: true } : {}),
       type: i.type.name, creator: i.creator.name, producers: i.producers.map((p: Person) => p.name),
       ...(i.source.progress_row ? { progress_row: `${i.source.progress_row.sheet} 第 ${i.source.progress_row.row} 行`,
-        row_from: i.source.progress_row.by === 'item' ? 'request' : 'file_name' } : {}),
+        row_from: i.source.progress_row.by === 'item' ? 'request' : i.source.progress_row.by } : {}),
     })),
     ...(items.length > limit ? { more_items: items.length - limit } : {}),
     ...(plan.skipped.length ? { skipped: plan.skipped.map((s: Skipped) => ({ file: shownFile(s.file), reason: s.reason })) } : {}),

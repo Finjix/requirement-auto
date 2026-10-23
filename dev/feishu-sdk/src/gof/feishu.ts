@@ -5,6 +5,7 @@ import { BRIDGE_VERSION, runBridge, type BridgeContext, type BridgeReply } from 
 import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
+import { lookupRows } from './creative.ts';
 import { business, makePlan, type Plan } from './plan.ts';
 import { DEFAULT_KEYWORD, itemsOf } from './request.ts';
 import { acceptance, buildWrites, dropdowns, ruleProjection, ruleProof, type ApiRule } from './rules.ts';
@@ -454,10 +455,25 @@ export async function takeSnapshot(bridge: Bridge, output: string): Promise<Obj>
   } finally { snap.close(); }
 }
 
+/**
+ * Rows already in the sheet under a name the request gives (files named for their rows: GOFCNxxxxx_<name>): such a file has most likely
+ * been registered before, and appending it again would give the same material two rows. Only names the request gives are looked for;
+ * rows named after the tags alone (…_关键词) are alike by design.
+ */
+export function sameNameRows(snapshot: Snapshot, plan: Plan): Obj[] {
+  const given = [...new Set((plan.groups as Obj[]).flatMap(g => itemsOf(g.request).map(item => item.material_name)).filter((n): n is string => !!n))];
+  if (given.length === 0) return [];
+  const { byBody } = lookupRows(snapshot, [], given);
+  return given.filter(name => byBody.has(name)).map(name => ({
+    name, rows: byBody.get(name)!.map(r => ({ number: r.number, name: r.name, where: `${r.sheet} 第 ${r.row} 行` })),
+  }));
+}
+
 export async function planWithApi(bridge: Bridge, snapshot: Snapshot, requestInput: unknown): Promise<Obj> {
   await bridge.doctor();
   const offline = makePlan(snapshot, requestInput);
-  return { batch_plan: offline, api_plan: await apiPlan(bridge, snapshot, offline) };
+  const same = sameNameRows(snapshot, offline);
+  return { batch_plan: offline, api_plan: await apiPlan(bridge, snapshot, offline), ...(same.length ? { same_name_rows: same } : {}) };
 }
 
 export async function recomputeApiPlan(bridge: Bridge, snapshot: Snapshot, approved: Obj): Promise<Obj> {
@@ -494,7 +510,7 @@ export function planSummary(result: Obj, file: string): Obj {
   const api = result.api_plan;
   return {
     status: 'plan_saved', plan: file, worksheet: plan.worksheet, sheet_id: api.sheet_id, range: plan.range, quantity: plan.quantity,
-    first_number: plan.first_number, last_number: plan.last_number,
+    first_number: plan.first_number, last_number: plan.last_number, naming: plan.naming,
     groups: (plan.groups as Obj[]).map(g => {
       let offset = 0;
       const items = itemsOf(g.request).map(item => {
@@ -512,5 +528,6 @@ export function planSummary(result: Obj, file: string): Obj {
     // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.
     new_options: (api.dropdowns as Obj[]).flatMap(d => (d.missing as string[]).map(option => ({ field: OPTION_NAMES[d.field] ?? d.field, option }))),
     history_warnings: (plan.history_warnings as string[]).length,
+    ...(result.same_name_rows ? { same_name_rows: result.same_name_rows } : {}),
   };
 }

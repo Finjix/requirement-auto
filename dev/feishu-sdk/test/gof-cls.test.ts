@@ -114,7 +114,7 @@ test('an operation and its receipts are checked as strictly as before', () => {
   const full = report(dir);
   assert.equal(full.groups[0].draft_saved.draft_id, 5001);
   // The user is handed the progress sheet and each saved draft to look at.
-  assert.deepEqual(full.links, { progress_sheet: 'https://centurygames.feishu.cn/wiki/YFyywzwLsiT07EkpBaecr8nIncn',
+  assert.deepEqual(full.links, { progress_sheet: 'https://centurygames.feishu.cn/wiki/GH7cwIxzZi3gVdk2s3tc1dDbnQc',
     cls: [{ group: '01', draft: 'https://creative.centurygames.cn/requirement/5001/edit-outer' }, { group: '02', draft: null }] });
   // The operation file is never replaced.
   assert.throws(() => writeJsonNew(opPath, op), /EEXIST/);

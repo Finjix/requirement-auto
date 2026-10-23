@@ -3,9 +3,9 @@ import path from 'node:path';
 import { ClsError } from './cls-adapter.ts';
 import { createCreativeAdapter, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import {
-  appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, materialRefusal,
-  normalizeUploadRequest, progressRowsFrom, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary, type DirNode,
-  type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
+  appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, lookupRows,
+  materialRefusal, nameParts, normalizeUploadRequest, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary,
+  type DirNode, type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
 } from './creative.ts';
 import { unpackZip } from './unzip.ts';
 import type { Online, Session } from './cls-online.ts';
@@ -124,9 +124,15 @@ async function readProgressSheet<T>(bridge: Bridge, source: true | string, tmpDi
   } finally { fs.rmSync(file, { force: true }); }
 }
 
-/** The progress sheet rows of these numbers: read from a fresh export of the plugin's progress sheet, or of the sheet the user linked. */
-export async function progressLookup(bridge: Bridge, source: true | string, numbers: number[], tmpDir: string): Promise<{ rows: Map<number, ProgressRow[]>; label: string }> {
-  return readProgressSheet(bridge, source, tmpDir, (snapshot, label) => ({ rows: progressRowsFrom(snapshot, numbers), label }));
+/**
+ * The progress sheet rows of these numbers, and of these 素材名称 without their number: read from a fresh export of the plugin's progress
+ * sheet, or of the sheet the user linked.
+ */
+export async function progressLookup(bridge: Bridge, source: true | string, numbers: number[], tmpDir: string, bodies: string[] = []): Promise<{ rows: Map<number, ProgressRow[]>; named: Map<string, ProgressRow[]>; label: string }> {
+  return readProgressSheet(bridge, source, tmpDir, (snapshot, label) => {
+    const found = lookupRows(snapshot, numbers, bodies);
+    return { rows: found.byNumber, named: found.byBody, label };
+  });
 }
 
 /**
@@ -168,16 +174,37 @@ async function unpackArchives(inputs: string[], root: string): Promise<{ unpacke
   return { unpacked, skipped };
 }
 
+/** The files behind what the user gave, zips unpacked into this user's tmp (a folder reaches lark-agent only as a zip), and what cannot go up. */
+async function gather(inputs: string[], deps: UploadDeps): Promise<{ materials: ReturnType<typeof scanMaterials>['materials']; skipped: Skipped[] }> {
+  const archives = await unpackArchives(inputs, path.join(deps.tmpDir ?? resolveDataPaths().tmp, UNPACKED));
+  const scanned = scanMaterials(inputs, archives.unpacked);
+  return { materials: scanned.materials, skipped: [...scanned.skipped, ...archives.skipped] };
+}
+
+/**
+ * `gof creative files`: what the given files, folders and zips hold, file by file, for planning from the files themselves before their rows
+ * exist (a file named GOFCNxxxxx_<name> is made for the row that will be called GOFCN<number>_<name>). Reads only, offline.
+ */
+export async function listFiles(inputs: string[], deps: UploadDeps = {}): Promise<Obj> {
+  const { materials, skipped } = await gather(inputs, deps);
+  return {
+    status: 'files', count: materials.length,
+    files: materials.map(m => {
+      const pending = pendingBody(m.name);
+      return { file: m.origin ?? m.file_name, path: m.file, name: m.name, kind: m.kind, size: m.size,
+        ...(m.number !== null ? { number: m.number } : {}),
+        ...(pending !== null ? { pending_number: true, name_without_number: pending, parts: nameParts(pending) } : {}) };
+    }),
+    ...(skipped.length ? { skipped: skipped.map(s => ({ file: shownFile(s.file), reason: s.reason })) } : {}),
+  };
+}
+
 /** Reads the request, the files and what CLS offers, and writes the sealed plan the user approves. Sends nothing. */
 export async function planUpload(online: Online, bridge: Bridge | undefined, requestFile: string, output: string, deps: UploadDeps = {}): Promise<Obj> {
   const file = path.resolve(output);
   need(!fs.existsSync(file), '计划文件已存在，不覆盖');
   const request: UploadRequest = normalizeUploadRequest(readJson(requestFile));
-  // A folder reaches lark-agent only as a zip (Feishu does not hand folders to bots): it is unpacked into this user's tmp and read like a folder.
-  const archives = await unpackArchives(request.files, path.join(deps.tmpDir ?? resolveDataPaths().tmp, UNPACKED));
-  const scanned = scanMaterials(request.files, archives.unpacked);
-  const { materials } = scanned;
-  const skipped = [...scanned.skipped, ...archives.skipped];
+  const { materials, skipped } = await gather(request.files, deps);
   const hashed = [];
   for (const material of materials) {
     const { sha256, md5, size } = await hashFile(material.file);
@@ -188,16 +215,20 @@ export async function planUpload(online: Online, bridge: Bridge | undefined, req
   const api = adapterFor(session, deps);
   const options = await readOptions(api, session);
   let progress: Map<number, ProgressRow[]> | undefined;
+  let named: Map<string, ProgressRow[]> | undefined;
   let progressSource: string | undefined;
   if (request.progress) {
     need(bridge, '这个环境不能读飞书进度表');
-    // Every row a file may be: the one the request names for it, and the one its file name's number points at.
+    // Every row a file may be: the one the request names for it, the one its file name's number points at, and for a file named
+    // GOFCNxxxxx_<name>, the one named GOFCN<number>_<name>.
     const numbers = [...new Set([...(request.items ?? []).map(i => i.number), ...hashed.map(m => m.number)].filter((n): n is number => typeof n === 'number'))];
-    const lookup = await progressLookup(bridge, request.progress, numbers, deps.tmpDir ?? resolveDataPaths().tmp);
+    const bodies = [...new Set(hashed.map(m => pendingBody(m.name)).filter((b): b is string => b !== null))];
+    const lookup = await progressLookup(bridge, request.progress, numbers, deps.tmpDir ?? resolveDataPaths().tmp, bodies);
     progress = lookup.rows;
+    named = lookup.named;
     progressSource = lookup.label;
   }
-  const input = { request, options, materials: hashed, skipped, existing: new Set<string>(), ...(progress ? { progress } : {}), ...(progressSource ? { progressSource } : {}), ...(deps.now ? { now: deps.now() } : {}) };
+  const input = { request, options, materials: hashed, skipped, existing: new Set<string>(), ...(progress ? { progress } : {}), ...(named ? { named } : {}), ...(progressSource ? { progressSource } : {}), ...(deps.now ? { now: deps.now() } : {}) };
   // The names come out of the plan itself (a file may be renamed), so they are known only after a first pass.
   const first = buildUploadPlan(input);
   const existing = await existingNames(api, options.game.id, first.items.map((i: Obj) => i.name));
