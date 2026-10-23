@@ -137,13 +137,17 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     } else {
       Object.assign(g, item(raw, {}, `第 ${index} 组`));
     }
-    const missing = ([['reviewer', '审核人'], ['script_url', '脚本内容链接']] as const)
-      .filter(([key]) => !(key in raw)).map(([, label]) => label);
+    // The script link goes into the CSV and the CLS ticket. Rows registered for finished materials (the upload skill) get neither: without
+    // `cls` they may go without it ('' = none).
+    const ticket = isObject(raw.cls) && Object.keys(raw.cls).length > 0;
+    const missing = ([['reviewer', '审核人', true], ['script_url', '脚本内容链接', ticket]] as const)
+      .filter(([key, , needed]) => needed && !(key in raw)).map(([, label]) => label);
     need(missing.length === 0, `第 ${index} 组缺少需求字段：${missing.join('、')}`);
-    for (const key of ['reviewer', 'script_url']) {
-      need(typeof raw[key] === 'string' && raw[key].trim() !== '', `缺少 ${key}`);
-      g[key] = cellText(raw[key], key);
-    }
+    need(typeof raw.reviewer === 'string' && raw.reviewer.trim() !== '', '缺少 reviewer');
+    g.reviewer = cellText(raw.reviewer, 'reviewer');
+    const link = pick(raw, 'script_url', '');
+    need(typeof link === 'string' && (link.trim() !== '' || !ticket), '缺少 script_url');
+    g.script_url = cellText(link, 'script_url');
     // 设计师供应商 may be left open: the sheet's cell stays empty and CLS takes its 待定供应商 (cls.ts).
     g.supplier = cellText(pick(raw, 'supplier', ''), 'supplier').trim();
     g.creator = g.reviewer; // Same person for progress reviewer, CLS creator and message.
@@ -160,7 +164,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     }
     g.brief = pick(raw, 'brief', ''); // Only still accepted so older requests load; it is not used anywhere.
     need(typeof g.brief === 'string', 'brief 必须是文本');
-    need(feishuDocPath(g.script_url, 'wiki|docx|sheets', true) !== undefined, '脚本链接必须是当前确认的飞书文档');
+    need(g.script_url === '' || feishuDocPath(g.script_url, 'wiki|docx|sheets', true) !== undefined, '脚本链接必须是当前确认的飞书文档');
     const cls = pick(raw, 'cls', {});
     need(!(isObject(cls) && 'requirement_name' in cls), 'CLS 需求名称由该组素材编号生成（GOFCN首号-GOFCN末号），不接受输入');
     need(isObject(cls) && subset(Object.keys(cls), [...CLS_REQUIRED, ...CLS_OPTIONAL]), 'CLS 字段未知');

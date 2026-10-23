@@ -521,9 +521,11 @@ export function planSummary(result: Obj, file: string): Obj {
       // Rows whose 提炼词 is the default: the document named none for them, which the user is asked to confirm.
       const defaults = itemsOf(g.request).filter(item => item.keyword === DEFAULT_KEYWORD).reduce((n, item) => n + item.quantity, 0);
       // `message_kind` is how the group message will name this requirement ("素人剧情*25"), shown in the plan so it can be corrected before.
-      return { group: g.id, quantity: g.request.quantity, requirement_name: requirementName(g.names), supplier: g.request.supplier || null,
-        reviewer: g.request.reviewer, script_url: g.request.script_url, message_kind: kindOf(g.request), items,
-        ...(defaults ? { default_keyword_rows: defaults } : {}) };
+      // A group without a CLS ticket (rows only, e.g. for finished materials) has neither a requirement name nor a group message.
+      const ticket = Object.keys(g.request.cls ?? {}).length > 0;
+      return { group: g.id, quantity: g.request.quantity, ...(ticket ? { requirement_name: requirementName(g.names) } : {}),
+        supplier: g.request.supplier || null, reviewer: g.request.reviewer, ...(g.request.script_url ? { script_url: g.request.script_url } : {}),
+        ...(ticket ? { message_kind: kindOf(g.request) } : {}), items, ...(defaults ? { default_keyword_rows: defaults } : {}) };
     }),
     // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.
     new_options: (api.dropdowns as Obj[]).flatMap(d => (d.missing as string[]).map(option => ({ field: OPTION_NAMES[d.field] ?? d.field, option }))),

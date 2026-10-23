@@ -60,12 +60,21 @@ export function clipboardTsv(plan: Plan): string {
 export interface PrepareOptions { workspace?: string | undefined; apiPlan?: Record<string, any> | undefined; outputRoot?: string | undefined }
 
 /**
- * Earlier batches under `base` for the same requirement (a group with the same script link) whose write went out without being verified, and
- * whose rows are in the sheet now (a planned number at the row it was written to, or carrying the planned name). Planning that requirement
- * again would append it twice: what happened to the earlier batch is to be read back there. One whose rows are nowhere is no obstacle.
+ * What tells a requirement apart across batches: each group's script link, or for rows registered for finished materials (no link), the
+ * names of its rows without their numbers.
+ */
+function requirementKeys(plan: Plan): string[] {
+  return (plan.groups as Plan[]).flatMap(g => g.request.script_url
+    ? [`link:${g.request.script_url}`] : (g.names as string[]).map(name => `name:${name.replace(/^GOFCN\d+_/, '')}`));
+}
+
+/**
+ * Earlier batches under `base` for the same requirement (see requirementKeys) whose write went out without being verified, and whose rows
+ * are in the sheet now (a planned number at the row it was written to, or carrying the planned name). Planning that requirement again
+ * would append it twice: what happened to the earlier batch is to be read back there. One whose rows are nowhere is no obstacle.
  */
 function landedUnverified(base: string, plan: Plan, snapshot: Snapshot): string[] {
-  const links = new Set(plan.groups.map((g: Plan) => g.request.script_url));
+  const keys = new Set(requirementKeys(plan));
   let present: { tables: Record<string, Record<string, number>>; ids: Map<number, [string, number]> } | undefined;
   const found: string[] = [];
   for (const name of fs.readdirSync(base)) {
@@ -73,7 +82,7 @@ function landedUnverified(base: string, plan: Plan, snapshot: Snapshot): string[
     let earlier: Plan;
     let steps: string[];
     try { earlier = readJson(path.join(dir, 'manifest.json')).plan; steps = events(dir).map(e => e.step); } catch { continue; } // not a batch
-    if (!earlier.groups.some((g: Plan) => links.has(g.request.script_url)) || !steps.includes('append_started') || steps.includes('append_verified')) continue;
+    if (!requirementKeys(earlier).some(key => keys.has(key)) || !steps.includes('append_started') || steps.includes('append_verified')) continue;
     if (!present) { const tables = scanSheets(snapshot).tables; present = { tables, ids: collectIds(snapshot, tables) }; }
     const { tables, ids } = present;
     const landed = (earlier.rows as Plan[]).some(r => {
@@ -113,14 +122,16 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   fs.copyFileSync(snapshot.path, path.join(dir, 'baseline.xlsx'), fs.constants.COPYFILE_EXCL);
   // Browser clipboard TSV is not CSV: quoting formulas makes them literal text.
   fs.writeFileSync(path.join(dir, 'append.tsv'), tsv, { encoding: 'utf8', flag: 'wx' });
-  for (const group of plan.groups) {
+  // Groups of rows registered for finished materials have no CSV (see makePlan).
+  const scripted = (plan.groups as Plan[]).filter(g => g.csv);
+  for (const group of scripted) {
     const lines = [CSV_HEADERS.map(csvField).join(',')];
     group.names.forEach((name: string, index: number) => {
       lines.push([name, index === 0 ? group.request.script_url : '同上', FIXED_TAG].map(csvField).join(','));
     });
     fs.writeFileSync(path.join(dir, group.csv), `${BOM}${lines.join('\r\n')}\r\n`, { encoding: 'utf8', flag: 'wx' });
   }
-  const files = ['append.tsv', ...plan.groups.map((g: Plan) => g.csv)];
+  const files = ['append.tsv', ...scripted.map(g => g.csv)];
   if (apiPlan) {
     writeJsonNew(path.join(dir, 'api-plan.json'), apiPlan);
     files.push('api-plan.json');
@@ -129,7 +140,7 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   for (const name of files) artifacts[name] = sha256(fs.readFileSync(path.join(dir, name)));
   writeJsonNew(path.join(dir, 'manifest.json'), { plan, baseline_sha256: sha256(fs.readFileSync(path.join(dir, 'baseline.xlsx'))), artifacts });
   fs.mkdirSync(path.join(dir, 'events'));
-  return { status: 'prepared', batch: dir, range: plan.range, csv: plan.groups.map((g: Plan) => g.csv) };
+  return { status: 'prepared', batch: dir, range: plan.range, csv: scripted.map(g => g.csv) };
   } catch (error) {
     // This call made the directory a moment ago and nothing has been recorded in it: a half-made batch would block the plan for good.
     fs.rmSync(dir, { recursive: true, force: true });
@@ -387,6 +398,8 @@ function clsEvidence(evidence: Evidence, apiBatch: boolean): void {
 }
 
 const hasReason = (evidence: Evidence) => typeof evidence.reason === 'string' && evidence.reason.trim() !== '';
+/** A group of rows registered for finished materials: no script link, no CSV, and so no CLS ticket. */
+export const NO_TICKET = '这一组是为已做好的素材登记的行（没有脚本内容链接，也没有 CSV），不建 CLS 需求单';
 
 export function record(dir: string, step: string, groupId?: string | null, evidenceInput?: Evidence | null, fresh?: Snapshot): Record<string, any> {
   const { path: batchPath, manifest } = loadBatch(dir);
@@ -427,6 +440,7 @@ export function record(dir: string, step: string, groupId?: string | null, evide
     const stages: string[] = state.groups[group as string];
     need(!stages.includes('handoff') || step === 'requirement_number', '本组已移交，不自动继续');
     if (step === 'cls_started') {
+      need(planGroup.csv, NO_TICKET);
       need(stages.length === 0, '已有 CLS 尝试，先查草稿，不能重复新建');
     } else if (step === 'cls_api_attempt') {
       const action = evidence.action;
@@ -523,7 +537,7 @@ export function report(dir: string): Record<string, any> {
   const state = status(batchPath);
   const groups: Record<string, any>[] = [];
   for (const group of plan.groups as Plan[]) {
-    const result: Record<string, any> = { group: group.id, quantity: group.request.quantity, csv: path.join(batchPath, group.csv), steps: state.groups[group.id] };
+    const result: Record<string, any> = { group: group.id, quantity: group.request.quantity, csv: group.csv ? path.join(batchPath, group.csv) : null, steps: state.groups[group.id] };
     for (const event of records) {
       if (event.group === group.id && (event.step === 'draft_saved' || event.step === 'scripts_imported')) {
         const evidence = event.evidence;

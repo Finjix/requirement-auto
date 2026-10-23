@@ -601,6 +601,18 @@ test('plan --output saves the whole plan and prints only what the user is shown,
   assert.deepEqual([again.code, again.result.reason], [2, '计划文件已存在，不覆盖']);
 });
 
+test('a plan of rows without a CLS ticket (finished materials) shows no requirement name, script link or group message', async () => {
+  const { bridge } = await approvedBatch();
+  const dir = tmp();
+  const request = { groups: [{ supplier: '供应商丙', reviewer: '张三', primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频',
+    items: [{ quantity: 1, keyword: '企鹅保龄球_竖版', material_name: 'GOFCNxxxxx_玩法_卖点_视频_企鹅保龄球_竖版' }] }] };
+  fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify(request));
+  const { result, code } = await main(['feishu', 'plan', '--request', path.join(dir, 'request.json'), '--snapshot', path.join(fixtures, 'base.xlsx'), '--output', path.join(dir, 'plan.json')], bridge);
+  assert.equal(code, 0, JSON.stringify(result));
+  assert.deepEqual(result.groups[0], { group: '01', quantity: 1, supplier: '供应商丙', reviewer: '张三',
+    items: [{ quantity: 1, first: 'GOFCN1011_玩法_卖点_视频_企鹅保龄球_竖版', last: 'GOFCN1011_玩法_卖点_视频_企鹅保龄球_竖版' }] });
+});
+
 test('the plan shows each row\'s 提炼词 and says how many rows have none of their own (the default 关键词), for the user to confirm', async () => {
   const { bridge } = await approvedBatch();
   const dir = tmp(), cls = { direction: '方向一', task_type: 'creative_a' };

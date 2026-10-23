@@ -37,30 +37,33 @@ Values are placeholders.
 ```
 
 - `worksheet` (optional): default is the newest year-month GOFCN sheet with valid columns; a tie fails.
-- A **group** is one CSV and one CLS ticket: one supplier, reviewer, script link and set of CLS fields. Groups are appended in one range, numbers running on in order.
+- A **group** is one CSV and one CLS ticket: one supplier, reviewer, script link and set of CLS fields (rows for finished materials: neither, see below). Groups are appended in one range, numbers running on in order.
 - Rows: either all alike (`quantity` plus the fields on the group) or `items`, runs of rows in order, each with `quantity` and what differs (`primary_tag`, `secondary_tag`, `creative_form`, `keyword`; group values are defaults). With `items`, a group `quantity` is allowed only as their sum.
 - Per row: `primary_tag`, `secondary_tag` required, one part of the name each (no `_`); `creative_form` optional, only when stated (no `_`; empty stays empty; all rows of the request or none); `keyword` (提炼词) defaults to `关键词` (the user confirms that default; rows with 提炼词 of their own are `items` of `quantity` 1), may hold `_` but not at its ends or twice in a row, and cannot contain `/` or `\` (the name is also the CLS creative name). The name is `GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>` (`naming`); an empty 创意形式 drops out with its `_`. The plan keeps the formula of the row above when it names rows that way, else writes `=SUBSTITUTE(CONCATENATE("GOFCN",C,"_",H,"_",I,"_",K,"_",D),"__","_")`.
 - `material_name` (optional, per item or group): the name the rows must get, without the number (a leading `GOFCN<digits>_` or `GOFCNxxxxx_` is dropped), e.g. a file named for its row; the plan refuses when the formula makes another name, saying which. Older requests give it instead of the tags (`<一级>_<二级>_[<创意形式>_]<提炼词>`), and the tags are read from it.
-
-Rows from files named `编号_一级_二级_[创意形式_]提炼词` (one item per file, in file order; `gof creative files` lists them with their `parts`): everything after the 创意形式, or after the 二级标签 when the name has none, is the 提炼词, `_竖版` / `_横版` and versions included, so the name stays the file's. Two versions of one piece, no 创意形式:
-
-```json
-{ "supplier": "廿十一", "reviewer": "金莉", "script_url": "https://centurygames.feishu.cn/docx/CurrentScript789", "label": "AI玩法优化",
-  "items": [
-    { "quantity": 1, "primary_tag": "AI玩法优化", "secondary_tag": "火车运输御敌", "keyword": "兵临城下塔防_冻鱼_竖版",
-      "material_name": "GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版" },
-    { "quantity": 1, "primary_tag": "AI玩法优化", "secondary_tag": "火车运输御敌", "keyword": "兵临城下塔防_企鹅_竖版",
-      "material_name": "GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版" }
-  ],
-  "cls": { "direction": "<direction>", "task_type": "<task type>", "supplier": "长沙廿拾一文化传媒有限公司" } }
-```
-- `quantity`: positive integer. `reviewer`, `script_url` (company `wiki`/`docx`/`sheets` link as given) are required. `supplier` is optional (absent or `""`: the cell stays empty, CLS takes `待定供应商`); every group of a request has one, or none does.
+- `quantity`: positive integer. `reviewer` is required. `script_url` (company `wiki`/`docx`/`sheets` link as given) is required for a group with a CLS ticket (`cls`) and goes into its CSV; a group without `cls` may leave it out (absent or `""`), and then has no CSV (rows for finished materials, below). `supplier` is optional (absent or `""`: the cell stays empty, CLS takes `待定供应商`); every group of a request has one, or none does.
 - `label` (optional, 1-20 characters, no brackets or stars): the requirement's short name in the group message; default the 一级标签. Printed by `plan` as `message_kind`.
 - `cls.direction`, `cls.task_type` are required unless the user excluded the ticket (then omit `cls`). `cls.requirement_name` is rejected: `gof cls` builds it as `GOFCN<first>-GOFCN<last>` (one row: `GOFCN<number>`).
 - Optional CLS keys: `subject`, `department`, `market_contact`, `currency`, `quotation`, `expected_completion`, `storyboard_time`, `first_draft_time`, `final_cut_time` (dates `YYYY-MM-DD`), and `supplier` / `creator` as exact CLS names when automatic matching fails (without a `supplier` on the group: `待定供应商`).
 - `reviewer` is also the CLS creator; `creator` cannot differ from it.
 - `client`, `creative_expression`, `creative_batch`, `head_reference`, `creative_reference` must be empty.
 - A later ticket for an already appended batch reuses its CSV; do not `prepare` or append again.
+
+## Rows for finished materials
+
+The upload skill (gof-creative-upload) registers materials that are already made: one group, no `script_url` and no `cls`, so the batch has no CSV, `gof cls` refuses to build a ticket for it, the plan summary shows no `requirement_name` / `message_kind`, and `batch message` has nothing to say. Each file is one item of `quantity` 1, in file order (`gof creative files` lists them with their `parts`). For files named `编号_一级_二级_[创意形式_]提炼词`, everything after the 创意形式, or after the 二级标签 when the name has none, is the 提炼词, `_竖版` / `_横版` and versions included, and the file's name goes into `material_name`, so the row's name stays the file's. Two versions of one piece, no 创意形式:
+
+```json
+{ "groups": [{ "supplier": "廿十一", "reviewer": "金莉",
+  "items": [
+    { "quantity": 1, "primary_tag": "AI玩法优化", "secondary_tag": "火车运输御敌", "keyword": "兵临城下塔防_冻鱼_竖版",
+      "material_name": "GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版" },
+    { "quantity": 1, "primary_tag": "AI玩法优化", "secondary_tag": "火车运输御敌", "keyword": "兵临城下塔防_企鹅_竖版",
+      "material_name": "GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版" }
+  ] }] }
+```
+
+Batches are told apart by their script links; groups without one by their rows' names without the number, so `prepare` refuses files whose earlier batch was sent unverified and has rows in the sheet.
 
 ## CSV
 

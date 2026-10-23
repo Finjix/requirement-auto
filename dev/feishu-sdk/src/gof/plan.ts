@@ -115,7 +115,9 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
       }
     }
     const first = itemsOf(g)[0]!;
-    const filename = `创意脚本_${[id, first.topic, first.creative_form, g.supplier].filter(Boolean).map(safeFilename).join('_')}.csv`;
+    // Rows registered for finished materials have no script link: no CSV, since there is no CLS ticket to import it into.
+    const filename = g.script_url === '' ? null
+      : `创意脚本_${[id, first.topic, first.creative_form, g.supplier].filter(Boolean).map(safeFilename).join('_')}.csv`;
     groups.push({ id, csv: filename, names, rows: groupRows, request: g });
   });
   const dropdowns: Plan[] = [];

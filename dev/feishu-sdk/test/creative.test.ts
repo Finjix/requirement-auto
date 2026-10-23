@@ -5,11 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildUploadPlan, creativeName, findDirectory, formulaText, loadUploadPlan, materialNumber, materialRefusal, normalizeUploadRequest, parseNumbers,
-  lookupRows, nameParts, pendingBody, progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
+  lookupRows, matchPeople, nameParts, pendingBody, progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
 } from '../src/gof/creative.ts';
 import { unpackZip } from '../src/gof/unzip.ts';
 import { createCreativeAdapter } from '../src/gof/creative-adapter.ts';
-import { findRows, listFiles, planUpload, runUpload, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
+import { findRows, listFiles, planUpload, runUpload, uploadOptions, uploadStatus, type UploadDeps } from '../src/gof/creative-online.ts';
 import type { Online } from '../src/gof/cls-online.ts';
 import type { Bridge } from '../src/gof/feishu.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
@@ -170,6 +170,25 @@ test('the plan: the default directory, 素材类型 by file kind, short names ma
   assert.equal(by.b.source.creator, 'item');
   const summary = uploadPlanSummary(plan, 'plan.json');
   assert.deepEqual(summary.types, { 视频: 1, 图片: 1, 其他: 1 });
+});
+
+test('the people of files not registered yet are matched to CLS before any plan: each name to its CLS name, or what is wrong with it', async () => {
+  assert.deepEqual(matchPeople(OPTIONS, { creator: '金莉', producers: ['丁杰', '廿十一'] }), {
+    creator: { wanted: '金莉', id: 2001, name: '金莉' },
+    producers: [{ wanted: '丁杰', id: 663, name: '北京柒曦文化传媒有限公司（丁杰）' }, { wanted: '廿十一', problem: '制作人“廿十一” 不存在或匹配不唯一，需在计划前澄清' }],
+  });
+  assert.deepEqual(matchPeople(OPTIONS, { creator: '李晨阳' }), { creator: { wanted: '李晨阳', problem: '创意人“李晨阳” 不存在或匹配不唯一，需在计划前澄清' } });
+  assert.deepEqual(matchPeople(OPTIONS, { creator: '492', producers: ['长沙廿拾一文化传媒有限公司'] }),
+    { creator: { wanted: '492', id: 492, name: '李晨阳' }, producers: [{ wanted: '长沙廿拾一文化传媒有限公司', id: 2002, name: '长沙廿拾一文化传媒有限公司' }] });
+  assert.deepEqual(matchPeople(OPTIONS, {}), {});
+  // gof creative options --creator 金莉 --producers 廿十一: the same, from what CLS offers this account.
+  const fake = await fakeCreative();
+  try {
+    const offered = await uploadOptions(online(fake), { creator: '金莉', producers: ['廿十一'] }, depsFor());
+    assert.deepEqual(offered.people, { creator: { wanted: '金莉', id: 2001, name: '金莉' },
+      producers: [{ wanted: '廿十一', problem: '制作人“廿十一” 不存在或匹配不唯一，需在计划前澄清' }] });
+    assert.equal((await uploadOptions(online(fake), {}, depsFor())).people, undefined);
+  } finally { fake.close(); }
 });
 
 test('the plan says everything that is not settled, at once: no 创意人, ambiguous people, a taken or doubled name', async () => {

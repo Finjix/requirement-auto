@@ -1,21 +1,21 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "requirement-auto",
-  "version": "1.5.0",
-  "description": "GOFCN 素材需求自动化：追加创意进度表并验收、生成 CSV、保存 CLS 未发布草稿；素材按创意进度表的素材名称上传到 CLS 创意列表并返回截图；还没登记的素材可直接从文件登记（追加进度表、建单）后上传；配套按用户隔离的飞书设备授权登录。",
+  "version": "1.6.0",
+  "description": "GOFCN 素材需求自动化，两个技能：发布需求（按需求文档追加创意进度表并验收、生成 CSV、保存 CLS 未发布需求草稿并导入脚本、回传截图和群消息）；上传素材（把做好的素材登记进创意进度表，再按素材名称上传到 CLS 创意列表并返回截图，不建需求单）；配套按用户隔离的飞书设备授权登录。",
   "keywords": ["feishu", "lark", "gofcn", "requirement", "automation", "cls", "upload"],
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "GOFCN 需求自动化",
-        "shortDescription": "追加创意进度表并验收，保存 CLS 草稿并回传截图；上传素材到 CLS 创意列表（名称对上进度表）；新素材可直接从文件登记建单再上传；飞书登录按用户隔离",
-        "longDescription": "处理 GOFCN 素材需求：用户给出一份或多份飞书需求链接后（多份文档一次完成），自动整理条数、标签、供应商、审核人和 CLS 字段，推不出的才问；确认完整计划后通过飞书 SDK 防覆盖追加创意进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 未发布草稿、导入脚本，回传创意进度表和 CLS 草稿的截图，并给出一条汇总所有需求的可复制群消息。素材上传：用户发来或指定一批素材后，先把每个文件对上创意进度表的一行（文件名不是素材名称时，按需求文档、脚本内容、交付清单判断是哪一行），按该行的素材名称改名后，按 CLS 我的创意 > 创意列表 > 上传创意 的规则上传（默认上传目录 双端共用-视频，创意人取创意者脚本审核人，制作人取设计师供应商，可按素材编号查进度表，素材类型按文件判断），确认计划后上传、保存标注、回读核对，并返回创意列表截图。顺序不固定：用户直接发来还没登记的素材（文件可能已按进度表的命名规则命名、编号待定，如 GOFCNxxxxx_一级_二级_创意形式_提炼词，创意形式可以没有）时，按文件逐个整理成进度表的行（名称就是文件名，编号补上），一份计划确认后追加进度表、建 CLS 草稿并导入脚本，再把这些文件按新行的素材名称上传。飞书用户授权通过设备授权完成，登录信息只保存在当前用户自己的目录里。",
+        "shortDescription": "发布需求：追加创意进度表并验收，保存 CLS 需求草稿并回传截图；上传素材：登记进度表后上传到 CLS 创意列表（不建单）；飞书登录按用户隔离",
+        "longDescription": "两个技能，各管一件事。发布需求（gof-requirement）：用户给出一份或多份飞书需求文档（多份文档一次完成）后，自动整理条数、标签、提炼词、供应商、审核人和 CLS 字段，推不出的才问；确认完整计划后通过飞书 SDK 防覆盖追加创意进度表并以完整 XLSX 验收，生成 CSV、保存 CLS 未发布需求草稿、导入脚本，回传创意进度表和 CLS 草稿的截图，并给出一条汇总所有需求的可复制群消息；CLS 需求单是把素材制作需求发给供应商。上传素材（gof-creative-upload）：用户发来做好的素材（视频、图片、文件夹、zip）后，先给每个还没登记的文件在创意进度表追加一行并验收（文件已按进度表规则命名、编号待定时，如 GOFCNxxxxx_一级_二级_[创意形式_]提炼词，行就照文件名整理；其他文件按用户的话和文档判断；已在进度表里的不重复登记），再按每个文件那一行的素材名称，按 CLS 我的创意 > 创意列表 > 上传创意 的规则上传（默认上传目录 双端共用-视频，创意人取创意者脚本审核人，制作人取设计师供应商，素材类型按文件判断，创意标签不填），保存标注、回读核对，返回进度表和创意列表截图；素材已经做好，不建 CLS 需求单、不出群消息。两者都只确认一次计划。飞书用户授权通过设备授权完成，登录信息只保存在当前用户自己的目录里。",
         "developerName": "requirement-auto",
         "category": "Productivity",
         "capabilities": ["Read", "Write"],
         "defaultPrompt": [
-          "Use $gof-requirement for the full flow: progress sheet, CSV, unpublished CLS draft with the scripts imported, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end.",
-          "Use $gof-creative-upload to upload my materials to CLS 创意列表 (each file named as the 素材名称 of its progress-sheet row, worked out from my requirement documents when the file name does not say; files without rows yet are registered first: rows appended and a CLS ticket made from the files, under the same plan; 上传目录 双端共用-视频, 创意人 = 创意者脚本审核人, 制作人 = 设计师供应商, 素材类型 by file kind, no 创意标签): show one plan, and once I approve it register what is new, upload, save and send me a screenshot of the creative list."
+          "Use $gof-requirement to publish my requirement to the supplier: progress sheet, CSV, unpublished CLS requirement draft with the scripts imported, screenshots, one copyable group message. Work out everything from my requirement link(s) (several links = one task, one ticket each), ask only what cannot be worked out, show one plan, and once I approve it run it to the end.",
+          "Use $gof-creative-upload to upload my finished materials: register each file in the progress sheet (files already there are not appended again), then upload it to CLS 创意列表 named as its 素材名称 (上传目录 双端共用-视频, 创意人 = 创意者脚本审核人, 制作人 = 设计师供应商, 素材类型 by file kind, no 创意标签), no CLS requirement ticket: show one plan, and once I approve it append, upload, save and send me screenshots of the progress sheet and the creative list."
         ]
       }
     }

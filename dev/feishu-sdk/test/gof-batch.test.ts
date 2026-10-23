@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { makePlan, type Plan } from '../src/gof/plan.ts';
 import { normalizeRequest } from '../src/gof/request.ts';
-import { clsCheck, composeMessage, loadBatch, message, preflight, prepare, record, report, status, verify } from '../src/gof/batch.ts';
+import { clsCheck, composeMessage, loadBatch, message, NO_TICKET, preflight, prepare, record, report, status, verify } from '../src/gof/batch.ts';
+import { operation } from '../src/gof/cls.ts';
 import { Blocked, canonical, digest, readJson, writeJsonNew } from '../src/gof/util.ts';
 import { rejectSecrets } from '../src/gof/seal.ts';
 import { sameNameRows } from '../src/gof/feishu.ts';
@@ -478,6 +479,59 @@ test('files named for rows not appended yet (GOFCNxxxxx_…) become rows of exac
   assert.deepEqual(sameNameRows(snapshot, again), [{ name: 'AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版',
     rows: [{ number: 67737, name: 'GOFCN67737_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', where: '26年1月-GOFCN 第 4 行' }] }]);
   assert.deepEqual(sameNameRows(snapshot, plan), []);
+});
+
+/** Rows registered for finished materials (the upload skill): no script link and no CLS fields, so no CSV and no ticket. */
+const finished = (names: string[]): { groups: Record<string, any>[] } => {
+  const { groups: [group] } = fromFiles(names);
+  const { script_url, cls, label, ...rest } = group!;
+  return { groups: [rest] };
+};
+
+test('rows registered for finished materials need no script link: they get no CSV and no CLS ticket, the rest of the plan is the same', () => {
+  const snapshot = liveSheet();
+  const names = ['GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版', 'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版'];
+  const plan = makePlan(snapshot, finished(names));
+  const ticketed = makePlan(snapshot, fromFiles(names));
+  assert.deepEqual([plan.rows, plan.range], [ticketed.rows, ticketed.range]);
+  assert.deepEqual([plan.groups[0].csv, plan.groups[0].request.script_url, plan.groups[0].request.cls], [null, '', {}]);
+  assert.deepEqual(normalizeRequest(plan.request), plan.request);
+  const prepared = prepare(plan, snapshot, { outputRoot: tmp() });
+  assert.deepEqual(prepared.csv, []);
+  assert.deepEqual(fs.readdirSync(prepared.batch).filter(f => f.endsWith('.csv')), []);
+  assert.equal(report(prepared.batch).groups[0].csv, null);
+  assert.throws(() => operation(prepared.batch, '01', 'save_draft', {}, {}), (e: Error) => e instanceof Blocked && e.message === NO_TICKET);
+  // A ticket still needs its script link.
+  const { script_url, ...unlinked } = fromFiles(names).groups[0]!;
+  assert.throws(() => normalizeRequest({ groups: [unlinked] }), (e: Error) => e instanceof Blocked && e.message === '第 1 组缺少需求字段：脚本内容链接');
+  assert.throws(() => normalizeRequest({ groups: [{ ...unlinked, script_url: ' ' }] }), (e: Error) => e instanceof Blocked && e.message === '缺少 script_url');
+  assert.throws(() => normalizeRequest({ groups: [{ ...finished(names).groups[0], script_url: 'https://example.com/x' }] }), /脚本链接必须是当前确认的飞书文档/);
+});
+
+test('rows for finished materials whose write landed unverified are not appended again; other files are', () => {
+  const names = ['GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版', 'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版'];
+  const base = tmp();
+  const before = liveSheet();
+  const dir = prepare(makePlan(before, finished(names)), before, { outputRoot: base }).batch as string;
+  record(dir, 'append_started');
+  // The sheet as it is now: the two rows went in, but the answer was lost and nothing was verified.
+  const file = path.join(tmp(), 'landed.xlsx');
+  const landedRow = (r: number, number: number, keyword: string) =>
+    [null, null, number, keyword, null, null, { f: OWN(r).slice(1) }, 'AI玩法优化', '火车运输御敌', null, null, null, null, '张三'];
+  fs.writeFileSync(file, makeXlsx([{ name: '26年1月-GOFCN', rows: [LIVE_HEADER,
+    [null, null, 67679, '关键词', null, null, { f: OLD(2) }, 'AI迭代', '题材片头', null, '2D', null, '达治', '靳筱萌'],
+    [null, null, 67736, '3D_BJAI片头矿工冰层版CN60141', null, null, { f: OLD(3) }, 'AI片头衔接', '模拟经营', null, null, null, '达治', '靳筱萌'],
+    [null, null, 67737, '割资源冰块对抗_竖版', null, null, { f: OLD(4) }, 'AI玩法优化', '搂冰块抢资源', null, null, null, '达治', '靳筱萌'],
+    landedRow(5, 67738, '兵临城下塔防_冻鱼_竖版'), landedRow(6, 67739, '兵临城下塔防_企鹅_竖版'),
+  ] }]));
+  const now = new Snapshot(file);
+  // The same files planned again would be appended after themselves.
+  const again = makePlan(now, finished(names));
+  assert.equal(again.first_number, 67740);
+  assert.throws(() => prepare(again, now, { outputRoot: base }), /已有一批写入发出、尚未核对/);
+  // Files of other names are another batch of materials.
+  const other = makePlan(now, finished(['GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_横版']));
+  assert.equal(prepare(other, now, { outputRoot: base }).status, 'prepared');
 });
 
 test('a requirement without a 设计师供应商 leaves its cell empty; the group message says 待定供应商', () => {

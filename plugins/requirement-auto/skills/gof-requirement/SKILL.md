@@ -1,9 +1,9 @@
 ---
 name: gof-requirement
-description: "GOFCN creative-material requests (素材需求 / 创意进度表 / CLS 草稿) from one or more Feishu requirement links, or from the material files themselves (one row per file, named as the file when it is already named the sheet's way, e.g. GOFCNxxxxx_…; the files are then uploaded too, see gof-creative-upload): work out rows, tags, 创意形式, 提炼词, supplier, reviewer and CLS fields from the linked sheet or doc or the files, append the rows to the Feishu creative progress sheet and verify them, build the CSV, save an unpublished CLS draft with the CSV imported, hand back screenshots of the progress sheet and the CLS draft, and hand over one copyable group message. Asks only what cannot be worked out; runs everything once the plan is approved."
+description: "Publish GOFCN creative-material requirements (发布需求 / 素材需求 / 建单 / 创意进度表 / CLS 草稿) to suppliers from one or more Feishu requirement documents (sheet tab or doc links): work out rows, tags, 创意形式, 提炼词, supplier, reviewer and CLS fields from the documents, append the rows to the Feishu creative progress sheet and verify them, build the CSV, save an unpublished CLS requirement draft with the CSV imported, hand back screenshots of the progress sheet and the CLS draft, and hand over one copyable group message. Only for materials still to be made: finished materials the user sends to upload are gof-creative-upload (rows, no ticket). Asks only what cannot be worked out; runs everything once the plan is approved."
 ---
 
-# GOFCN requirement automation
+# GOFCN 发布需求 (publish a requirement)
 
 Talk to the user in their language (Chinese unless they write otherwise). Field names, sheet columns and group messages stay Chinese.
 
@@ -11,7 +11,9 @@ Talk to the user in their language (Chinese unless they write otherwise). Field 
 
 ## Flow
 
-A request is the **full flow** unless the user narrows it ("只要 CSV"): append progress rows -> verify -> CSV -> unpublished CLS draft -> import the CSV into it -> screenshots of the progress sheet and the draft -> copyable group message. Publishing the draft and sending the message are the user's.
+The user gives the requirement documents; a CLS ticket asks a supplier to make the materials. A request is the **full flow** unless the user narrows it ("只要 CSV"): append progress rows -> verify -> CSV -> unpublished CLS draft -> import the CSV into it -> screenshots of the progress sheet and the draft -> copyable group message. Publishing the draft and sending the message are the user's.
+
+**Finished materials are not a requirement.** When the user sends the materials themselves (videos, pictures, folders, zips) to put into CLS, they are already made and need no ticket: that is [gof-creative-upload](../gof-creative-upload/SKILL.md) (rows appended for the files, then uploaded), not this skill.
 
 **Several links in one message are one request:** one plan, one approval, one append of all rows, one CLS draft per document, one group message for all.
 
@@ -51,8 +53,6 @@ References: [feishu-sdk-workflow.md](references/feishu-sdk-workflow.md), [api-wo
 
 The user gives one or more Feishu requirement links (sheet tab or doc, usually one per supplier); without a link, ask for it. Each link is its own group, handled in the order given.
 
-**Files as the source:** when the user sends the materials of a new requirement (files, folders, zips, names like `GOFCNxxxxx_AI玩法优化_…`), with or without a link, the rows come from the files, one row per file, and the files are uploaded in the same task under the same approval: follow [gof-creative-upload, section 3](../gof-creative-upload/SKILL.md#3-new-materials-register-then-upload), which says what differs from the steps here. The link (requirement, script or delivery doc) is still needed for 脚本内容; ask for it when none was given.
-
 Gather:
 1. `gof feishu document --url <link>` per link: `title` (usually names the supplier: 杨燃对接文档, 丁杰AI), wiki `path`, and the tab (linked, else newest: `sheet.chosen_by`) with header and rows, or the doc text. Add `--full` to read whole scripts.
 2. `gof feishu snapshot --output <tmp>/<new>.xlsx`, then `gof feishu context --snapshot <it>`: target sheet, `next_number`, `naming` (how a new row is named: `GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>`, an empty 创意形式 dropping out with its `_`) and the dropdown `options` of 一级标签/二级标签/创意形式/设计师供应商/创意者脚本审核人.
@@ -71,7 +71,7 @@ Fields (first source that answers wins):
 - **`label` (optional):** the short name the user or doc gives the requirement ("迭代", "素人剧情"); the plan shows it as `message_kind` ("素人剧情*25") and the user can correct it there.
 - **Dropdown values:** prefer an existing option that means the same (same spelling as in `options`). 一级/二级标签: add a new one only when the message or doc states it. 创意形式, 设计师供应商 and 创意者脚本审核人: a value the dropdown lacks is simply added. Either way the plan lists it (`new_options`: "新增创意形式 X"), and the user's go-ahead covers it.
 
-Fixed by the program, not asked: CLS requirement name (`GOFCN<first>-GOFCN<last>` from the real numbers; never put it in `request.json`), material numbers (continue the sheet, running on across groups in link order), material name (`GOFCN<编号>_<一级>_<二级>_<创意形式>_<提炼词>` as `naming` shows it, the formula written by the plan; a row may also give the name it must get as `material_name`, e.g. from a file named for it, and the plan checks it comes out exactly), CSV tag `玩法卖点（单选，必选）/展示向/展示向`. One document is one group (one CSV, one CLS ticket); documents are never merged. Other progress fields (客户端、创意表达、创意批次、参考…) stay blank. Unspecified quote/currency are CLS defaults 0 / cny. Sheet: user-named, else the newest year-month GOFCN sheet; if `plan` reports a tie or an unusable header, ask.
+Fixed by the program, not asked: CLS requirement name (`GOFCN<first>-GOFCN<last>` from the real numbers; never put it in `request.json`), material numbers (continue the sheet, running on across groups in link order), material name (`GOFCN<编号>_<一级>_<二级>_<创意形式>_<提炼词>` as `naming` shows it, the formula written by the plan; a row may also give the name it must get as `material_name`, when the doc names its rows so, and the plan checks it comes out exactly), CSV tag `玩法卖点（单选，必选）/展示向/展示向`. One document is one group (one CSV, one CLS ticket); documents are never merged. Other progress fields (客户端、创意表达、创意批次、参考…) stay blank. Unspecified quote/currency are CLS defaults 0 / cny. Sheet: user-named, else the newest year-month GOFCN sheet; if `plan` reports a tie or an unusable header, ask.
 
 Collect all open points and ask them **once, in one short message**, at the end of the turn ("这批 44 条混剪的一级/二级标签填什么？"). Only the missing information, no plan preview. A 提炼词 the doc does not give is one of them ("文档里没找到提炼词，这 14 条都填「关键词」吗？"); when it is the only one, ask it in the plan instead.
 

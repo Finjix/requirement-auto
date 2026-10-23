@@ -17,11 +17,11 @@ start.cmd
 - 以后改了插件：重复上面的复制和重启。内容变了（版本号没变也算）会自动整体替换；把文件夹从 `plugins/` 删掉就卸载；文件夹改名加 `_` 前缀就是停用。
 - 服务运行中复制没有效果，只在启动时扫描。
 
-用户不需要任何配置。用户在飞书里提出素材需求，Codex 会按技能描述自己选用 `requirement-auto:gof-requirement`；发来素材要求上传时选用 `requirement-auto:gof-creative-upload`。需要飞书登录时，Codex 运行 `gof.mjs feishu login start` 和 `gof.mjs feishu authorize --qr`，把二维码发给用户。
+用户不需要任何配置。用户在飞书里给来需求文档要发布素材需求时，Codex 会按技能描述自己选用 `requirement-auto:gof-requirement`（发布需求：进度表 + CLS 建单）；发来做好的素材要求上传时选用 `requirement-auto:gof-creative-upload`（上传素材：进度表 + CLS 上传素材，不建单）。需要飞书登录时，Codex 运行 `gof.mjs feishu login start` 和 `gof.mjs feishu authorize --qr`，把二维码发给用户。
 
 ### 素材上传与附件
 
-上传技能从 lark-agent 的附件说明里拿文件：lark-agent 把用户发来的附件下载到 `user/<名>/workspace/input/<原文件名>`，在提示开头写 `Files the user attached to this message …` 并列出绝对路径。技能只读这些文件，不移动、不改名；zip 解压到插件自己的 `tmp/unpacked/`；每个文件按它在创意进度表那一行的素材名称上传（文件名不对时创意名称和上传的文件名都换成素材名称，本地文件不动）；上传结束后的创意列表截图写进工作目录，随回复发回。lark-agent 一侧（2026-10-21 起）：
+上传技能从 lark-agent 的附件说明里拿文件：lark-agent 把用户发来的附件下载到 `user/<名>/workspace/input/<原文件名>`，在提示开头写 `Files the user attached to this message …` 并列出绝对路径。技能只读这些文件，不移动、不改名；zip 解压到插件自己的 `tmp/unpacked/`；还没登记的文件先追加创意进度表的行，再按每个文件那一行的素材名称上传（文件名不对时创意名称和上传的文件名都换成素材名称，本地文件不动）；结束后的进度表和创意列表截图写进工作目录，随回复发回。lark-agent 一侧（2026-10-21 起）：
 
 | 情况 | 现在怎么处理 |
 |---|---|
@@ -31,7 +31,7 @@ start.cmd
 | 有任务在执行时用户再发消息（如先发文字、再发素材） | 并入正在执行的那一轮（Codex 的 steering，2026-10-22 起）：附件先下载到同一个 `workspace/input/`，Codex 在下一步读到这条消息和附件路径；Codex 不再接收时（这一轮刚结束）改为在后面单独执行 |
 | 文件夹（`folder` 消息，或图文里的文件夹） | 飞书的资源接口不支持文件夹（`type=file` 返回 500/40009，`type=folder` 返回 234001，与权限无关），机器人回复请用户压缩成 zip 再发 |
 
-批量素材的做法：把文件夹压缩成 zip 发给机器人，插件解压后按文件逐个建创意。用户直接发来还没登记的素材（比如已按进度表规则命名、编号写成 `GOFCNxxxxx` 的文件）时，技能先从这些文件整理出进度表的行，追加进度表、建 CLS 草稿，再按新行的素材名称上传，整个过程只确认一次计划。
+批量素材的做法：把文件夹压缩成 zip 发给机器人，插件解压后按文件逐个建创意。素材还没登记时（比如已按进度表规则命名、编号写成 `GOFCNxxxxx` 的文件），技能先从这些文件整理出进度表的行并追加，再按新行的素材名称上传；素材已经做好，不建 CLS 需求单。整个过程只确认一次计划。
 
 ## 约定（宿主给插件什么）
 

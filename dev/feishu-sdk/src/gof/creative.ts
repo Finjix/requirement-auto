@@ -303,6 +303,23 @@ function person(list: Person[], wanted: string, label: string): Person {
   return { id: found.id, name: found.name };
 }
 
+/**
+ * Who the names of a 创意人 and 制作人 are in CLS, or why a name finds no one (or several): for files whose rows do not exist yet, which
+ * no plan can be made of before they are appended.
+ */
+export function matchPeople(options: UploadOptions, wanted: { creator?: string; producers?: string[] }): Obj {
+  const one = (list: Person[], name: string, label: string): Obj => {
+    try { return { wanted: name, ...person(list, name, label) }; } catch (error) {
+      if (error instanceof Blocked) return { wanted: name, problem: error.message };
+      throw error;
+    }
+  };
+  return {
+    ...(wanted.creator !== undefined ? { creator: one(options.creators, wanted.creator, `创意人“${wanted.creator}”`) } : {}),
+    ...(wanted.producers !== undefined ? { producers: wanted.producers.map(name => one(options.producers, name, `制作人“${name}”`)) } : {}),
+  };
+}
+
 /** A refusal of `pick` with a hint added at its end. */
 function withHint<T>(pick: () => T, hint: string): T {
   try { return pick(); } catch (error) {
@@ -526,11 +543,11 @@ const namedAs = (material: Material, name: string): boolean => name.replace(BIDI
 
 /**
  * The number of the one row named GOFCN<number>_<body>, for a file named GOFCNxxxxx_<body>. Refused when there is none yet (the files
- * are to be registered first: rows appended and a CLS ticket made) or several.
+ * are to be registered first: their rows appended to the progress sheet, no CLS ticket) or several.
  */
 function numberByName(body: string, named: Map<string, ProgressRow[]>): number {
   const numbers = [...new Set((named.get(body) ?? []).map(r => r.number))].sort((a, b) => a - b);
-  need(numbers.length > 0, `文件名的 GOFCN 编号待定，进度表里还没有素材名称为“GOFCN<编号>_${body}”的行：这批素材要先登记（按需求流程追加进度表、建 CLS 单），再上传；已经登记、只是名称不同的，用 items[].number 写明是哪一行`);
+  need(numbers.length > 0, `文件名的 GOFCN 编号待定，进度表里还没有素材名称为“GOFCN<编号>_${body}”的行：这批素材要先登记（为这些文件追加进度表的行，不建 CLS 单），再上传；已经登记、只是名称不同的，用 items[].number 写明是哪一行`);
   need(numbers.length === 1, `进度表里有 ${numbers.length} 行的素材名称是“GOFCN<编号>_${body}”（${numbers.map(n => `GOFCN${n}`).join('、')}）：用 items[].number 写明是哪一行`);
   return numbers[0]!;
 }

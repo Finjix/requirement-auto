@@ -4,7 +4,7 @@ import { ClsError } from './cls-adapter.ts';
 import { createCreativeAdapter, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import {
   appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, lookupRows,
-  materialRefusal, nameParts, normalizeUploadRequest, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary,
+  matchPeople, materialRefusal, nameParts, normalizeUploadRequest, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary,
   type DirNode, type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
 } from './creative.ts';
 import { unpackZip } from './unzip.ts';
@@ -67,9 +67,15 @@ export async function readOptions(api: CreativeAdapter, session: Session): Promi
   };
 }
 
-export async function uploadOptions(online: Online, find?: string, deps: UploadDeps = {}): Promise<Obj> {
+/**
+ * `gof creative options`: what the page offers. `find` looks for directories by name; `creator` / `producers` are matched to the people
+ * the page offers (`people`: the CLS name of each, or the problem), as the plan would match them.
+ */
+export async function uploadOptions(online: Online, query: { find?: string; creator?: string; producers?: string[] } = {}, deps: UploadDeps = {}): Promise<Obj> {
+  const { find } = query;
   const session = await online.session();
   const options = await readOptions(adapterFor(session, deps), session);
+  const wanted = { ...(query.creator !== undefined ? { creator: query.creator } : {}), ...(query.producers !== undefined ? { producers: query.producers } : {}) };
   let defaultDirectory: Obj | null = null;
   try { defaultDirectory = findDirectory(options.directories, DEFAULT_DIRECTORY); } catch { /* reported as null */ }
   const all = flattenDirectories(options.directories);
@@ -81,6 +87,7 @@ export async function uploadOptions(online: Online, find?: string, deps: UploadD
       ? all.filter(d => d.name.includes(find)).sort((a, b) => a.path.split(' / ').length - b.path.split(' / ').length).slice(0, 50).map(d => d.path)
       : all.filter(d => d.path.split(' / ').length === 2).map(d => d.path),
     creators: options.creators.map(p => p.name), producers: options.producers.map(p => p.name), types: options.types.map(t => t.name),
+    ...(Object.keys(wanted).length ? { people: matchPeople(options, wanted) } : {}),
   };
 }
 

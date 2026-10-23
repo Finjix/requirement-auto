@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { clsCheck, events, groupFor, loadBatch } from './batch.ts';
+import { clsCheck, events, groupFor, loadBatch, NO_TICKET } from './batch.ts';
 import { normalizeRequest, type Group } from './request.ts';
 import { checkSeal, rejectSecrets, seal } from './seal.ts';
 import { Blocked, canonical, CSV_HEADERS, FIXED_TAG, isInside, need, readJson, sha256 } from './util.ts';
@@ -160,6 +160,7 @@ export function operation(dir: string, groupId: string, action: string, catalog:
   rejectSecrets(catalog);
   need(['save_draft', 'import_scripts'].includes(action), '只允许草稿创建和脚本导入');
   const group = groupFor(manifest.plan, groupId);
+  need(group.csv, NO_TICKET);
   need(catalog.can_create === true && catalog.account?.status === 1, '未证明当前 CLS 登录及建单权限');
   clsCheck(batchPath, groupId, action, observations);
   const [payload, creatorId, defaults] = buildPayload(group.request, catalog, group.names);

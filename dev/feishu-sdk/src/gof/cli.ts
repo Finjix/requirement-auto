@@ -228,7 +228,13 @@ function clsCommand(args: string[]): Result {
 /** The material upload (see creative-online.ts): options, rows and plan only read; run uploads what an approved plan says. */
 async function creativeCommand(command: string, args: string[], bridge: Bridge, via: online.Online): Promise<Result> {
   switch (command) {
-    case 'options': return creative.uploadOptions(via, str(parse(args, { find: { type: 'string' } }).values.find));
+    case 'options': {
+      const { values } = parse(args, { find: { type: 'string' }, creator: { type: 'string' }, producers: { type: 'string' } });
+      const producers = str(values.producers)?.split(/[,，、]+/).map(t => t.trim()).filter(Boolean);
+      need(producers === undefined || producers.length > 0, '--producers 需要至少一个名字（逗号分开）');
+      return creative.uploadOptions(via, { ...(str(values.find) ? { find: str(values.find)! } : {}),
+        ...(str(values.creator)?.trim() ? { creator: str(values.creator)!.trim() } : {}), ...(producers ? { producers } : {}) });
+    }
     case 'files': {
       const { positionals } = parse(args, {}, true);
       need(positionals.length > 0, 'creative files 需要文件、文件夹或 zip 的路径');
