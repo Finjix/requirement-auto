@@ -4,7 +4,7 @@ import { ClsError } from './cls-adapter.ts';
 import { createCreativeAdapter, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import {
   appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, lookupRows,
-  matchPeople, materialRefusal, nameParts, normalizeUploadRequest, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary, variantBases,
+  matchPeople, materialRefusal, nameBody, nameParts, normalizeUploadRequest, registeredRow, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary, variantBases,
   type DirNode, type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
 } from './creative.ts';
 import { unpackZip } from './unzip.ts';
@@ -190,18 +190,28 @@ async function gather(inputs: string[], deps: UploadDeps): Promise<{ materials: 
 
 /**
  * `gof creative files`: what the given files, folders and zips hold, file by file, for planning from the files themselves before their rows
- * exist (a file named GOFCNxxxxx_<name> is made for the row that will be called GOFCN<number>_<name>). Reads only, offline.
+ * exist (a file named GOFCNxxxxx_<name> is made for the row that will be called GOFCN<number>_<name>). Reads only, offline; with `check`
+ * (`--check`) it also reads the progress sheet (about a minute) and says of each file named for its row whether that row is already there
+ * (`row`, see registeredRow): files that carry their numbers have most likely been registered, and are verified rather than appended.
  */
-export async function listFiles(inputs: string[], deps: UploadDeps = {}): Promise<Obj> {
+export async function listFiles(inputs: string[], deps: UploadDeps = {}, check?: { bridge: Bridge; progress: true | string }): Promise<Obj> {
   const { materials, skipped } = await gather(inputs, deps);
+  const bodies = materials.map(m => pendingBody(m.name) ?? nameBody(m.name)).filter((b): b is string => b !== null);
+  const numbers = materials.map(m => m.number).filter((n): n is number => n !== null);
+  const sheet = check && (numbers.length || bodies.length)
+    ? await progressLookup(check.bridge, check.progress, numbers, deps.tmpDir ?? resolveDataPaths().tmp, bodies) : undefined;
+  const listed = materials.map(m => {
+    const pending = pendingBody(m.name);
+    const row = sheet ? registeredRow(m, sheet.rows, sheet.named) : null;
+    return { file: m.origin ?? m.file_name, path: m.file, name: m.name, kind: m.kind, size: m.size,
+      ...(m.number !== null ? { number: m.number } : {}),
+      ...(pending !== null ? { pending_number: true, name_without_number: pending, parts: nameParts(pending) } : {}),
+      ...(row ? { row } : {}) };
+  });
+  const registered = listed.filter(f => f.row?.status === 'registered').length;
   return {
-    status: 'files', count: materials.length,
-    files: materials.map(m => {
-      const pending = pendingBody(m.name);
-      return { file: m.origin ?? m.file_name, path: m.file, name: m.name, kind: m.kind, size: m.size,
-        ...(m.number !== null ? { number: m.number } : {}),
-        ...(pending !== null ? { pending_number: true, name_without_number: pending, parts: nameParts(pending) } : {}) };
-    }),
+    status: 'files', count: materials.length, files: listed,
+    ...(check ? { progress_source: sheet?.label ?? null, registered, to_verify: listed.filter(f => f.row && f.row.status !== 'registered').length } : {}),
     ...(skipped.length ? { skipped: skipped.map(s => ({ file: shownFile(s.file), reason: s.reason })) } : {}),
   };
 }

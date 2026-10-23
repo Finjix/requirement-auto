@@ -594,6 +594,33 @@ test('rows: by number and by text in 素材名称 or 提炼词, newest first; nu
   await assert.rejects(findRows(sheetBridge(finalCutSheet()), { numbers: [], texts: [] }), /--numbers 或 --find/);
 });
 
+test('files --check: a file named with its number is found in the progress sheet, or said to differ from its row, or to have none', async () => {
+  const dir = materials({
+    'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球.mp4': 'registered', 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘_竖版.mp4': 'variant',
+    'GOFCN67682_AI生成_设定3.0_3D_企鹅保龄球.mp4': 'differs', 'GOFCN99999_AI生成_设定3.0_3D_冻鱼飞盘.mp4': 'missing', '01.mp4': 'plain',
+  });
+  const exports: string[] = [];
+  const listed = await listFiles([dir], { tmpDir: tempDir('files-tmp-') }, { bridge: sheetBridge(finalCutSheet(), exports), progress: true });
+  const row = (name: string) => listed.files.find((f: any) => f.name === name).row;
+  assert.deepEqual(row('GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球'),
+    { status: 'registered', rows: [{ number: 67680, name: 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', where: '26年1月-GOFCN 第 4 行' }] });
+  assert.deepEqual(row('GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘_竖版'),
+    { status: 'variant', rows: [{ number: 67681, name: 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘', where: '26年1月-GOFCN 第 5 行' }] });
+  assert.deepEqual(row('GOFCN67682_AI生成_设定3.0_3D_企鹅保龄球'), { status: 'differs',
+    rows: [{ number: 67682, name: 'GOFCN67682_AI生成_设定3.0_3D_围炉煮冰', where: '26年1月-GOFCN 第 6 行' }],
+    same_name_rows: [{ number: 67680, name: 'GOFCN67680_AI生成_设定3.0_3D_企鹅保龄球', where: '26年1月-GOFCN 第 4 行' }] });
+  assert.deepEqual(row('GOFCN99999_AI生成_设定3.0_3D_冻鱼飞盘'),
+    { status: 'not_found', same_name_rows: [{ number: 67681, name: 'GOFCN67681_AI生成_设定3.0_3D_冻鱼飞盘', where: '26年1月-GOFCN 第 5 行' }] });
+  assert.equal(row('01'), undefined, 'a file without a number is not looked for');
+  assert.deepEqual([listed.progress_source, listed.registered, listed.to_verify], ['插件进度表', 1, 3]);
+  assert.equal(exports.length, 1);
+  // GOFCNxxxxx_… files are found by their name without the number; without --check nothing is read.
+  const pending = await listFiles([materials(PENDING)], { tmpDir: tempDir('files-tmp-') }, { bridge: sheetBridge(registeredSheet()), progress: true });
+  assert.deepEqual(pending.files.map((f: any) => [f.row.status, f.row.rows[0].number]).sort(), [['registered', 67738], ['registered', 67739], ['registered', 67740]]);
+  const offline = await listFiles([dir], { tmpDir: tempDir('files-tmp-') });
+  assert.ok(offline.files.every((f: any) => f.row === undefined) && !('registered' in offline));
+});
+
 test('the 终稿库 zip end to end: planned from the progress sheet, uploaded under the 素材名称, the files on disk untouched', async () => {
   const { makeZip } = await import('./helpers/zip-writer.ts');
   const fake = await fakeCreative();

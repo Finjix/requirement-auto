@@ -517,6 +517,12 @@ test('rows registered for finished materials need no script link: they get no CS
   for (const group of [unmade, { ...unmade, supplier: ' ' }]) {
     assert.throws(() => normalizeRequest({ groups: [group] }), (e: Error) => e instanceof Blocked && e.message === '第 1 组缺少设计师供应商：已做好的素材要写明是谁做的（也是上传的制作人）');
   }
+  // Files named with their number (GOFCN67680_…) have most likely been registered: their rows are verified, not appended a second time.
+  const numbered = finished(['GOFCN67739_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版']);
+  assert.throws(() => normalizeRequest(numbered), (e: Error) => e instanceof Blocked
+    && e.message.startsWith('第 1 组的素材名称已带编号（GOFCN67739_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版）：带编号的素材多半已在进度表登记，先用 gof creative files --check 核验'));
+  // A requirement's sample name keeps its old number out of the new rows, as before.
+  assert.doesNotThrow(() => normalizeRequest(fromFiles(['GOFCN67739_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版'])));
 });
 
 test('rows for finished materials whose write landed unverified are not appended again; other files are', () => {

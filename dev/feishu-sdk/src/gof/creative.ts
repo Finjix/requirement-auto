@@ -637,6 +637,35 @@ function rowOf(material: Material, item: ItemRequest, rows: Map<number, Progress
   return { row, by };
 }
 
+/** A row as the commands list it to the agent. */
+const listedRow = (r: ProgressRow): Record<string, unknown> => ({ number: r.number, name: r.name, where: `${r.sheet} 第 ${r.row} 行` });
+
+/**
+ * Whether a file named for its row is already in the progress sheet, before any row is planned for it: a batch whose files carry their
+ * GOFCN numbers has most likely been registered already. `registered`: a row is named as the file (for GOFCNxxxxx_…, but for the number), so
+ * the file is only uploaded; `variant`: the file's name starts with the 素材名称 of its number's row; `differs`: its number's row is named
+ * otherwise (the number may be the original the piece builds on, or either name was changed); `not_found`: no row has its number. Rows
+ * named as the file under another number are listed as `same_name_rows`. Null for a file without a number, and a GOFCNxxxxx_… file of no row.
+ * `byNumber` / `byBody` are lookupRows of the files' numbers and of their names without the number.
+ */
+export function registeredRow(material: Material, byNumber: Map<number, ProgressRow[]>, byBody: Map<string, ProgressRow[]>): Record<string, unknown> | null {
+  const pending = pendingBody(material.name);
+  if (pending !== null) {
+    const rows = byBody.get(pending) ?? [];
+    return rows.length ? { status: 'registered', rows: rows.map(listedRow) } : null;
+  }
+  if (material.number === null) return null;
+  const rows = byNumber.get(material.number) ?? [];
+  const body = nameBody(material.name);
+  const others = (body !== null ? byBody.get(body) ?? [] : []).filter(r => r.number !== material.number);
+  const elsewhere = others.length ? { same_name_rows: others.map(listedRow) } : {};
+  if (rows.length === 0) return { status: 'not_found', ...elsewhere };
+  if (rows.some(r => r.name && namedAs(material, r.name))) return { status: 'registered', rows: rows.filter(r => r.name && namedAs(material, r.name)).map(listedRow) };
+  const variant = rows.filter(r => r.name && variantTail(material, r)?.startsWith('_'));
+  if (variant.length) return { status: 'variant', rows: variant.map(listedRow) };
+  return { status: 'differs', rows: rows.map(listedRow), ...elsewhere };
+}
+
 export function buildUploadPlan(input: PlanInput): Obj {
   const { request, options, materials, existing } = input;
   need(options.can_upload, `CLS 账号“${options.account.name}”在 ${options.game.code} 没有上传创意的权限`);

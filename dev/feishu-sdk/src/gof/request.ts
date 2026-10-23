@@ -148,6 +148,12 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     const link = pick(raw, 'script_url', '');
     need(typeof link === 'string' && (link.trim() !== '' || !ticket), '缺少 script_url');
     g.script_url = cellText(link, 'script_url');
+    // Finished materials named with their number (GOFCN67680_…) have most likely been registered already: their rows are verified
+    // (gof creative files --check), never appended a second time. A new piece is named GOFCNxxxxx_…, whatever its file carries.
+    if (!ticket && g.script_url === '') {
+      const numbered = [raw, ...(Array.isArray(raw.items) ? raw.items : [])].map(x => x?.material_name).filter(n => typeof n === 'string' && /^GOFCN\d+_/i.test(n.trim()));
+      need(numbered.length === 0, `第 ${index} 组的素材名称已带编号（${numbered.join('、')}）：带编号的素材多半已在进度表登记，先用 gof creative files --check 核验，已登记的只上传、不追加；确是新素材的，素材名称写成 GOFCNxxxxx_…`);
+    }
     // 设计师供应商 may be left open only for a requirement whose supplier is not decided yet: the sheet's cell stays empty and CLS takes its
     // 待定供应商 (cls.ts). Finished materials (no script link) were made by someone, who is also their 制作人.
     g.supplier = cellText(pick(raw, 'supplier', ''), 'supplier').trim();

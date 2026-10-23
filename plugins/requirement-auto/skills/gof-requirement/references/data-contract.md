@@ -51,7 +51,7 @@ Values are placeholders.
 
 ## Rows for finished materials
 
-The upload skill (gof-creative-upload) registers materials that are already made: one group, no `script_url` and no `cls`, so the batch has no CSV, `gof cls` refuses to build a ticket for it, the plan summary shows no `requirement_name` / `message_kind`, and `batch message` has nothing to say. Each file is one item of `quantity` 1, in file order (`gof creative files` lists them with their `parts`). For files named `编号_一级_二级_[创意形式_]提炼词`, everything after the 创意形式, or after the 二级标签 when the name has none, is the 提炼词, `_竖版` / `_横版` and versions included, and the file's name goes into `material_name`, so the row's name stays the file's. Two versions of one piece, no 创意形式:
+The upload skill (gof-creative-upload) registers materials that are already made: one group, no `script_url` and no `cls`, so the batch has no CSV, `gof cls` refuses to build a ticket for it, the plan summary shows no `requirement_name` / `message_kind`, and `batch message` has nothing to say. Each file is one item of `quantity` 1, in file order (`gof creative files` lists them with their `parts`). For files named `编号_一级_二级_[创意形式_]提炼词`, everything after the 创意形式, or after the 二级标签 when the name has none, is the 提炼词, `_竖版` / `_横版` and versions included, and the file's name goes into `material_name`, so the row's name stays the file's. Such a `material_name` is always `GOFCNxxxxx_…`: a file named with its number has most likely been registered already and is verified with `gof creative files --check`, and `plan` refuses a numbered name for these rows (a requirement's sample name keeps dropping its old number). Two versions of one piece, no 创意形式:
 
 ```json
 { "groups": [{ "supplier": "廿十一", "reviewer": "金莉",

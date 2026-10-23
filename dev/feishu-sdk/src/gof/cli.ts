@@ -236,9 +236,11 @@ async function creativeCommand(command: string, args: string[], bridge: Bridge, 
         ...(str(values.creator)?.trim() ? { creator: str(values.creator)!.trim() } : {}), ...(producers ? { producers } : {}) });
     }
     case 'files': {
-      const { positionals } = parse(args, {}, true);
+      const { values, positionals } = parse(args, { check: { type: 'boolean' }, progress: { type: 'string' } }, true);
       need(positionals.length > 0, 'creative files 需要文件、文件夹或 zip 的路径');
-      return creative.listFiles(positionals);
+      need(values.check || values.progress === undefined, '--progress 只和 --check 一起用');
+      const progress = str(values.progress);
+      return creative.listFiles(positionals, {}, values.check ? { bridge, progress: progress ?? true } : undefined);
     }
     case 'rows': {
       const { values } = parse(args, { numbers: { type: 'string' }, find: { type: 'string' }, progress: { type: 'string' } });
