@@ -57,6 +57,9 @@ function amount(value: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** CLS's supplier for a requirement whose 设计师供应商 is still open (and the 制作人 of its materials). */
+export const PENDING_SUPPLIER = '待定供应商';
+
 /** What a request can choose from in CLS, by the names it uses: GOFCN directions, creative task types, active suppliers and people. */
 export function catalogChoices(catalog: Obj): Obj {
   const game = (catalog.games as Obj[]).find(g => g.code === 'GOFCN');
@@ -87,7 +90,8 @@ export function buildPayload(group: Group, catalog: Obj, names?: string[]): [Obj
   need(Array.isArray(userGames) && userGames.includes(game.id), '当前账号未证明有 GOFCN 权限');
   const direction = unique<Obj>(catalog.directions, x => x.game_id === game.id && x.name === cls.direction, '创意方向');
   const suppliers = (catalog.users as Obj[]).filter(x => x.status === 1 && x.roles.includes('outsource'));
-  const supplier = matchUser(suppliers, String(cls.supplier ?? group.supplier), cls.supplier !== undefined, '供应商');
+  // A requirement without a 设计师供应商 goes to CLS's own placeholder supplier.
+  const supplier = matchUser(suppliers, String(cls.supplier ?? (group.supplier || PENDING_SUPPLIER)), cls.supplier !== undefined || !group.supplier, '供应商');
   const creator = matchUser((catalog.users as Obj[]).filter(x => x.status === 1), String(cls.creator ?? group.reviewer), cls.creator !== undefined, '创意人');
   const task = unique<Obj>(catalog.types, x => x.type === 'creative' && x.key === cls.task_type, '任务类型');
   const payload: Obj = {

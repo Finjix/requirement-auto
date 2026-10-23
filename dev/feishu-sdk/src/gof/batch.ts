@@ -6,7 +6,7 @@ import { itemsOf } from './request.ts';
 import { resolveDataPaths } from '../paths.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { collectIds, hasContent, inlineOptions, plainRules, scanSheets, Snapshot, validationProjection, holds } from './snapshot.ts';
-import { validateBatchReceipt, validateReceipt } from './cls.ts';
+import { PENDING_SUPPLIER, validateBatchReceipt, validateReceipt } from './cls.ts';
 import { validateRuleEvidence } from './rules.ts';
 import {
   Blocked, canonical, checkClsUrl, isInside, checkTarget, CSV_HEADERS, digest, FIXED_TAG, need, readJson, sha256, TARGET, writeJsonNew,
@@ -496,7 +496,7 @@ export function composeMessage(groups: Plan[], records: Pick<BatchEvent, 'group'
     const found = [...records].reverse().find(e => e.group === group.id && e.evidence.requirement_number);
     if (!found) missing.push(group.id);
     const g = group.request;
-    lines.push(`需求编号：${found ? found.evidence.requirement_number : NUMBER_PLACEHOLDER}（${kindOf(g)}）`, `供应商：${g.supplier}`);
+    lines.push(`需求编号：${found ? found.evidence.requirement_number : NUMBER_PLACEHOLDER}（${kindOf(g)}）`, `供应商：${g.supplier || PENDING_SUPPLIER}`);
     if (!creators.includes(g.creator)) creators.push(g.creator);
   }
   if (creators.length === 0) return { status: 'message_not_ready', message: null, skipped_groups: skipped, missing_numbers: missing };

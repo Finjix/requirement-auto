@@ -470,6 +470,11 @@ test('the 终稿库 example: each video goes up named as the row the requirement
   assert.equal(summary.renamed, 4);
   assert.deepEqual(summary.items.find((i: any) => i.file === 'g44065_gf_v90.mp4'),
     { file: 'g44065_gf_v90.mp4', name: 'GOFCN67683_AI生成_设定3.0_3D_围炉煮冰', renamed: true, type: '视频', creator: '金莉', producers: ['长沙廿拾一文化传媒有限公司'], progress_row: '26年1月-GOFCN 第 7 行', row_from: 'request' });
+  // Rows without a 设计师供应商: the 制作人 is CLS's 待定供应商, as their requirement had.
+  const open = new Map([...rows].map(([n, list]) => [n, list.map(r => ({ ...r, supplier: '' }))]));
+  const pending = buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], items: FINAL_CUT_ITEMS }), materials: found, skipped,
+    options: { ...OPTIONS, producers: [...OPTIONS.producers, { id: 51, name: '待定供应商' }] }, existing: new Set<string>(), progress: open });
+  assert.ok(pending.items.every((i: any) => i.producers.map((p: any) => p.name).join() === '待定供应商' && i.source.producers === 'pending'));
 });
 
 test('binding a file to a row: one file per row, an original\'s number in a file name is caught, a file already named right is left as it is', async () => {
@@ -617,15 +622,15 @@ const PENDING = { 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块�
 
 test('files named GOFCNxxxxx_… before their rows existed go up as those rows once they do, the number filled in', async () => {
   assert.deepEqual([pendingBody('GOFCNxxxxx_AI玩法优化_搂冰块'), pendingBody('GOFCN_a_b'), pendingBody('GOFCN67738_a_b'), pendingBody('01')], ['AI玩法优化_搂冰块', 'a_b', null, null]);
-  // Read the way materials are named: 一级_二级_创意形式_提炼词, sometimes _竖版 / _横版 after it; fewer parts cannot be told apart.
-  assert.deepEqual(nameParts('AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版'),
-    { primary_tag: 'AI玩法优化', secondary_tag: '火车运输御敌', creative_form: '兵临城下塔防', keyword: '企鹅', orientation: '竖版' });
-  assert.deepEqual(nameParts('AI生成_设定3.0_3D_围炉_煮冰_横板'), { primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D', keyword: '围炉_煮冰', orientation: '横板' });
-  assert.deepEqual(nameParts('AI生成_设定3.0_3D_企鹅'), { primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D', keyword: '企鹅' });
-  assert.ok('unclear' in nameParts('AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版'));
+  // Read the way materials are named: 一级_二级_[创意形式_]提炼词; everything after the tags is `rest`, 竖版 / 横版 included.
+  assert.deepEqual(nameParts('AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版'), { primary_tag: 'AI玩法优化', secondary_tag: '火车运输御敌', rest: '兵临城下塔防_企鹅_竖版' });
+  assert.deepEqual(nameParts('AI生成_设定3.0_3D_围炉_煮冰_横板'), { primary_tag: 'AI生成', secondary_tag: '设定3.0', rest: '3D_围炉_煮冰_横板' });
+  assert.deepEqual(nameParts('AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版'), { primary_tag: 'AI玩法优化', secondary_tag: '搂冰块抢资源', rest: '割资源冰块对抗_竖版' });
+  assert.ok('unclear' in nameParts('AI玩法优化_搂冰块抢资源'));
+  assert.ok('unclear' in nameParts('AI玩法优化__企鹅'));
   const dir = materials(PENDING);
   const listed = await listFiles([dir], { tmpDir: tempDir('files-tmp-') });
-  assert.equal(listed.files.find((f: any) => f.name.includes('企鹅')).parts.creative_form, '兵临城下塔防');
+  assert.equal(listed.files.find((f: any) => f.name.includes('企鹅')).parts.rest, '兵临城下塔防_企鹅_竖版');
   assert.deepEqual(listed.files.map((f: any) => [f.name_without_number, f.pending_number, f.kind]).sort(), Object.keys(PENDING)
     .map(name => [name.replace(/^GOFCNxxxxx_/, '').replace(/.mp4$/, ''), true, 'video']).sort());
   const fake = await fakeCreative();

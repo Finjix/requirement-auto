@@ -59,17 +59,19 @@ export const PENDING_NUMBER = /^GOFCN(?:\d+|[xX×*＊?？#]*)_/;
 
 /**
  * One run of rows. `raw` holds the item's own keys and `inherited` the group's defaults for the tags, form and keyword. The tags are given;
- * a request that gives only a name (`material_name`, the way the sheet used to name rows: 一级_二级_创意形式_提炼词) has them read from it.
- * A given name is the one the rows must get: the plan checks it against what the sheet's naming formula makes of the row.
+ * an older request that gives only a name (`material_name`, 一级_二级_创意形式_提炼词) has them read from it. A given name is the one the
+ * rows must get: the plan checks it against what the naming formula makes of the row.
  */
 function item(raw: Record<string, any>, inherited: Record<string, any>, where: string): Item {
   const q = raw.quantity;
   need(typeof q === 'number' && Number.isInteger(q) && q > 0, 'quantity 必须是正整数');
   const value = (key: string, fallback: unknown) => pick(raw, key, pick(inherited, key, fallback));
-  // 创意形式 is a column of its own; the sheet no longer names rows by it, and an empty one stays empty.
+  // 创意形式 is filled only when the request states it; an empty one stays empty and drops out of the name.
   const form = cellText(value('creative_form', ''), 'creative_form').trim();
   const keyword = cellText(value('keyword', DEFAULT_KEYWORD), 'keyword');
   need(keyword.trim() !== '', '缺少 keyword');
+  // The name is cut into its parts at _ and the formula folds "__" into one: a 提炼词 may hold _, but not at its ends or twice in a row.
+  need(!/^_|_$|__/.test(keyword), `${where}的提炼词“${keyword}”不能以 _ 开头或结尾，也不能有连续的 _`);
   // It ends up in the 素材名称, which is also the creative's name in CLS, where / and \ cannot be: such a row could never be uploaded.
   need(!/[\\/]/.test(keyword), `提炼词“${keyword}”不能含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）：换成别的写法`);
   const result: Record<string, any> = { quantity: q, creative_form: form, keyword };
@@ -81,8 +83,8 @@ function item(raw: Record<string, any>, inherited: Record<string, any>, where: s
     need(result.material_name !== '' && !/[\\/]/.test(result.material_name), `素材名称“${given}”不能为空，也不能含 / 或 \\`);
   }
   if (given !== undefined && !tagged) {
-    const suffix = `_${form}_${keyword}`;
-    need(form !== '' && result.material_name.endsWith(suffix), '素材名称与创意形式/提炼词不一致，请澄清');
+    const suffix = form !== '' ? `_${form}_${keyword}` : `_${keyword}`;
+    need(result.material_name.endsWith(suffix), '素材名称与创意形式/提炼词不一致，请澄清');
     const topic = result.material_name.slice(0, result.material_name.length - suffix.length);
     result.topic = cellText(pick(raw, 'topic', topic), 'topic');
     need(result.topic === topic, '题材与素材名称不一致');
@@ -101,9 +103,9 @@ function item(raw: Record<string, any>, inherited: Record<string, any>, where: s
     result.topic = `${result.primary_tag}_${result.secondary_tag}`;
     if ('topic' in raw) need(raw.topic === result.topic, '题材与素材名称不一致');
   }
-  // A 素材名称 is cut into its parts at _: a tag with one of its own would make a name that can be read two ways (no option has one).
-  for (const key of ['primary_tag', 'secondary_tag']) {
-    need(!result[key].includes('_'), `${where}的${key === 'primary_tag' ? '一级' : '二级'}标签“${result[key]}”不能含 _：素材名称按 _ 分段，标签各占一段，其余写进提炼词`);
+  // A 素材名称 is cut into its parts at _: a tag or form with one of its own would make a name that can be read two ways (no option has one).
+  for (const [key, label] of [['primary_tag', '一级标签'], ['secondary_tag', '二级标签'], ['creative_form', '创意形式']] as const) {
+    need(!result[key].includes('_'), `${where}的${label}“${result[key]}”不能含 _：素材名称按 _ 分段，标签和创意形式各占一段，其余写进提炼词`);
   }
   return result as Item;
 }
@@ -135,13 +137,15 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     } else {
       Object.assign(g, item(raw, {}, `第 ${index} 组`));
     }
-    const missing = ([['supplier', '供应商'], ['reviewer', '审核人'], ['script_url', '脚本内容链接']] as const)
+    const missing = ([['reviewer', '审核人'], ['script_url', '脚本内容链接']] as const)
       .filter(([key]) => !(key in raw)).map(([, label]) => label);
     need(missing.length === 0, `第 ${index} 组缺少需求字段：${missing.join('、')}`);
-    for (const key of ['supplier', 'reviewer', 'script_url']) {
+    for (const key of ['reviewer', 'script_url']) {
       need(typeof raw[key] === 'string' && raw[key].trim() !== '', `缺少 ${key}`);
       g[key] = cellText(raw[key], key);
     }
+    // 设计师供应商 may be left open: the sheet's cell stays empty and CLS takes its 待定供应商 (cls.ts).
+    g.supplier = cellText(pick(raw, 'supplier', ''), 'supplier').trim();
     g.creator = g.reviewer; // Same person for progress reviewer, CLS creator and message.
     need(pick(raw, 'creator', g.reviewer) === g.reviewer, '审核人与进度表创意者字段不一致');
     for (const key of ['client', ...OPTIONAL_FIELDS]) {

@@ -1,6 +1,5 @@
-import { coordOf, translateFormula } from './a1.ts';
 import { Bridge, OPTION_FIELDS, readRules, sheetsOf, target } from './feishu.ts';
-import { namingFormula, namingPattern } from './plan.ts';
+import { namingPattern, rowFormula } from './plan.ts';
 import { columnOptions } from './rules.ts';
 import { chooseSheet, collectIds, type Snapshot } from './snapshot.ts';
 import { canonical, need } from './util.ts';
@@ -26,9 +25,8 @@ export async function context(bridge: Bridge, snapshot: Snapshot, options: Conte
   const last = snapshot.last[sheet]!;
   const optionsOf = Object.fromEntries(Object.values(OPTION_FIELDS).map(field => [field, field in cols ? columnOptions(rules, meta.sheet_id, cols[field]!, last) : []]));
   const next = [...collectIds(snapshot, tables).keys()].reduce((a, b) => Math.max(a, b), 0) + 1;
-  // How a new row will be named: the formula the rows above use, in the sheet's own words.
-  const formula = namingFormula(snapshot, sheet, cols, last + 1);
-  const naming = namingPattern(translateFormula(formula.value!, formula.coord, coordOf(cols.name!, last + 1)), last + 1, cols);
+  // How a new row will be named, in the sheet's own words.
+  const naming = namingPattern(rowFormula(snapshot, sheet, cols, last + 1, false), last + 1, cols);
   return {
     status: 'context', worksheet: sheet, sheet_id: meta.sheet_id, next_number: next, naming, options: optionsOf,
   };

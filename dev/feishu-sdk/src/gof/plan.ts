@@ -2,30 +2,52 @@ import { CellRange, columnLetter, coordOf, translateFormula } from './a1.ts';
 import { fieldValues, ITEM_FIELDS, itemsOf, normalizeRequest, OPTIONAL_FIELDS, type Item } from './request.ts';
 import { chooseSheet, collectIds, concatenate, FIELD_HEADERS, formulaRefs, optionsFor, REQUIRED_HEADERS, type Columns, type Snapshot } from './snapshot.ts';
 import type { CellData } from './xlsx.ts';
-import { Blocked, digest, need, safeFilename, TARGET } from './util.ts';
+import { digest, need, safeFilename, TARGET } from './util.ts';
 
 export type Plan = Record<string, any>;
 
-/** The naming formula a new row copies: the nearest one above it in the 素材名称 column. */
-export function namingFormula(snapshot: Snapshot, sheet: string, cols: Columns, below: number): CellData {
-  for (let r = below - 1; r > 1; r--) {
-    const cell = snapshot.cell(sheet, r, cols.name!);
-    if (cell?.kind === 'f' && cell.value !== null) return cell;
-  }
-  throw new Blocked('没有可继承的命名公式');
+/**
+ * The sheet's naming: GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>. 创意形式 may be empty, and SUBSTITUTE folds the "__" it
+ * leaves into one "_".
+ */
+export function namingFormula(cols: Columns, row: number): string {
+  const ref = (field: string) => coordOf(cols[field]!, row);
+  return `=SUBSTITUTE(CONCATENATE("GOFCN",${ref('number')},"_",${ref('primary_tag')},"_",${ref('secondary_tag')},"_",${ref('creative_form')},"_",${ref('keyword')}),"__","_")`;
 }
 
 /**
- * How the sheet names a row, in its own words ("GOFCN<素材编号>_<一级标签>_<二级标签>_<提炼词>"): the sheet decides what a 素材名称 is
- * made of, and colleagues change it (创意形式 and 客户端 were dropped from it in October 2026).
+ * The naming formula a new row gets: the nearest one above it in the 素材名称 column when it names a row the sheet's way (colleagues'
+ * own spelling of it is kept, e.g. with the 客户端 cell at the end, which stays empty here), else the sheet's naming itself: colleagues
+ * change the formula now and then (from row 23282 it left out 创意形式 for a while). Rows without a 创意形式 need it inside
+ * SUBSTITUTE(…,"__","_"), or the name keeps an empty part.
  */
+export function rowFormula(snapshot: Snapshot, sheet: string, cols: Columns, row: number, withoutForm: boolean): string {
+  const own = namingFormula(cols, row);
+  let above: CellData | undefined;
+  for (let r = row - 1; r > 1 && !above; r--) {
+    const cell = snapshot.cell(sheet, r, cols.name!);
+    if (cell?.kind === 'f' && cell.value !== null) above = cell;
+  }
+  if (!above) return own;
+  const formula = translateFormula(above.value!, above.coord, coordOf(cols.name!, row));
+  // Tried on a row of five distinct values: it must give exactly what the sheet's naming gives.
+  const probe: Record<string, string | number | null> = Object.fromEntries(formulaRefs(formula).map(coord => [coord, null]));
+  Object.assign(probe, { [coordOf(cols.number!, row)]: 1, [coordOf(cols.primary_tag!, row)]: 'A', [coordOf(cols.secondary_tag!, row)]: 'B',
+    [coordOf(cols.creative_form!, row)]: 'C', [coordOf(cols.keyword!, row)]: 'D' });
+  try { if (concatenate(formula, probe) !== 'GOFCN1_A_B_C_D') return own; } catch { return own; }
+  if (!withoutForm) return formula;
+  probe[coordOf(cols.creative_form!, row)] = null;
+  return concatenate(formula, probe) === 'GOFCN1_A_B_D' ? formula : `=SUBSTITUTE(${formula.slice(1)},"__","_")`;
+}
+
+/** How the sheet names a row, in its own words: "GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>". */
 export function namingPattern(formula: string, row: number, cols: Columns): string {
   const fields = new Map(Object.entries(cols).map(([field, col]) => [coordOf(col, row), FIELD_HEADERS[field]!]));
   const shown = Object.fromEntries(formulaRefs(formula).map(coord => [coord, `<${fields.get(coord) ?? coord}>`]));
   try { return concatenate(formula, shown); } catch { return formula; }
 }
 
-/** Plans the rows to append: the next material numbers, the naming formula copied down, the dropdown options to extend. */
+/** Plans the rows to append: the next material numbers, the naming formula, the dropdown options to extend. */
 export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: string | null): Plan {
   const request = normalizeRequest(requestInput);
   const [sheet, tables, ignored] = chooseSheet(snapshot, request, current);
@@ -50,11 +72,14 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
     need(merged.maxRow < area.minRow || merged.minRow > area.maxRow || merged.maxCol < area.minCol || merged.minCol > area.maxCol,
       '追加范围与合并单元格相交');
   }
-  const formulaCell = namingFormula(snapshot, sheet, cols, startRow);
-  const naming = namingPattern(translateFormula(formulaCell.value!, formulaCell.coord, coordOf(cols.name!, startRow)), startRow, cols);
-  // The API writes a column in one go: a column of some rows with a 创意形式 and some without would be a write with holes.
+  // The API writes a column in one go: a column of some rows with a value and some without would be a write with holes.
   const forms = request.groups.flatMap(g => itemsOf(g).map(item => item.creative_form !== ''));
-  need(forms.every(Boolean) || !forms.some(Boolean), '这一批有的行写了创意形式、有的没写：创意形式要么都写，要么都不写');
+  need(forms.every(Boolean) || !forms.some(Boolean),
+    '这一批有的行写了创意形式、有的没写（追加时一列一次写完，不能留空）：都不写创意形式、把它放在提炼词前面（素材名称不变），或分两次追加');
+  const suppliers = request.groups.map(g => g.supplier !== '');
+  need(suppliers.every(Boolean) || !suppliers.some(Boolean), '这一批有的需求写了设计师供应商、有的没写（追加时一列一次写完，不能留空）：分两次追加');
+  const withoutForm = !forms.some(Boolean);
+  const naming = namingPattern(rowFormula(snapshot, sheet, cols, startRow, withoutForm), startRow, cols);
   const rows: Plan[] = [];
   const groups: Plan[] = [];
   let cursor = 0;
@@ -75,14 +100,12 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
           values[coordOf(cols[field]!, r)] = field === 'number' ? number : (value !== '' ? value : null);
         }
         const nameCoord = coordOf(cols.name!, r);
-        const formula = translateFormula(formulaCell.value!, formulaCell.coord, nameCoord);
-        // The name is what the sheet's own formula makes of the row; a name the request gives (a file named for its row) must come out exactly.
+        const formula = rowFormula(snapshot, sheet, cols, r, withoutForm);
+        // The name is what the formula makes of the row; a name the request gives (a file named for its row) must come out exactly.
         const name = concatenate(formula, values);
         need(name.startsWith(`GOFCN${number}_`), '命名公式未产生正确 GOFCN 编号');
-        // Without SUBSTITUTE(…,"__","_") around it, a formula that still names rows by 创意形式 leaves an empty part where it is missing.
-        need(item.creative_form !== '' || !name.includes('__'), `进度表的素材名称用到创意形式（${naming}）：第 ${index} 组要写明创意形式`);
         need(item.material_name === undefined || name === `GOFCN${number}_${item.material_name}`,
-          `按进度表现在的命名（${naming}），这一行会叫“${name}”，不是要求的“GOFCN${number}_${item.material_name}”：核对一级标签、二级标签和提炼词`);
+          `按进度表的命名（${naming}），这一行会叫“${name}”，不是要求的“GOFCN${number}_${item.material_name}”：核对一级标签、二级标签、创意形式和提炼词`);
         need(!/[\\/]/.test(name), `素材名称“${name}”含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）`);
         values[nameCoord] = formula;
         rows.push({ row: r, number, name, values, group: id });

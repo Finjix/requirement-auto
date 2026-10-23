@@ -177,6 +177,7 @@ test('CLS names are found from the short names the progress sheet uses, and exac
     { id: 27, name: '李达甲', roles: ['creative_plan'], status: 1 },
     { id: 28, name: '李达乙', roles: ['creative_plan'], status: 1 },
     { id: 29, name: '丁杰-离职', roles: ['outsource'], status: 0 },
+    { id: 51, name: '待定供应商', roles: ['outsource'], status: 1 },
   );
   const names = (supplier: string, reviewer: string, cls: Record<string, string> = {}) => {
     const r = structuredClone(request);
@@ -187,6 +188,8 @@ test('CLS names are found from the short names the progress sheet uses, and exac
   assert.deepEqual(names('丁杰', '冯彦蓉'), { direction: '方向一', task_type: 'creative_a', supplier: '北京柒曦文化传媒有限公司（丁杰）', creator: '冯彦蓉-实习生' });
   assert.equal(names('杨燃', '张三').supplier, '某某工作室（个体工商户）-杨燃');
   assert.equal(names('达治', '张三').supplier, '达治（武汉）文化传媒有限公司');
+  // A requirement without a 设计师供应商 goes to CLS's 待定供应商.
+  assert.equal(names('', '张三').supplier, '待定供应商');
   // The exact name wins over a longer one that contains it.
   assert.equal(names('供应商甲', '张三').creator, '张三');
   assert.equal(reason(() => names('供应商甲', '李达')), '创意人 不存在或匹配不唯一，需在计划前澄清');

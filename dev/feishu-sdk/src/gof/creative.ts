@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { columnLetter } from './a1.ts';
-import { matchUser } from './cls.ts';
+import { matchUser, PENDING_SUPPLIER } from './cls.ts';
 import { checkSeal, rejectSecrets, seal } from './seal.ts';
 import { scanSheets, type Columns, type Snapshot } from './snapshot.ts';
 import type { SheetData } from './xlsx.ts';
@@ -70,20 +70,17 @@ export function pendingBody(name: string): string | null {
   return m ? m[1]! : null;
 }
 
-/** The orientation some names end in, after the 提炼词 ("…_企鹅_竖版"); 横板 is how 横版 is often typed. */
-const ORIENTATIONS = new Set(['竖版', '横版', '横板']);
-
 /**
- * The parts of a material name without its number, read the way materials are named: 一级标签_二级标签_创意形式_提炼词, sometimes with
- * _竖版 / _横版 after it (the 提炼词 may hold _ of its own). A name of fewer parts cannot be told apart: which of 创意形式 and 提炼词 is
- * missing is for a person to say (`unclear`).
+ * The parts of a material name without its number, read the way materials are named: 一级标签_二级标签_[创意形式_]提炼词. The two tags
+ * are the first two parts; `rest` is everything after them: the 提炼词, with a 创意形式 in front when the name has one (竖版 / 横版 and
+ * versions are part of the 提炼词). Which it is, is for the agent to judge (… _3D_围炉 has one, …_兵临城下塔防_企鹅 does not). A name
+ * of fewer parts is `unclear`.
  */
-export function nameParts(body: string): { primary_tag: string; secondary_tag: string; creative_form: string; keyword: string; orientation?: string } | { unclear: string } {
+export function nameParts(body: string): { primary_tag: string; secondary_tag: string; rest: string } | { unclear: string } {
   const parts = body.split('_');
-  const orientation = parts.length > 1 && ORIENTATIONS.has(parts[parts.length - 1]!) ? parts.pop()! : undefined;
-  if (parts.length < 4 || parts.some(p => p === '')) return { unclear: `“${body}”不是 一级标签_二级标签_创意形式_提炼词${orientation ? `_${orientation}` : ''} 的样子，分不清各段是什么` };
-  const [primary, secondary, form, ...keyword] = parts as [string, string, string, ...string[]];
-  return { primary_tag: primary, secondary_tag: secondary, creative_form: form, keyword: keyword.join('_'), ...(orientation ? { orientation } : {}) };
+  if (parts.length < 3 || parts.some(p => p === '')) return { unclear: `“${body}”不是 一级标签_二级标签_提炼词 的样子，分不清各段是什么` };
+  const [primary, secondary, ...rest] = parts as [string, string, ...string[]];
+  return { primary_tag: primary, secondary_tag: secondary, rest: rest.join('_') };
 }
 
 /** A 素材名称 without its number ("GOFCN67738_AI玩法优化_…" → "AI玩法优化_…"), or null when it does not start with one. */
@@ -621,11 +618,13 @@ export function buildUploadPlan(input: PlanInput): Obj {
       need(!/[\\/]/.test(name), '创意名称不能含 / 或 \\');
       const directory = item.directory ? findDirectory(options.directories, item.directory) : defaultDirectory;
       const type = materialType(options.types, item.type, material.kind);
-      // 创意人 / 制作人: the file's own setting, then the request's, then the file's row of the progress sheet.
+      // 创意人 / 制作人: the file's own setting, then the request's, then the file's row of the progress sheet (a row without a 设计师供应商:
+      // CLS's 待定供应商, as its requirement had).
       const creatorName = item.creator ?? request.creator ?? row?.reviewer;
-      const producerNames = item.producers ?? request.producers ?? (row ? splitNames(row.supplier) : undefined);
+      const rowProducers = row ? splitNames(row.supplier) : [];
+      const producerNames = item.producers ?? request.producers ?? (row ? (rowProducers.length ? rowProducers : [PENDING_SUPPLIER]) : undefined);
       need(creatorName && creatorName.trim(), `创意人未定${row ? `（进度表 GOFCN${row.number} 的创意者脚本审核人为空）` : ''}`);
-      need(producerNames && producerNames.length > 0, `制作人未定${row ? `（进度表 GOFCN${row.number} 的设计师供应商为空）` : ''}`);
+      need(producerNames && producerNames.length > 0, '制作人未定');
       // The sheet's short names are not always CLS's (廿十一 / 长沙廿拾一文化传媒有限公司): a refusal says where the name came from, and to
       // name the person for this file only, since a top-level field would replace every other file's people from its own row too.
       const sheetSays = (field: 'creator' | 'producers', column: string) =>
@@ -636,7 +635,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
       const source = {
         name: row && !why ? 'progress' : item.name !== undefined ? 'item' : 'file',
         creator: item.creator !== undefined ? 'item' : request.creator !== undefined ? 'request' : 'progress',
-        producers: item.producers !== undefined ? 'item' : request.producers !== undefined ? 'request' : 'progress',
+        producers: item.producers !== undefined ? 'item' : request.producers !== undefined ? 'request' : rowProducers.length ? 'progress' : 'pending',
         ...(bound ? { progress_row: { sheet: bound.row.sheet, row: bound.row.row, number: bound.row.number, name: bound.row.name,
           supplier: bound.row.supplier, reviewer: bound.row.reviewer, by: bound.by } } : {}),
       };
