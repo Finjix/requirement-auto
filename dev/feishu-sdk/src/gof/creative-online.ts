@@ -4,7 +4,7 @@ import { ClsError } from './cls-adapter.ts';
 import { createCreativeAdapter, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import {
   appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, lookupRows,
-  matchPeople, materialRefusal, nameParts, normalizeUploadRequest, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary,
+  matchPeople, materialRefusal, nameParts, normalizeUploadRequest, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary, variantBases,
   type DirNode, type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
 } from './creative.ts';
 import { unpackZip } from './unzip.ts';
@@ -227,9 +227,12 @@ export async function planUpload(online: Online, bridge: Bridge | undefined, req
   if (request.progress) {
     need(bridge, '这个环境不能读飞书进度表');
     // Every row a file may be: the one the request names for it, the one its file name's number points at, and for a file named
-    // GOFCNxxxxx_<name>, the one named GOFCN<number>_<name>.
+    // GOFCNxxxxx_<name>, the one named GOFCN<number>_<name> (with variants, also those named as the start of it).
     const numbers = [...new Set([...(request.items ?? []).map(i => i.number), ...hashed.map(m => m.number)].filter((n): n is number => typeof n === 'number'))];
-    const bodies = [...new Set(hashed.map(m => pendingBody(m.name)).filter((b): b is string => b !== null))];
+    const bodies = [...new Set(hashed.flatMap(m => {
+      const body = pendingBody(m.name);
+      return body === null ? [] : request.variants ? [body, ...variantBases(body)] : [body];
+    }))];
     const lookup = await progressLookup(bridge, request.progress, numbers, deps.tmpDir ?? resolveDataPaths().tmp, bodies);
     progress = lookup.rows;
     named = lookup.named;

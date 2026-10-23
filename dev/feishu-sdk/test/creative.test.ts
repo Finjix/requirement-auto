@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildUploadPlan, creativeName, findDirectory, formulaText, loadUploadPlan, materialNumber, materialRefusal, normalizeUploadRequest, parseNumbers,
-  lookupRows, matchPeople, nameParts, pendingBody, progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, type UploadOptions,
+  lookupRows, matchPeople, nameParts, pendingBody, progressRowsFrom, scanMaterials, searchProgressRows, uploadEvents, uploadPlanSummary, hashFile, variantBases, type UploadOptions,
 } from '../src/gof/creative.ts';
 import { unpackZip } from '../src/gof/unzip.ts';
 import { createCreativeAdapter } from '../src/gof/creative-adapter.ts';
@@ -686,4 +686,114 @@ test('a GOFCNxxxxx_… file without its row is to be registered first, and one o
   await assert.rejects(plan(twice), /有 2 行的素材名称是“GOFCN<编号>_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版”（GOFCN67738、GOFCN67741）：用 items\[\]\.number 写明/);
   const picked = await plan(twice, [{ file: 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版.mp4', number: 67741 }]);
   assert.deepEqual([picked.items[0].name, picked.items[0].source.progress_row.by], ['GOFCN67741_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', 'item']);
+});
+
+/**
+ * 合并变体名称: the AI剧情 pieces registered as one row each (提炼词 = the first part of the files' names), and a piece registered so for
+ * files named GOFCNxxxxx_…; the variants of each go up under the row's 素材名称 and their own ending.
+ */
+function variantSheet(extra: unknown[][] = []): string {
+  const file = path.join(tempDir('progress-'), 'progress.xlsx');
+  const row = (r: number, number: number, tags: [string, string], keyword: string) =>
+    [null, null, number, keyword, null, null, { f: `CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",D${r})` }, tags[0], tags[1], null, null, null, '廿十一', '金莉'];
+  fs.writeFileSync(file, makeXlsx([{ name: '26年1月-GOFCN', rows: [HEADER,
+    row(2, 67076, ['AI剧情', '短剧表达'], '原生家庭WM'),
+    row(3, 67146, ['AI剧情', '短剧表达'], '得加钱WM'),
+    row(4, 67750, ['AI玩法优化', '火车运输御敌'], '兵临城下塔防'),
+    ...extra.map((cells, i) => row(5 + i, ...(cells as [number, [string, string], string]))),
+  ] }]));
+  return file;
+}
+const VARIANTS = {
+  'GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_割资源冰块对抗_竖版.mp4': 'ice', 'GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_剧情叙事_竖版.mp4': 'story',
+  'GOFCN67146_AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接_割资源冰块对抗_竖版.mp4': 'furnace',
+  'GOFCNxxxxx_AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接_扩岛对抗_竖版.mp4': 'furnace-island',
+  'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版.mp4': 'fish', 'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版.mp4': 'penguin',
+  '01.mp4': 'island',
+};
+
+test('合并变体名称: several files of one row go up as <素材名称>_<变体>, their names kept or the number filled in; off, nothing changes', async () => {
+  assert.deepEqual(variantBases('AI剧情_短剧表达_原生家庭WM_剧情衔接_竖版').slice(0, 2), ['AI剧情_短剧表达_原生家庭WM_剧情衔接', 'AI剧情_短剧表达_原生家庭WM'], 'cut at _ first, longest first');
+  assert.deepEqual(variantBases('AI剧情_短剧表达_得加钱WM'), ['AI剧情_短剧表达_得加钱W', 'AI剧情_短剧表达_得加钱', 'AI剧情_短剧表达_得加', 'AI剧情_短剧表达_得']);
+  assert.ok(variantBases('AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接').includes('AI剧情_短剧表达_得加钱WM'), 'the first word cut short');
+  assert.ok(variantBases('AI生成_设定3.0_3D_企鹅保龄球_竖版').includes('AI生成_设定3.0_3D_企鹅'), 'or the first word after a 创意形式');
+  const fake = await fakeCreative();
+  try {
+    const deps = depsFor();
+    const dir = materials(VARIANTS);
+    const request = { files: [dir], progress: true, producers: ['长沙廿拾一文化传媒有限公司'], items: [{ file: '01.mp4', number: 67076 }] };
+    const file = await approvedPlan(fake, deps, { ...request, variants: true, items: [{ file: '01.mp4', number: 67076, variant: '剧情衔接_扩岛对抗_竖版' }] }, sheetBridge(variantSheet()));
+    const plan = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(Object.fromEntries(plan.items.map((i: any) => [i.file_name, [i.name, i.variant, i.number, i.source.progress_row.by, i.source.variant, i.renamed_from !== undefined]])), {
+      'GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_割资源冰块对抗_竖版.mp4':
+        ['GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_割资源冰块对抗_竖版', '剧情衔接_割资源冰块对抗_竖版', 67076, 'file_name', 'file', false],
+      'GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_剧情叙事_竖版.mp4':
+        ['GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_剧情叙事_竖版', '剧情衔接_剧情叙事_竖版', 67076, 'file_name', 'file', false],
+      // Numbered as its row and starting with its name, the file keeps its name: what follows is the variant, _ or not.
+      'GOFCN67146_AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接_割资源冰块对抗_竖版.mp4':
+        ['GOFCN67146_AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接_割资源冰块对抗_竖版', '熔炉版_剧情衔接_割资源冰块对抗_竖版', 67146, 'file_name', 'file', false],
+      // Without a number, a first word that starts with a row's (得加钱WM熔炉版, 得加钱WM) is a variant of that row too.
+      'GOFCNxxxxx_AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接_扩岛对抗_竖版.mp4':
+        ['GOFCN67146_AI剧情_短剧表达_得加钱WM熔炉版_剧情衔接_扩岛对抗_竖版', '熔炉版_剧情衔接_扩岛对抗_竖版', 67146, 'name', 'file', true],
+      'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版.mp4':
+        ['GOFCN67750_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版', '冻鱼_竖版', 67750, 'name', 'file', true],
+      'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版.mp4':
+        ['GOFCN67750_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版', '企鹅_竖版', 67750, 'name', 'file', true],
+      '01.mp4': ['GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_扩岛对抗_竖版', '剧情衔接_扩岛对抗_竖版', 67076, 'item', 'item', true],
+    });
+    const summary = uploadPlanSummary(plan, file);
+    assert.deepEqual([summary.count, summary.rows, summary.renamed], [7, 3, 4]);
+    assert.equal(summary.items.find((i: any) => i.file === '01.mp4').variant, '剧情衔接_扩岛对抗_竖版');
+    const result = await runUpload(online(fake), file, deps);
+    assert.equal(result.status, 'uploaded', JSON.stringify(result));
+    assert.deepEqual(result.uploaded.map((u: any) => u.name).sort(), plan.items.map((i: any) => i.name).sort());
+    assert.ok(fake.requests.find(r => r.path === '/api/qcloud/signed-url')!.body!.files
+      .includes('GOFCN67750_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版/GOFCN67750_AI玩法优化_火车运输御敌_兵临城下塔防_企鹅_竖版.mp4'));
+
+    // Off (the default), each file is a row of its own name: the numbered ones are taken for originals, the others are to be registered.
+    const off = path.join(tempDir('off-'), 'request.json');
+    fs.writeFileSync(off, JSON.stringify(request));
+    await assert.rejects(planUpload(online(fake), sheetBridge(variantSheet()), off, path.join(path.dirname(off), 'plan.json'), deps),
+      (error: Error) => /这个编号可能是它参考的初版/.test(error.message) && /还没有素材名称为“GOFCN<编号>_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版”的行/.test(error.message)
+        && !/变体/.test(error.message));
+  } finally { fake.close(); }
+});
+
+test('合并变体名称: a row of the file\'s own name wins, two rows it may be a variant of or two files of one name are asked, the setting only with the sheet', async () => {
+  const snapshot = new Snapshot(variantSheet([[67751, ['AI玩法优化', '火车运输御敌'], '兵临城下塔防_冻鱼_竖版'], [67752, ['AI剧情', '短剧表达'], '原生家庭WM_剧情衔接']]));
+  const plan = async (files: Record<string, string>, items: Record<string, unknown>[] = [], variants = true) => {
+    const { materials: found, skipped } = await hashed([materials(files)]);
+    const bodies = found.map(m => pendingBody(m.name)).filter((b): b is string => b !== null).flatMap(b => [b, ...variantBases(b)]);
+    const numbers = [...items.map(i => Number(i.number)).filter(Boolean), ...found.map(m => m.number).filter((n): n is number => n !== null)];
+    const { byNumber, byBody } = lookupRows(snapshot, numbers, bodies);
+    return buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['长沙廿拾一文化传媒有限公司'], variants, items }), options: OPTIONS,
+      materials: found, skipped, existing: new Set(), progress: byNumber, named: byBody });
+  };
+  const own = await plan({ 'GOFCNxxxxx_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版.mp4': 'f' });
+  assert.deepEqual([own.items[0].name, own.items[0].variant], ['GOFCN67751_AI玩法优化_火车运输御敌_兵临城下塔防_冻鱼_竖版', undefined], 'registered under its own name before');
+  await assert.rejects(plan({ 'GOFCNxxxxx_AI剧情_短剧表达_原生家庭WM_剧情衔接_竖版.mp4': 'a' }),
+    /可以是进度表几行的变体（GOFCN67752_AI剧情_短剧表达_原生家庭WM_剧情衔接；GOFCN67076_AI剧情_短剧表达_原生家庭WM）：用 items\[\]\.number 写明/);
+  const picked = await plan({ 'GOFCNxxxxx_AI剧情_短剧表达_原生家庭WM_剧情衔接_竖版.mp4': 'a' }, [{ file: 'GOFCNxxxxx_AI剧情_短剧表达_原生家庭WM_剧情衔接_竖版.mp4', number: 67076 }]);
+  assert.deepEqual([picked.items[0].name, picked.items[0].variant], ['GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情衔接_竖版', '剧情衔接_竖版']);
+  // 得加钱WM熔炉版 registered as a row of its own: its files could be variants of either row.
+  const both = new Snapshot(variantSheet([[67753, ['AI剧情', '短剧表达'], '得加钱WM熔炉版']]));
+  const { materials: furnace, skipped: none } = await hashed([materials({ 'GOFCNxxxxx_AI剧情_短剧表达_得加钱WM熔炉版_剧情叙事_竖版.mp4': 'x' })]);
+  const furnaceBody = 'AI剧情_短剧表达_得加钱WM熔炉版_剧情叙事_竖版';
+  assert.throws(() => buildUploadPlan({ request: normalizeUploadRequest({ files: ['unused'], producers: ['长沙廿拾一文化传媒有限公司'], variants: true }), options: OPTIONS,
+    materials: furnace, skipped: none, existing: new Set(), progress: new Map(), named: lookupRows(both, [], [furnaceBody, ...variantBases(furnaceBody)]).byBody }),
+  /可以是进度表几行的变体（GOFCN67753_AI剧情_短剧表达_得加钱WM熔炉版；GOFCN67146_AI剧情_短剧表达_得加钱WM）/);
+  await assert.rejects(plan({ 'GOFCNxxxxx_AI剧情_短剧表达_爆款WM_剧情衔接_竖版.mp4': 'a' }), /还没有素材名称为“GOFCN<编号>_AI剧情_短剧表达_爆款WM_剧情衔接_竖版”或它开头部分/);
+  await assert.rejects(plan({ 'GOFCN67076_AI剧情_短剧表达_最大功率WM_剧情衔接_竖版.mp4': 'a' }), /和文件名不同，文件名也不以它开头（不是它的变体）/);
+  await assert.rejects(plan({ '01.mp4': '1', '02.mp4': '2' }, [{ file: '01.mp4', number: 67076 }, { file: '02.mp4', number: 67076 }]),
+    /两个文件会得到同一个创意名称“GOFCN67076_AI剧情_短剧表达_原生家庭WM”（01\.mp4、02\.mp4）：同一行的几个变体要各有变体名称/);
+  const told = await plan({ '01.mp4': '1', '02.mp4': '2' }, [{ file: '01.mp4', number: 67076, variant: '剧情叙事' }, { file: '02.mp4', number: 67076 }]);
+  assert.deepEqual(told.items.map((i: any) => i.name), ['GOFCN67076_AI剧情_短剧表达_原生家庭WM_剧情叙事', 'GOFCN67076_AI剧情_短剧表达_原生家庭WM'], 'a file without a variant is the row itself');
+  await assert.rejects(plan({ '01.mp4': '1', '02.mp4': '2' }, [{ file: '01.mp4', number: 67076 }, { file: '02.mp4', number: 67076 }], false), /两个文件对应进度表同一行 GOFCN67076/);
+  assert.throws(() => normalizeUploadRequest({ files: ['a'], items: [{ file: 'a', variant: 'x' }] }), /只在合并变体名称（variants: true）时有用/);
+  assert.throws(() => normalizeUploadRequest({ files: ['a'], progress: false, variants: true }), /progress 不能是 false/);
+  assert.throws(() => normalizeUploadRequest({ files: ['a'], variants: true, items: [{ file: 'a', name: 'n', variant: 'x' }] }), /name 和 variant 只能写一个/);
+  for (const bad of ['_竖版', '竖版_', '剧情__竖版', '横/竖']) {
+    assert.throws(() => normalizeUploadRequest({ files: ['a'], variants: true, items: [{ file: 'a', variant: bad }] }), /不能以 _ 开头或结尾/);
+  }
+  assert.throws(() => normalizeUploadRequest({ files: ['a'], variants: 'yes' }), /variants 只能是 true\/false/);
 });

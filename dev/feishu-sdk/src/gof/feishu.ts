@@ -5,7 +5,7 @@ import { BRIDGE_VERSION, runBridge, type BridgeContext, type BridgeReply } from 
 import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
-import { lookupRows } from './creative.ts';
+import { lookupRows, variantBases } from './creative.ts';
 import { business, makePlan, type Plan, supplierCell } from './plan.ts';
 import { DEFAULT_KEYWORD, itemsOf } from './request.ts';
 import { acceptance, buildWrites, dropdowns, ruleProjection, ruleProof, type ApiRule } from './rules.ts';
@@ -469,11 +469,27 @@ export function sameNameRows(snapshot: Snapshot, plan: Plan): Obj[] {
   }));
 }
 
+/**
+ * Rows already in the sheet that a name the request gives may be a variant of (named as its start, see variantBases): with 合并变体名称
+ * such files belong to that row, which is not appended again; without it, they are a sign the batch has variants to ask about.
+ */
+export function variantRows(snapshot: Snapshot, plan: Plan): Obj[] {
+  const given = [...new Set((plan.groups as Obj[]).flatMap(g => itemsOf(g.request).map(item => item.material_name)).filter((n): n is string => !!n))];
+  const bases = new Map(given.map(name => [name, variantBases(name)]));
+  const { byBody } = lookupRows(snapshot, [], [...bases.values()].flat());
+  return given.flatMap(name => {
+    const rows = bases.get(name)!.flatMap(base => byBody.get(base) ?? []);
+    return rows.length ? [{ name, rows: rows.map(r => ({ number: r.number, name: r.name, where: `${r.sheet} 第 ${r.row} 行` })) }] : [];
+  });
+}
+
 export async function planWithApi(bridge: Bridge, snapshot: Snapshot, requestInput: unknown): Promise<Obj> {
   await bridge.doctor();
   const offline = makePlan(snapshot, requestInput);
   const same = sameNameRows(snapshot, offline);
-  return { batch_plan: offline, api_plan: await apiPlan(bridge, snapshot, offline), ...(same.length ? { same_name_rows: same } : {}) };
+  const variants = variantRows(snapshot, offline);
+  return { batch_plan: offline, api_plan: await apiPlan(bridge, snapshot, offline), ...(same.length ? { same_name_rows: same } : {}),
+    ...(variants.length ? { variant_rows: variants } : {}) };
 }
 
 export async function recomputeApiPlan(bridge: Bridge, snapshot: Snapshot, approved: Obj): Promise<Obj> {
@@ -532,6 +548,6 @@ export function planSummary(result: Obj, file: string): Obj {
     // Read from the rules through the API: the options the XLSX export lists for a column are not reliable.
     new_options: (api.dropdowns as Obj[]).flatMap(d => (d.missing as string[]).map(option => ({ field: OPTION_NAMES[d.field] ?? d.field, option }))),
     history_warnings: (plan.history_warnings as string[]).length,
-    ...(result.same_name_rows ? { same_name_rows: result.same_name_rows } : {}),
+    ...(result.same_name_rows ? { same_name_rows: result.same_name_rows } : {}), ...(result.variant_rows ? { variant_rows: result.variant_rows } : {}),
   };
 }

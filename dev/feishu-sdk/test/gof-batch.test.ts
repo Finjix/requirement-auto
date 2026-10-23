@@ -11,7 +11,7 @@ import { clsCheck, composeMessage, loadBatch, message, NO_TICKET, preflight, pre
 import { operation } from '../src/gof/cls.ts';
 import { Blocked, canonical, digest, readJson, writeJsonNew } from '../src/gof/util.ts';
 import { rejectSecrets } from '../src/gof/seal.ts';
-import { sameNameRows } from '../src/gof/feishu.ts';
+import { sameNameRows, variantRows } from '../src/gof/feishu.ts';
 import { makeXlsx } from './helpers/xlsx-writer.ts';
 
 /*
@@ -479,6 +479,12 @@ test('files named for rows not appended yet (GOFCNxxxxx_…) become rows of exac
   assert.deepEqual(sameNameRows(snapshot, again), [{ name: 'AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版',
     rows: [{ number: 67737, name: 'GOFCN67737_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', where: '26年1月-GOFCN 第 4 行' }] }]);
   assert.deepEqual(sameNameRows(snapshot, plan), []);
+  // A name starting with a row's (cut at a _, or within the first word) may be a variant of it: said, for 合并变体名称.
+  const variants = makePlan(snapshot, fromFiles(['GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版_加长版', 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版加长', ...names]));
+  const row67737 = [{ number: 67737, name: 'GOFCN67737_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版', where: '26年1月-GOFCN 第 4 行' }];
+  assert.deepEqual(variantRows(snapshot, variants), [{ name: 'AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版_加长版', rows: row67737 },
+    { name: 'AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版加长', rows: row67737 }]);
+  assert.deepEqual(variantRows(snapshot, plan), []);
 });
 
 /** Rows registered for finished materials (the upload skill): no script link and no CLS fields, so no CSV and no ticket. */

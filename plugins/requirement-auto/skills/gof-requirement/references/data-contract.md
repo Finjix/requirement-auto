@@ -63,6 +63,16 @@ The upload skill (gof-creative-upload) registers materials that are already made
   ] }] }
 ```
 
+With 合并变体名称 (the user turned it on), the variants of one piece are one item: its 提炼词 is the first part after the tags (and the 创意形式), the shorter one when a first part starts with another (`得加钱WM熔炉版` goes with `得加钱WM`), and `material_name` is that shorter name. A merged name that `plan` lists in `variant_rows` (a variant of a row already in the sheet) is not appended again. Each file then goes up as `<素材名称>_<变体>` (the upload request's `"variants": true`, see gof-creative-upload). Five files `GOFCNxxxxx_AI剧情_短剧表达_原生家庭WM_剧情衔接_<…>_竖版`, merged:
+
+```json
+{ "groups": [{ "supplier": "自产", "reviewer": "王维明",
+  "items": [
+    { "quantity": 1, "primary_tag": "AI剧情", "secondary_tag": "短剧表达", "keyword": "原生家庭WM",
+      "material_name": "GOFCNxxxxx_AI剧情_短剧表达_原生家庭WM" }
+  ] }] }
+```
+
 Batches are told apart by their script links; groups without one by their rows' names without the number, so `prepare` refuses files whose earlier batch was sent unverified and has rows in the sheet.
 
 ## CSV

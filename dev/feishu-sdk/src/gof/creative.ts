@@ -83,6 +83,24 @@ export function nameParts(body: string): { primary_tag: string; secondary_tag: s
   return { primary_tag: primary, secondary_tag: secondary, rest: rest.join('_') };
 }
 
+/**
+ * The shorter names a name without its number may be a variant of: cut at its _, longest first, keeping at least 一级标签_二级标签_提炼词
+ * ("AI剧情_短剧表达_原生家庭WM_剧情衔接_竖版" → "AI剧情_短剧表达_原生家庭WM_剧情衔接", "AI剧情_短剧表达_原生家庭WM"), then with the first
+ * word after the tags (or after a 创意形式) cut short, since that word can be a variant too ("…_得加钱WM熔炉版_…" → "…_得加钱WM").
+ */
+export function variantBases(body: string): string[] {
+  const parts = body.split('_');
+  const out: string[] = [];
+  for (let n = parts.length - 1; n >= 3; n--) out.push(parts.slice(0, n).join('_'));
+  for (const n of [4, 3]) {
+    if (parts.length < n) continue;
+    const head = parts.slice(0, n - 1).join('_');
+    const word = [...parts[n - 1]!];
+    for (let k = word.length - 1; k >= 1; k--) out.push(`${head}_${word.slice(0, k).join('')}`);
+  }
+  return [...new Set(out)];
+}
+
 /** A 素材名称 without its number ("GOFCN67738_AI玩法优化_…" → "AI玩法优化_…"), or null when it does not start with one. */
 export function nameBody(name: string | null): string | null {
   const m = name ? /^GOFCN\d+_(.+)$/.exec(name) : null;
@@ -176,6 +194,8 @@ export interface ItemRequest {
    * out, or with / or ), as the user confirms it.
    */
   name?: string;
+  /** With `variants`, which variant of its row the file is, when its name does not say ("剧情衔接_割资源冰块对抗_竖版" for 01.mp4). */
+  variant?: string;
   type?: string; creator?: string; producers?: string[]; directory?: string; skip?: boolean;
 }
 export interface UploadRequest {
@@ -188,11 +208,16 @@ export interface UploadRequest {
    * plugin's progress sheet, or a sheet link; false only for materials that are not on a progress sheet, which keep their file names.
    */
   progress?: boolean | string;
+  /**
+   * 合并变体名称, only when the user asks for it: several files may be variants of one row, each going up as `<素材名称>_<变体>`. The variant
+   * is what follows the row's 素材名称 in the file's name, its number filled in, or `items[].variant`.
+   */
+  variants?: boolean;
   items?: ItemRequest[];
 }
 
-const TOP_KEYS = ['files', 'directory', 'creator', 'producers', 'progress', 'items'];
-const ITEM_KEYS = ['file', 'number', 'sheet', 'name', 'type', 'creator', 'producers', 'directory', 'skip'];
+const TOP_KEYS = ['files', 'directory', 'creator', 'producers', 'progress', 'variants', 'items'];
+const ITEM_KEYS = ['file', 'number', 'sheet', 'name', 'variant', 'type', 'creator', 'producers', 'directory', 'skip'];
 
 /** A material number as a request or a command line gives it: 67680, "67680" or "GOFCN67680". */
 export function numberOf(value: unknown, label: string): number {
@@ -224,6 +249,11 @@ export function normalizeUploadRequest(input: unknown): UploadRequest {
   if (input.producers !== undefined) request.producers = names(input.producers, 'producers');
   need(input.progress === undefined || input.progress === true || input.progress === false || typeof input.progress === 'string', 'progress 只能是 true/false 或进度表链接');
   request.progress = input.progress === undefined || input.progress === true ? true : input.progress === false ? false : text(input.progress, 'progress', 1000);
+  need(input.variants === undefined || typeof input.variants === 'boolean', 'variants 只能是 true/false');
+  if (input.variants === true) {
+    need(request.progress !== false, 'variants（合并变体名称）只在按进度表上传时有用（progress 不能是 false）');
+    request.variants = true;
+  }
   if (input.items !== undefined) {
     need(Array.isArray(input.items), 'items 必须是列表');
     request.items = input.items.map((raw: unknown, i: number) => {
@@ -234,6 +264,13 @@ export function normalizeUploadRequest(input: unknown): UploadRequest {
       if (raw.number !== undefined) item.number = numberOf(raw.number, `items[${i}].number`);
       if (raw.sheet !== undefined) item.sheet = text(raw.sheet, `items[${i}].sheet`);
       if (raw.name !== undefined) item.name = text(raw.name, `items[${i}].name`);
+      if (raw.variant !== undefined) {
+        need(request.variants, `items[${i}].variant 只在合并变体名称（variants: true）时有用`);
+        need(item.name === undefined, `items[${i}] 的 name 和 variant 只能写一个`);
+        item.variant = text(raw.variant, `items[${i}].variant`);
+        // It goes into the creative's name after the row's 素材名称 and a _, as the parts of a name do.
+        need(!/^_|_$|__/.test(item.variant) && !/[\\/]/.test(item.variant), `items[${i}].variant“${item.variant}”不能以 _ 开头或结尾、不能有连续的 _，也不能含 / 或 \\`);
+      }
       need(request.progress !== false || (item.number === undefined && item.sheet === undefined),
         `items[${i}].number / sheet 只在按进度表上传时有用（progress 不能是 false）`);
       if (raw.type !== undefined) item.type = text(raw.type, `items[${i}].type`);
@@ -542,14 +579,32 @@ const unusable = (name: string | null): string | null => !name ? '为空或算�
 const namedAs = (material: Material, name: string): boolean => name.replace(BIDI, '').toLowerCase() === material.name.toLowerCase();
 
 /**
- * The number of the one row named GOFCN<number>_<body>, for a file named GOFCNxxxxx_<body>. Refused when there is none yet (the files
- * are to be registered first: their rows appended to the progress sheet, no CLS ticket) or several.
+ * The one row named GOFCN<number>_<body>, for a file named GOFCNxxxxx_<body>: its number and the body it was found by. With variants, a
+ * file without a row of its own name is a variant of the one row named as the start of it (cut at a _, see variantBases). Refused when
+ * there is none yet (the files are to be registered first: their rows appended to the progress sheet, no CLS ticket) or several.
  */
-function numberByName(body: string, named: Map<string, ProgressRow[]>): number {
-  const numbers = [...new Set((named.get(body) ?? []).map(r => r.number))].sort((a, b) => a - b);
-  need(numbers.length > 0, `文件名的 GOFCN 编号待定，进度表里还没有素材名称为“GOFCN<编号>_${body}”的行：这批素材要先登记（为这些文件追加进度表的行，不建 CLS 单），再上传；已经登记、只是名称不同的，用 items[].number 写明是哪一行`);
-  need(numbers.length === 1, `进度表里有 ${numbers.length} 行的素材名称是“GOFCN<编号>_${body}”（${numbers.map(n => `GOFCN${n}`).join('、')}）：用 items[].number 写明是哪一行`);
-  return numbers[0]!;
+function numberByName(body: string, named: Map<string, ProgressRow[]>, variants: boolean): { number: number; body: string } {
+  const numbersOf = (b: string) => [...new Set((named.get(b) ?? []).map(r => r.number))].sort((a, b) => a - b);
+  let base = body;
+  if (variants && numbersOf(body).length === 0) {
+    const bases = variantBases(body).filter(b => numbersOf(b).length > 0);
+    need(bases.length <= 1, `文件名“GOFCNxxxxx_${body}”可以是进度表几行的变体（${bases.map(b => numbersOf(b).map(n => `GOFCN${n}_${b}`).join('、')).join('；')}）：用 items[].number 写明是哪一行`);
+    if (bases.length) base = bases[0]!;
+  }
+  const numbers = numbersOf(base);
+  need(numbers.length > 0, `文件名的 GOFCN 编号待定，进度表里还没有素材名称为“GOFCN<编号>_${body}”${variants ? '或它开头部分（变体合并到的那一行）' : ''}的行：这批素材要先登记（为这些文件追加进度表的行，不建 CLS 单），再上传；已经登记、只是名称不同的，用 items[].number 写明是哪一行`);
+  need(numbers.length === 1, `进度表里有 ${numbers.length} 行的素材名称是“GOFCN<编号>_${base}”（${numbers.map(n => `GOFCN${n}`).join('、')}）：用 items[].number 写明是哪一行`);
+  return { number: numbers[0]!, body: base };
+}
+
+/**
+ * With variants: what follows the row's 素材名称 in the file's name, its number filled in (GOFCNxxxxx_…, or the row's own number), ''
+ * when the file is named as the row, null when its name does not start with the row's.
+ */
+function variantTail(material: Material, row: ProgressRow): string | null {
+  const pending = pendingBody(material.name);
+  const filled = pending !== null ? `GOFCN${row.number}_${pending}` : material.number === row.number ? material.name : null;
+  return filled && row.name && filled.toLowerCase().startsWith(row.name.replace(BIDI, '').toLowerCase()) ? filled.slice(row.name.replace(BIDI, '').length) : null;
 }
 
 /**
@@ -557,14 +612,16 @@ function numberByName(body: string, named: Map<string, ProgressRow[]>): number {
  * GOFCN number in its file name points at, but only when the file is already named as that row, since a number in a file name can be the
  * original the piece builds on; a file named GOFCNxxxxx_… (its number not known when it was named) is the one row named so with a number.
  * A number on several rows is one row when they all say the same (a row carried into another month's tab); otherwise `items[].sheet` picks
- * the tab. Refused, saying what to do, when there is no such row or it cannot be told which.
+ * the tab. With variants, a file may also be a variant of the row: named as the start of its name (see numberByName and variantTail).
+ * Refused, saying what to do, when there is no such row or it cannot be told which.
  */
-function rowOf(material: Material, item: ItemRequest, rows: Map<number, ProgressRow[]>, named: Map<string, ProgressRow[]>): { row: ProgressRow; by: 'item' | 'file_name' | 'name' } {
-  const body = item.number === undefined ? pendingBody(material.name) : null;
-  const by = item.number !== undefined ? 'item' : body !== null ? 'name' : 'file_name';
-  const number = item.number ?? (body !== null ? numberByName(body, named) : material.number);
+function rowOf(material: Material, item: ItemRequest, rows: Map<number, ProgressRow[]>, named: Map<string, ProgressRow[]>, variants: boolean): { row: ProgressRow; by: 'item' | 'file_name' | 'name' } {
+  const pending = item.number === undefined ? pendingBody(material.name) : null;
+  const by = item.number !== undefined ? 'item' : pending !== null ? 'name' : 'file_name';
+  const byName = pending !== null ? numberByName(pending, named, variants) : null;
+  const number = item.number ?? byName?.number ?? material.number;
   need(number !== null, '文件名不是进度表里的素材名称，也不带 GOFCN 编号：按需求文档、脚本内容判断它是进度表的哪一行，用 items[].number 写明');
-  let found = rows.get(number) ?? named.get(body ?? '')?.filter(r => r.number === number) ?? [];
+  let found = rows.get(number) ?? named.get(byName?.body ?? '')?.filter(r => r.number === number) ?? [];
   need(found.length > 0, `进度表里没有 GOFCN${number}${by === 'file_name' ? '（编号取自文件名）' : ''}`);
   if (item.sheet !== undefined) {
     const tabs = [...new Set(found.map(r => r.sheet))];
@@ -575,8 +632,8 @@ function rowOf(material: Material, item: ItemRequest, rows: Map<number, Progress
   need(found.every(r => r.name === row.name && r.supplier === row.supplier && r.reviewer === row.reviewer),
     `进度表里 GOFCN${number} 有 ${found.length} 行，内容不同（${found.map(r => `${r.sheet} 第 ${r.row} 行`).join('、')}）：${
       new Set(found.map(r => r.sheet)).size === found.length ? '用 items[].sheet 写明是哪个分表的那一行' : '同一个分表里重号，请用户在进度表里核对后重新做计划'}`);
-  need(by !== 'file_name' || !row.name || namedAs(material, row.name),
-    `文件名里的 GOFCN${number} 那一行的素材名称是“${row.name}”，和文件名不同：这个编号可能是它参考的初版。按需求文档判断这个文件是进度表的哪一行，用 items[].number 写明（确实是 GOFCN${number} 也要写明）`);
+  need(by !== 'file_name' || !row.name || namedAs(material, row.name) || (variants && variantTail(material, row) !== null),
+    `文件名里的 GOFCN${number} 那一行的素材名称是“${row.name}”，和文件名不同${variants ? '，文件名也不以它开头（不是它的变体）' : ''}：这个编号可能是它参考的初版。按需求文档判断这个文件是进度表的哪一行，用 items[].number 写明（确实是 GOFCN${number} 也要写明）`);
   return { row, by };
 }
 
@@ -604,7 +661,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
     if (item.skip) { skipped.push({ file: material.file, reason: '按要求不上传' }); continue; }
     const label = material.origin ?? material.file_name;
     let bound: ReturnType<typeof rowOf> | undefined;
-    try { bound = bySheet ? rowOf(material, item, input.progress!, input.named ?? new Map()) : undefined; } catch (error) {
+    try { bound = bySheet ? rowOf(material, item, input.progress!, input.named ?? new Map(), request.variants === true) : undefined; } catch (error) {
       if (!(error instanceof Blocked)) throw error;
       problems.push({ reason: error.message, file: label });
       continue;
@@ -618,13 +675,16 @@ export function buildUploadPlan(input: PlanInput): Obj {
       continue;
     }
     if (row && !why && item.name !== undefined) { problems.push({ reason: '进度表那一行有素材名称，名称以进度表为准：去掉 items[].name', file: label }); continue; }
+    // With variants, a file goes up as one variant of its row: the 素材名称 and what follows it in the file's name, or items[].variant.
+    const tail = request.variants && row && !why ? (item.variant !== undefined ? `_${item.variant}` : variantTail(material, row) ?? '') : '';
     // Every name is checked, whatever else is wrong with the file, so that the user hears of all of it at once.
-    const name = (row && !why ? row.name! : item.name ?? material.name).replace(BIDI, '');
+    const name = (row && !why ? row.name! + tail : item.name ?? material.name).replace(BIDI, '');
     const renamed = name !== material.name;
     const key = name.toLowerCase();
     if (named.has(key)) {
-      problems.push({ reason: row ? `两个文件对应进度表同一行 GOFCN${row.number}（${named.get(key)}、${label}），只能留一个`
-        : `两个文件会得到同一个创意名称“${name}”（${named.get(key)}、${label}），请改名或只留一个` });
+      problems.push({ reason: !row ? `两个文件会得到同一个创意名称“${name}”（${named.get(key)}、${label}），请改名或只留一个`
+        : request.variants ? `两个文件会得到同一个创意名称“${name}”（${named.get(key)}、${label}）：同一行的几个变体要各有变体名称，文件名里没有的用 items[].variant 写明，同一个文件只留一个`
+        : `两个文件对应进度表同一行 GOFCN${row.number}（${named.get(key)}、${label}），只能留一个` });
     } else named.set(key, label);
     if (existing.has(name)) {
       problems.push({ file: renamed ? `${label} → ${name}` : name, reason: !bound ? 'CLS 已有同名创意（CLS 会拒绝整批上传），请改名或不上传'
@@ -651,6 +711,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
       need(new Set(producers.map(p => p.id)).size === producers.length, '制作人重复');
       const source = {
         name: row && !why ? 'progress' : item.name !== undefined ? 'item' : 'file',
+        ...(tail ? { variant: item.variant !== undefined ? 'item' : 'file' } : {}),
         creator: item.creator !== undefined ? 'item' : request.creator !== undefined ? 'request' : 'progress',
         producers: item.producers !== undefined ? 'item' : request.producers !== undefined ? 'request' : 'progress',
         ...(bound ? { progress_row: { sheet: bound.row.sheet, row: bound.row.row, number: bound.row.number, name: bound.row.name,
@@ -658,7 +719,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
       };
       items.push({
         file: material.file, file_name: material.file_name, ...(material.origin ? { origin: material.origin } : {}), size: material.size, mtime_ms: material.mtime_ms, sha256: material.sha256, md5: material.md5,
-        kind: material.kind, name, number: row?.number ?? material.number,
+        kind: material.kind, name, number: row?.number ?? material.number, ...(tail ? { variant: tail.replace(/^_/, '') } : {}),
         // A renamed file goes up under its new name too, as if it had been renamed before the upload; the file on disk stays as it is.
         ...(renamed ? { renamed_from: material.name, upload_name: `${name}${path.extname(material.file_name)}` } : {}),
         type, directory, creator, producers, source,
@@ -673,7 +734,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
   return seal({
     schema: 1, kind: 'creative_upload', created_at: (input.now ?? new Date()).toISOString(),
     account: options.account, game: options.game, items, skipped,
-    ...(input.progressSource ? { progress_source: input.progressSource } : {}),
+    ...(input.progressSource ? { progress_source: input.progressSource } : {}), ...(request.variants ? { variants: true } : {}),
   }, 'plan_id');
 }
 
@@ -690,7 +751,8 @@ export const shownFile = (file: string): string => (path.isAbsolute(file) ? path
 /**
  * What the user is shown before approving: counts by type, creator and producer, the directory, how many files go up under another
  * name, and each file in short (its name in CLS, and the progress sheet row it is: `row_from` request = as the request said, file_name =
- * by the GOFCN number in the file name, name = by the rest of a GOFCNxxxxx_… file name).
+ * by the GOFCN number in the file name, name = by the rest of a GOFCNxxxxx_… file name). With variants, how many rows the files are of,
+ * and each file's variant.
  */
 export function uploadPlanSummary(plan: Obj, file: string, limit = 40): Obj {
   const count = (values: string[]) => values.reduce<Record<string, number>>((acc, v) => ({ ...acc, [v]: (acc[v] ?? 0) + 1 }), {});
@@ -704,8 +766,9 @@ export function uploadPlanSummary(plan: Obj, file: string, limit = 40): Obj {
     producers: count(items.map(i => i.producers.map((p: Person) => p.name).join('、'))),
     ...(plan.progress_source ? { progress_source: plan.progress_source } : {}),
     ...(renamed ? { renamed } : {}),
+    ...(plan.variants ? { rows: new Set(items.map(i => `${i.source.progress_row?.sheet}/${i.source.progress_row?.row}`)).size } : {}),
     items: items.slice(0, limit).map(i => ({
-      file: i.origin ?? i.file_name, name: i.name, ...(i.renamed_from !== undefined ? { renamed: true } : {}),
+      file: i.origin ?? i.file_name, name: i.name, ...(i.variant !== undefined ? { variant: i.variant } : {}), ...(i.renamed_from !== undefined ? { renamed: true } : {}),
       type: i.type.name, creator: i.creator.name, producers: i.producers.map((p: Person) => p.name),
       ...(i.source.progress_row ? { progress_row: `${i.source.progress_row.sheet} 第 ${i.source.progress_row.row} 行`,
         row_from: i.source.progress_row.by === 'item' ? 'request' : i.source.progress_row.by } : {}),
