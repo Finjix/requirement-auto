@@ -1,4 +1,5 @@
 import { DOC_EDIT_SCOPE } from '../config.ts';
+import { columnLetter, parseCoord } from './a1.ts';
 import { docTarget } from './brief.ts';
 import { target, type Bridge } from './feishu.ts';
 import { Blocked, canonical, digest, isObject, need, NODE } from './util.ts';
@@ -284,7 +285,7 @@ async function insertBlocks(bridge: Bridge, url: string, spec: unknown, check: b
   }
   const result: Obj = { kind: 'docx', title: title || doc.title, url, index, blocks: planned.length, preview: planned.map(p => `${p.kind}: ${plannedShown(p)}`) };
   if (already >= 0 && already + planned.length <= top.length && planned.every((p, i) => holds(doc, top[already + i]!, p))) {
-    return { status: 'already_present', ...result, index: already, revision: doc.revision };
+    return { status: 'already_present', ...result, index: already, revision: doc.revision, focus: { block: top[already]!.block_id } };
   }
   const { top: ids, all } = descendants(planned);
   need(all.length <= 1000, `这次插入有 ${all.length} 个块（含表格单元格），超过 1000 个；分几次插入`);
@@ -299,7 +300,7 @@ async function insertBlocks(bridge: Bridge, url: string, spec: unknown, check: b
   const start = real.every(Boolean) ? children.indexOf(real[0]!) : -1;
   const landed = start >= 0 && real.every((r, i) => children[start + i] === r) ? children.slice(start, start + ids.length).map(c => after.block(c)) : [];
   need(landed.length === planned.length && planned.every((p, i) => holds(after, landed[i]!, p)), '文档写入已发出，但回读与计划不符：先读大纲核对，不要重复插入');
-  return { status: 'doc_updated', ...result, index: start, revision: after.revision };
+  return { status: 'doc_updated', ...result, index: start, revision: after.revision, focus: { block: real[0] } };
 }
 
 /** The empty text block a cell holds (and nothing else), or undefined when it holds anything. */
@@ -339,19 +340,26 @@ async function fillTable(bridge: Bridge, url: string, spec: Obj, check: boolean)
   const result: Obj = { kind: 'docx', title: title || doc.title, url, table: doc.top.indexOf(table), cells: todo.length,
     to_write: todo.filter(t => t.state === 'empty').length, already: todo.filter(t => t.state === 'same').length };
   const writes = todo.filter(t => t.state === 'empty');
-  if (writes.length === 0) return { status: 'already_present', ...result, revision: doc.revision };
+  if (writes.length === 0) return { status: 'already_present', ...result, revision: doc.revision, focus: { block: table.block_id } };
   if (check) return { status: 'edit_ready', ...result, revision: doc.revision };
   const updates = writes.map(t => ({ block_id: t.block!.block_id, elements: elements(runsOf(t.text, '单元格')) }));
   await writing(() => bridge.docxSetTexts({ document: id, updates, client_token: clientToken({ id, revision: doc.revision, updates }) }));
   const after = await readDoc(bridge, id);
   const again = after.byId.get(String(table.block_id));
   need(again && todo.every(t => after.deep(after.block(after.grid(again).cells[t.at]!)) === t.text), '文档写入已发出，但回读与计划不符：先读大纲核对');
-  return { status: 'doc_updated', ...result, revision: after.revision };
+  return { status: 'doc_updated', ...result, revision: after.revision, focus: { block: table.block_id } };
 }
 
 // ---- sheet --------------------------------------------------------------------------------------------------------------------
 
 const A1_CELL = /^([A-Z]{1,3})([1-9]\d{0,6})$/;
+
+/** The smallest range holding all the cells (A9, C12 → A9:C12). */
+function span(cells: string[]): string {
+  const at = cells.map(parseCoord);
+  const [cols, rows] = [at.map(a => a.col), at.map(a => a.row)];
+  return `${columnLetter(Math.min(...cols))}${Math.min(...rows)}:${columnLetter(Math.max(...cols))}${Math.max(...rows)}`;
+}
 
 async function fillSheet(bridge: Bridge, url: string, spec: Obj, check: boolean): Promise<Obj> {
   need(Object.keys(spec).every(k => ['sheet', 'cells'].includes(k)), 'fill 只接受 sheet、cells（电子表格）');
@@ -392,13 +400,15 @@ async function fillSheet(bridge: Bridge, url: string, spec: Obj, check: boolean)
   });
   const writes = todo.filter((_, i) => states[i] === 'empty');
   const result: Obj = { kind: 'sheet', title: found.title, url, sheet: tab.title, cells: todo.length, to_write: writes.length, already: todo.length - writes.length };
-  if (writes.length === 0) return { status: 'already_present', ...result };
+  // Where a picture of the edit opens the sheet: its tab, on the cells written.
+  const focus = { sheet_id: tab.sheet_id, range: span(todo.map(t => t.cell)) };
+  if (writes.length === 0) return { status: 'already_present', ...result, focus };
   if (check) return { status: 'edit_ready', ...result };
   // Each cell its own range, sent with allow_overwrite:false: Feishu itself refuses a cell that has been filled meanwhile.
   await writing(() => bridge.cellsSet(found.token, writes.map(t => ({ sheet_id: tab.sheet_id, range: `${t.cell}:${t.cell}`, cells: [[{ value: t.text }]], allow_overwrite: false }))));
   const after = await read();
   need(todo.every((t, i) => after[i] === t.text), '表格写入已发出，但回读与计划不符：先读表格核对');
-  return { status: 'doc_updated', ...result };
+  return { status: 'doc_updated', ...result, focus };
 }
 
 /**

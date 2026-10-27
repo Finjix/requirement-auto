@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { BRIDGE_VERSION, type BridgeReply } from '../src/bridge.ts';
 import { editDoc, outline } from '../src/gof/doc.ts';
+import { docPicture } from '../src/gof/shots-online.ts';
 import { Bridge } from '../src/gof/feishu.ts';
 import { NODE } from '../src/gof/util.ts';
 import { main } from '../src/gof/cli.ts';
@@ -125,6 +126,8 @@ test('new blocks go in where the outline showed, are read back, and an edit run 
   assert.equal(writes().length, 0);
   const done = await editDoc(bridge, URL_, entry);
   assert.deepEqual([done.status, done.index], ['doc_updated', 0]);
+  // The picture of the edit opens the document on the first new block.
+  assert.equal(done.focus.block, doc.page.children[0]);
   const sent = writes()[0]!.payload;
   assert.equal(sent.parent, 'PageBlock0001');
   assert.equal(sent.descendants.filter((d: Obj) => d.block_type === 32).length, 6);
@@ -134,7 +137,7 @@ test('new blocks go in where the outline showed, are read back, and an edit run 
   assert.deepEqual(after.blocks[2].cells, [['命名', '方向'], ['GOFCN67867_巨手', '巨手'], ['GOFCN67868_巨手', '']]);
   // The anchor has moved down by the three new blocks: it is found by its text, and the blocks are there already.
   const again = await editDoc(bridge, URL_, entry);
-  assert.deepEqual([again.status, writes().length], ['already_present', 1]);
+  assert.deepEqual([again.status, writes().length, again.focus.block], ['already_present', 1, doc.page.children[0]]);
   // At the end, and after a block.
   assert.equal((await editDoc(bridge, URL_, { insert: { at: 'end', blocks: [{ divider: true }, { bullet: [{ text: '链接', link: 'https://a.b/c?d=1' }] }] } })).status, 'doc_updated');
   const link = [...doc.blocks.values()].find(b => b.block_type === 12)!.bullet.elements[0].text_run.text_element_style.link.url;
@@ -189,6 +192,7 @@ test('a sheet gets text in empty cells only, written so that Feishu refuses an o
   await assert.rejects(editDoc(bridge, SHEET_URL, { fill: { cells: [{ cell: 'B2', text: '=SUM(1)' }] } }), /不能以 = 开头/);
   const done = await editDoc(bridge, SHEET_URL, { fill: { cells: [{ cell: 'b3', text: 'GOFCN67867_巨手' }, { cell: 'A2', text: 'GOFCN9_x' }] } });
   assert.deepEqual([done.status, done.sheet, done.to_write, sheet.B3], ['doc_updated', '1027', 1, 'GOFCN67867_巨手']);
+  assert.deepEqual(done.focus, { sheet_id: 't1', range: 'A2:B3' });
   assert.ok(writes()[0]!.payload.writes.every((w: Obj) => w.allow_overwrite === false));
   await assert.rejects(editDoc(bridge, `https://centurygames.feishu.cn/wiki/${NODE}`, { fill: { sheet: 'x', cells: [{ cell: 'A1', text: 'x' }] } }), /创意进度表只能用 gof feishu append/);
   await assert.rejects(editDoc(bridge, SHEET_URL, { insert: { at: 'start', blocks: [{ text: 'x' }] } }), /这是表格/);
@@ -205,4 +209,13 @@ test('the command line reads an outline and runs an edit file', async () => {
   assert.deepEqual([shown.code, shown.result.blocks.length], [0, 2]);
   const bad = await main(['feishu', 'document', '--url', URL_, '--block', 'x'], bridge);
   assert.equal(bad.code, 2);
+});
+
+test('the picture of an edit takes only a company document and the focus doc-edit gave, and never the progress sheet', async () => {
+  const online = { session: async () => { throw new Error('no browser in this test'); } } as any;
+  await assert.rejects(docPicture(online, 'https://example.com/docx/abc', {}, 'x.png'), /不是公司飞书文档链接/);
+  await assert.rejects(docPicture(online, `https://centurygames.feishu.cn/wiki/${NODE}`, {}, 'x.png'), /gof feishu screenshot --batch/);
+  await assert.rejects(docPicture(online, URL_, { block: 'a/b' }, 'x.png'), /focus.block/);
+  await assert.rejects(docPicture(online, SHEET_URL, { range: 'A9:' }, 'x.png'), /A9 或 A9:B12/);
+  await assert.rejects(docPicture(online, URL_, { block: 'Real000000001' }, 'x.png'), /no browser in this test/);
 });

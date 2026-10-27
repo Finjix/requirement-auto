@@ -8,7 +8,7 @@ import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
 import * as creative from './creative-online.ts';
 import { parseNumbers } from './creative.ts';
-import { draftPicture, sheetPicture } from './shots-online.ts';
+import { docPicture, draftPicture, sheetPicture } from './shots-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
 import { readBrief } from './brief.ts';
 import { editDoc, outline } from './doc.ts';
@@ -152,6 +152,12 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
         return outline(bridge, mustHave(values.url, 'url'), { full: values.full === true, ...(block !== undefined ? { block: Number(block) } : {}) });
       }
       return readBrief(bridge, mustHave(values.url, 'url'), { ...(str(values.sheet) !== undefined ? { sheet: str(values.sheet)! } : {}), full: values.full === true });
+    }
+    case 'doc-screenshot': {
+      const { values } = parse(args, { url: { type: 'string' }, output: { type: 'string' }, block: { type: 'string' }, sheet: { type: 'string' }, range: { type: 'string' } });
+      return docPicture(via, mustHave(values.url, 'url'), { ...(str(values.block) ? { block: str(values.block)! } : {}),
+        ...(str(values.sheet) ? { sheet_id: str(values.sheet)! } : {}), ...(str(values.range) ? { range: str(values.range)!.toUpperCase() } : {}) },
+      mustHave(values.output, 'output'));
     }
     case 'doc-edit': {
       const { values } = parse(args, { url: { type: 'string' }, edit: { type: 'string' }, check: { type: 'boolean' } });

@@ -30,6 +30,7 @@ If the host declares the user's Open ID, another authorized account is rejected.
 gof feishu document --url <requirement link> [--sheet <tab id or title>] [--full]
 gof feishu document --url <docx link> --outline [--full] | --block <index>
 gof feishu doc-edit --url <requirement link> --edit <edit>.json [--check]
+gof feishu doc-screenshot --url <requirement link> --output <new>.png [--block <id>] [--sheet <sheet_id> --range <A1>]
 gof feishu snapshot --output <new>.xlsx
 gof feishu context --snapshot <snapshot>.xlsx [--supplier <name>] [--worksheet <name>]
 gof feishu plan --request request.json --snapshot <snapshot>.xlsx [--output <new plan>.json]
@@ -73,6 +74,7 @@ The target is the test Wiki node `GH7cwIxzZi3gVdk2s3tc1dDbnQc`; the bridge resol
 - Blocks: `text`, `heading1`-`heading3`, `bullet`, `ordered` (a string, or runs `[{ "text", "bold"?, "link"? }]`), `divider` (`true`), `table` (rows of strings, all as wide; optional `widths` per column, `header`). Up to 50 blocks and 400 cells a table.
 - `fill.table`: `row` / `col` from 0 as in the outline's `cells`, header row included. A cell must be empty (one empty text block); a cell with anything else, or under a merged cell (`null` in the outline), is refused. Sheets: A1 cells of one tab (`sheet` = title or sheet_id; the link's `?sheet=` otherwise), written with `allow_overwrite:false`; text cannot start with `=`. Up to 100 cells.
 - `--check` resolves everything against the document as it is now and writes nothing (`edit_ready`). Then the write and a read-back: `doc_updated`. The same edit again finds it in place: `already_present`, nothing written. A lost answer: run the same edit again (it reads first; the request also carries an ID Feishu takes as the same write).
+- `doc_updated` and `already_present` carry `focus`: `block` (docx: the first new block, or the table filled) or `sheet_id` + `range` (the cells filled). `doc-screenshot` opens the document there in the user's hidden browser (a docx link with `#<block>`, a sheet on that tab and range) and saves a PNG; it changes nothing. The progress sheet is refused (its picture is `feishu screenshot --batch`).
 - Needs the `docx:document` permission in the Feishu login, which logins ask for since plugin 1.7.0; an older login is told to authorize once more. Feishu refusing the edit (`HTTP 403`, `1770032`) means the user has no edit access to that document.
 
 ## Interruption recovery

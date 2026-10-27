@@ -3,8 +3,9 @@ import type { Online, Session } from './cls-online.ts';
 import { createCreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import { clsProfileDir } from './cls-session.ts';
 import { draftScreenshot, type DraftShotOptions } from './draft-shot.ts';
+import { docScreenshot, type DocShotOptions } from './doc-shot.ts';
 import { sheetScreenshot, type SheetShotOptions } from './sheet-shot.ts';
-import { Blocked, checkTarget, need } from './util.ts';
+import { Blocked, checkTarget, feishuDocPath, need, NODE } from './util.ts';
 
 /*
  * The two pictures that close the requirement flow: `gof.mjs feishu screenshot` (the 创意进度表 on the rows that were appended) and
@@ -57,4 +58,31 @@ export async function draftPicture(online: Online, batch: string, group: string 
   if (shot.state === 'login_required') throw new Blocked('CLS 登录已失效（页面停在登录页）：先运行 gof.mjs login check 再截图');
   if (shot.state === 'no_access') throw new Blocked(`草稿页打不开（停在 ${shot.where}）：账号可能没有这个页面的权限`);
   return { status: 'screenshot_saved', file: shot.file, group: draft.group, draft_id: draft.id, draft_url: draft.url };
+}
+
+/**
+ * A requirement document after an edit (`gof.mjs feishu doc-screenshot`): a docx opened on the block the edit wrote (its `focus.block`), a
+ * sheet on its tab and the cells it filled (`focus.sheet_id`, `focus.range`). Only looks, as the user, in this user's hidden browser.
+ */
+export async function docPicture(online: Online, url: string, focus: { block?: string; sheet_id?: string; range?: string }, output: string, deps: ShotDeps & { doc?: Partial<DocShotOptions> } = {}): Promise<Obj> {
+  const docPath = feishuDocPath(url, 'docx|wiki|sheets', true);
+  need(docPath, '不是公司飞书文档链接（需要 wiki、docx 或 sheets 链接）');
+  need(!docPath.includes(NODE), '创意进度表用 gof feishu screenshot --batch 截图');
+  need(focus.block === undefined || /^[A-Za-z0-9]{8,64}$/.test(focus.block), '--block 需要 doc-edit 结果里 focus.block 的块 ID');
+  need(focus.sheet_id === undefined || /^[A-Za-z0-9_-]{1,64}$/.test(focus.sheet_id), '--sheet 需要 doc-edit 结果里 focus.sheet_id');
+  need(focus.range === undefined || /^[A-Z]{1,3}\d+(:[A-Z]{1,3}\d+)?$/.test(focus.range), '--range 需要写成 A9 或 A9:B12');
+  await online.session();
+  const sheet = focus.sheet_id !== undefined || docPath.startsWith('/sheets/');
+  if (sheet) {
+    const located = new URL(url);
+    if (focus.sheet_id) located.searchParams.set('sheet', focus.sheet_id);
+    const shot = await sheetScreenshot({ profileDir: clsProfileDir(), output, url: located.toString(), range: focus.range, ...deps.sheet });
+    if (shot.state === 'login_required') throw new Blocked(`飞书网页登录已失效（页面停在 ${shot.where}）：先运行 gof.mjs login check 再截图`);
+    if (shot.state === 'no_access') throw new Blocked(`表格打不开（停在 ${shot.where}）：账号可能没有这份表格的权限`);
+    return { status: 'screenshot_saved', file: shot.file, url: located.toString(), ...(focus.range ? { range: focus.range } : {}) };
+  }
+  const shot = await docScreenshot({ profileDir: clsProfileDir(), output, url, block: focus.block, ...deps.doc });
+  if (shot.state === 'login_required') throw new Blocked(`飞书网页登录已失效（页面停在 ${shot.where}）：先运行 gof.mjs login check 再截图`);
+  if (shot.state === 'no_access') throw new Blocked(`文档打不开（停在 ${shot.where}）：账号可能没有这份文档的权限`);
+  return { status: 'screenshot_saved', file: shot.file, url, ...(focus.block ? { block: focus.block } : {}) };
 }
