@@ -101,24 +101,25 @@ async function wikiAncestors(bridge: Bridge, parent: string): Promise<string[]> 
   return titles;
 }
 
-/** The requirement document behind a link: a sheet tab as header and rows, a docx as its text. */
-export async function readBrief(bridge: Bridge, url: string, options: { sheet?: string; full?: boolean } = {}): Promise<Obj> {
+/**
+ * What a document link points at: its kind (sheet or docx, a wiki node resolved to what it holds), the token of that, its wiki node
+ * (empty for a direct link), the title the wiki gives it, the wiki parent, and the tab the link names (`?sheet=`).
+ */
+export async function docTarget(bridge: Bridge, url: string): Promise<{ type: string; token: string; node: string; title: string; parent: string; linked: string | null }> {
   const docPath = feishuDocPath(url, 'docx|wiki|sheets', true);
   need(docPath, '不是公司飞书文档链接（需要 wiki、docx 或 sheets 链接）');
   const [, kind, token] = docPath.replace(/\/$/, '').split('/') as [string, string, string];
   const linked = new URL(url).searchParams.get('sheet');
-  let type = kind === 'sheets' ? 'sheet' : kind;
-  let objToken = token;
-  let title = '';
-  let wikiParent = '';
-  if (kind === 'wiki') {
-    const node = (await bridge.apiRead('/open-apis/wiki/v2/spaces/get_node', { token, obj_type: 'wiki' })).node;
-    need(node && typeof node.obj_token === 'string', '读不到这个知识库节点');
-    type = node.obj_type;
-    objToken = node.obj_token;
-    title = String(node.title ?? '');
-    wikiParent = String(node.parent_node_token ?? '');
-  }
+  if (kind !== 'wiki') return { type: kind === 'sheets' ? 'sheet' : kind, token, node: '', title: '', parent: '', linked };
+  const node = (await bridge.apiRead('/open-apis/wiki/v2/spaces/get_node', { token, obj_type: 'wiki' })).node;
+  need(node && typeof node.obj_token === 'string', '读不到这个知识库节点');
+  return { type: node.obj_type, token: node.obj_token, node: token, title: String(node.title ?? ''), parent: String(node.parent_node_token ?? ''), linked };
+}
+
+/** The requirement document behind a link: a sheet tab as header and rows, a docx as its text. */
+export async function readBrief(bridge: Bridge, url: string, options: { sheet?: string; full?: boolean } = {}): Promise<Obj> {
+  const { type, token: objToken, title: wikiTitle, parent: wikiParent, linked } = await docTarget(bridge, url);
+  let title = wikiTitle;
   const result: Obj = { url };
   if (wikiParent) {
     const path = await wikiAncestors(bridge, wikiParent);

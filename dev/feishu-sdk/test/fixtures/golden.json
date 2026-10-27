@@ -2569,7 +2569,7 @@
     }
   },
   "plan_errors": {
-    "base.xlsx|bad-url|": "脚本链接必须是当前确认的飞书文档",
+    "base.xlsx|bad-url|": "脚本链接必须是当前确认的飞书文档；没有文档时写「无」",
     "base.xlsx|basic|不存在": "指定/当前工作表不存在或列结构不匹配，请澄清",
     "base.xlsx|client-filled|": "进度表阶段 client 应留空",
     "base.xlsx|comma-label|": "下拉标签含逗号/引号，需人工核对规则",

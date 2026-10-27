@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { clsCheck, events, groupFor, loadBatch, NO_TICKET } from './batch.ts';
+import { clsCheck, events, loadBatch, NO_TICKET, ticketGroup } from './batch.ts';
 import { normalizeRequest, type Group } from './request.ts';
 import { checkSeal, rejectSecrets, seal } from './seal.ts';
 import { Blocked, canonical, CSV_HEADERS, FIXED_TAG, isInside, need, readJson, sha256 } from './util.ts';
@@ -159,7 +159,8 @@ export function operation(dir: string, groupId: string, action: string, catalog:
   const { path: batchPath, manifest } = loadBatch(dir);
   rejectSecrets(catalog);
   need(['save_draft', 'import_scripts'].includes(action), '只允许草稿创建和脚本导入');
-  const group = groupFor(manifest.plan, groupId);
+  // A ticket attached after the append (numbers reserved first, requirement written later) counts as the group's own.
+  const group = ticketGroup(manifest.plan, events(batchPath), groupId);
   need(group.csv, NO_TICKET);
   need(catalog.can_create === true && catalog.account?.status === 1, '未证明当前 CLS 登录及建单权限');
   clsCheck(batchPath, groupId, action, observations);
@@ -231,7 +232,7 @@ export function validateBatchReceipt(dir: string, groupId: string, evidence: Obj
   need(receipt.operation_id === op.operation_id && receipt.action === op.action, '接口请求摘要不匹配');
   const attempts = events(batchPath).filter(e => e.group === groupId && e.step === 'cls_api_attempt' && e.evidence.operation_id === op.operation_id);
   need(attempts.length === 1, '必须先记录本次接口尝试；不可重复请求');
-  const group = groupFor(manifest.plan, groupId);
+  const group = ticketGroup(manifest.plan, events(batchPath), groupId);
   need(op.payload.name === requirementName(group.names), '需求名称与获批需求不符');
   need(canonical(op.expected.names) === canonical(group.names) && op.expected.creator_id > 0 && op.expected.link === group.request.script_url,
     '请求与获批需求不匹配');

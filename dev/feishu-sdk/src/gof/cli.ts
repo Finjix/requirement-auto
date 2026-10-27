@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { clsCheck, message, preflight, prepare, record, report, status, verify } from './batch.ts';
+import { attachTicket, clsCheck, listBatches, message, preflight, prepare, record, report, status, verify } from './batch.ts';
 import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
@@ -11,6 +11,7 @@ import { parseNumbers } from './creative.ts';
 import { draftPicture, sheetPicture } from './shots-online.ts';
 import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
 import { readBrief } from './brief.ts';
+import { editDoc, outline } from './doc.ts';
 import { context } from './context.ts';
 import { addOption, Bridge, execute, login, planSummary, planWithApi, probe, reconcile, recomputePlan, takeSnapshot } from './feishu.ts';
 import { makePlan } from './plan.ts';
@@ -86,6 +87,16 @@ function batchCommand(command: string, args: string[]): Result {
       return record(mustHave(values.batch, 'batch'), mustHave(values.step, 'step'), str(values.group), evidence ? readJson(evidence) : undefined, snap);
     }
     case 'status': return status(mustHave(parse(args, { batch: { type: 'string' } }).values.batch, 'batch'));
+    case 'list': {
+      const number = str(parse(args, { number: { type: 'string' } }).values.number);
+      return listBatches(undefined, number === undefined ? undefined : intOf(number.replace(/^GOFCN/i, ''), 'number'));
+    }
+    case 'ticket': {
+      const { values } = parse(args, { batch: { type: 'string' }, group: { type: 'string' }, ticket: { type: 'string' }, catalog: { type: 'string' },
+        preview: { type: 'boolean' } });
+      return attachTicket(mustHave(values.batch, 'batch'), mustHave(values.group, 'group'), readJson(mustHave(values.ticket, 'ticket')),
+        readJson(mustHave(values.catalog, 'catalog')), values.preview === true);
+    }
     case 'message': return message(mustHave(parse(args, { batch: { type: 'string' } }).values.batch, 'batch'));
     case 'cls-check': {
       const { values } = parse(args, { batch: { type: 'string' }, group: { type: 'string' }, action: { type: 'string' }, ui: { type: 'string' }, observations: { type: 'string' } });
@@ -132,8 +143,19 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
     }
     case 'reconcile': return reconcile(bridge, mustHave(parse(args, { batch: { type: 'string' } }).values.batch, 'batch'));
     case 'document': {
-      const { values } = parse(args, { url: { type: 'string' }, sheet: { type: 'string' }, full: { type: 'boolean' } });
+      const { values } = parse(args, { url: { type: 'string' }, sheet: { type: 'string' }, full: { type: 'boolean' }, outline: { type: 'boolean' },
+        block: { type: 'string' } });
+      if (values.outline || values.block !== undefined) {
+        need(values.sheet === undefined, '--outline 只用于新版文档（docx）；表格直接读，行号和列字母就是位置');
+        const block = str(values.block);
+        need(block === undefined || /^\d+$/.test(block), '--block 需要顶层块的序号（从 0 数）');
+        return outline(bridge, mustHave(values.url, 'url'), { full: values.full === true, ...(block !== undefined ? { block: Number(block) } : {}) });
+      }
       return readBrief(bridge, mustHave(values.url, 'url'), { ...(str(values.sheet) !== undefined ? { sheet: str(values.sheet)! } : {}), full: values.full === true });
+    }
+    case 'doc-edit': {
+      const { values } = parse(args, { url: { type: 'string' }, edit: { type: 'string' }, check: { type: 'boolean' } });
+      return editDoc(bridge, mustHave(values.url, 'url'), readJson(mustHave(values.edit, 'edit')), values.check === true);
     }
     case 'context': {
       const { values } = parse(args, { snapshot: { type: 'string' }, worksheet: { type: 'string' }, supplier: { type: 'string' } });

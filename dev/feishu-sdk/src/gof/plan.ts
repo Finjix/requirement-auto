@@ -1,5 +1,5 @@
 import { CellRange, columnLetter, coordOf, translateFormula } from './a1.ts';
-import { fieldValues, ITEM_FIELDS, itemsOf, normalizeRequest, OPTIONAL_FIELDS, type Item } from './request.ts';
+import { fieldValues, ITEM_FIELDS, itemsOf, normalizeRequest, OPTIONAL_FIELDS, type Group, type Item } from './request.ts';
 import { chooseSheet, collectIds, concatenate, FIELD_HEADERS, formulaRefs, optionsFor, REQUIRED_HEADERS, type Columns, type Snapshot } from './snapshot.ts';
 import type { CellData } from './xlsx.ts';
 import { digest, need, safeFilename, TARGET } from './util.ts';
@@ -52,6 +52,12 @@ export function namingPattern(formula: string, row: number, cols: Columns): stri
  * the cell empty then). The request keeps the supplier itself, for CLS, the group message and the uploads' 制作人.
  */
 export const supplierCell = (g: { supplier: string; reviewer: string }): string => (g.supplier === g.reviewer ? '' : g.supplier);
+
+/** The file name of a group's CSV: 创意脚本_<组>_<题材>_<创意形式>_<供应商>.csv, from the group's first rows. */
+export function csvName(id: string, g: Group): string {
+  const first = itemsOf(g)[0]!;
+  return `创意脚本_${[id, first.topic, first.creative_form, g.supplier].filter(Boolean).map(safeFilename).join('_')}.csv`;
+}
 
 /** Plans the rows to append: the next material numbers, the naming formula, the dropdown options to extend. */
 export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: string | null): Plan {
@@ -120,11 +126,9 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
         cursor++;
       }
     }
-    const first = itemsOf(g)[0]!;
-    // Rows registered for finished materials have no script link: no CSV, since there is no CLS ticket to import it into.
-    const filename = g.script_url === '' ? null
-      : `创意脚本_${[id, first.topic, first.creative_form, g.supplier].filter(Boolean).map(safeFilename).join('_')}.csv`;
-    groups.push({ id, csv: filename, names, rows: groupRows, request: g });
+    // Rows appended without a script link (finished materials, or numbers reserved before the requirement is written) have no CSV: there
+    // is no CLS ticket to import it into, until one is attached to the batch (batch.ts attachTicket).
+    groups.push({ id, csv: g.script_url === '' ? null : csvName(id, g), names, rows: groupRows, request: g });
   });
   const dropdowns: Plan[] = [];
   for (const field of ['primary_tag', 'secondary_tag', 'creative_form', 'client', 'supplier', 'creator', 'creative_expression']) {

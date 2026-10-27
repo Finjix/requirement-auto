@@ -18,6 +18,11 @@ export const REQUIRED_SCOPES: readonly string[] = [
   'wiki:wiki:readonly', 'sheets:spreadsheet:readonly', 'sheets:spreadsheet:read', 'sheets:spreadsheet:write_only',
   'sheets:spreadsheet', 'drive:export:readonly', 'docx:document:readonly',
 ];
+/**
+ * Editing a Feishu document (writing into a requirement doc). Every login asks for it, but a login made before it was added still does
+ * everything else: only the document edit checks for it, and asks the user to authorize once more when it is missing.
+ */
+export const DOC_EDIT_SCOPE = 'docx:document';
 /** Requested on top so the refresh token is issued. It is not a permission and is not part of the checks. */
 export const OFFLINE_SCOPE = 'offline_access';
 

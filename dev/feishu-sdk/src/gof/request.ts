@@ -8,6 +8,8 @@ export const CLS_OPTIONAL = ['subject', 'department', 'market_contact', 'currenc
   'expected_completion', 'storyboard_time', 'first_draft_time', 'final_cut_time', 'supplier', 'creator'];
 /** 提炼词 unless the request names one. */
 export const DEFAULT_KEYWORD = '关键词';
+/** The 脚本内容 of a requirement that has no document (the user said there is none): the CSV says so instead of linking one. */
+export const NO_SCRIPT = '无';
 /** The progress fields that make up a material name and may differ from row to row within one group. */
 export const ITEM_FIELDS = ['primary_tag', 'secondary_tag', 'creative_form', 'keyword'];
 
@@ -147,7 +149,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     g.reviewer = cellText(raw.reviewer, 'reviewer');
     const link = pick(raw, 'script_url', '');
     need(typeof link === 'string' && (link.trim() !== '' || !ticket), '缺少 script_url');
-    g.script_url = cellText(link, 'script_url');
+    g.script_url = link.trim() === NO_SCRIPT ? NO_SCRIPT : cellText(link, 'script_url');
     // Finished materials named with their number (GOFCN67680_…) have most likely been registered already: their rows are verified
     // (gof creative files --check), never appended a second time. A new piece is named GOFCNxxxxx_…, whatever its file carries.
     if (!ticket && g.script_url === '') {
@@ -172,7 +174,8 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
     }
     g.brief = pick(raw, 'brief', ''); // Only still accepted so older requests load; it is not used anywhere.
     need(typeof g.brief === 'string', 'brief 必须是文本');
-    need(g.script_url === '' || feishuDocPath(g.script_url, 'wiki|docx|sheets', true) !== undefined, '脚本链接必须是当前确认的飞书文档');
+    need(g.script_url === '' || g.script_url === NO_SCRIPT || feishuDocPath(g.script_url, 'wiki|docx|sheets', true) !== undefined,
+      `脚本链接必须是当前确认的飞书文档；没有文档时写「${NO_SCRIPT}」`);
     const cls = pick(raw, 'cls', {});
     need(!(isObject(cls) && 'requirement_name' in cls), 'CLS 需求名称由该组素材编号生成（GOFCN首号-GOFCN末号），不接受输入');
     need(isObject(cls) && subset(Object.keys(cls), [...CLS_REQUIRED, ...CLS_OPTIONAL]), 'CLS 字段未知');

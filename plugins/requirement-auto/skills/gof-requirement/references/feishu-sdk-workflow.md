@@ -28,6 +28,8 @@ If the host declares the user's Open ID, another authorized account is rejected.
 
 ```text
 gof feishu document --url <requirement link> [--sheet <tab id or title>] [--full]
+gof feishu document --url <docx link> --outline [--full] | --block <index>
+gof feishu doc-edit --url <requirement link> --edit <edit>.json [--check]
 gof feishu snapshot --output <new>.xlsx
 gof feishu context --snapshot <snapshot>.xlsx [--supplier <name>] [--worksheet <name>]
 gof feishu plan --request request.json --snapshot <snapshot>.xlsx [--output <new plan>.json]
@@ -46,6 +48,32 @@ The target is the test Wiki node `GH7cwIxzZi3gVdk2s3tc1dDbnQc`; the bridge resol
 - `dropdown-add` adds the option to every dropdown rule of that column (each rule keeps its options, colors and mode; cell values untouched; ranges that already have it are skipped). Re-running is harmless.
 - `prepare` re-makes the approved plan on the fresh snapshot and creates the batch; it refuses if rows, numbers, values, names or groups differ from the approved plan. Revision changes elsewhere are fine.
 - `append` runs the preflight (receipt, user, revision, fresh XLSX, hidden columns, formulas, merges, numbers, rules), then one `invoke_write` with `allow_overwrite:false`. This batch's rows get the dropdown of the rows above. Then a full export and rule read-back; success records `append_verified`. Writes are not retried by the tool: an unknown result is resolved by `reconcile`.
+
+## Editing a requirement document
+
+`doc-edit` writes into the user's requirement document as the user (never into the progress sheet, which only `append` writes). One edit per file, either:
+
+```json
+{ "insert": { "at": { "before": 0, "expect": "1023——AI片头衔接需求" }, "blocks": [
+  { "heading1": "1027-AI片头需求" },
+  { "text": "需求数量：15条" },
+  { "table": [["命名", "方向"], ["GOFCN67867_AI片头衔接_模拟经营_3D_巨手", "巨手"]], "widths": [300, 100] }
+] } }
+```
+
+```json
+{ "fill": { "table": 2, "expect": "命名 | 方向", "cells": [{ "row": 1, "col": 0, "text": "GOFCN67867_AI片头衔接_模拟经营_3D_巨手" }] } }
+```
+
+```json
+{ "fill": { "sheet": "2026.10.27", "cells": [{ "cell": "B5", "text": "GOFCN67867_AI片头衔接_模拟经营_3D_巨手" }] } }
+```
+
+- Docx places come from `--outline`: `index` (top-level blocks from 0) and `expect` = that block's `text` as the outline showed it (a table: its first row, cells joined by ` | `). If the block there shows something else, the one block with that text is taken; none or several: refused (read the outline again). `at` is also `"start"` or `"end"`; `{ "after": <index>, "expect": … }` puts the blocks below it.
+- Blocks: `text`, `heading1`-`heading3`, `bullet`, `ordered` (a string, or runs `[{ "text", "bold"?, "link"? }]`), `divider` (`true`), `table` (rows of strings, all as wide; optional `widths` per column, `header`). Up to 50 blocks and 400 cells a table.
+- `fill.table`: `row` / `col` from 0 as in the outline's `cells`, header row included. A cell must be empty (one empty text block); a cell with anything else, or under a merged cell (`null` in the outline), is refused. Sheets: A1 cells of one tab (`sheet` = title or sheet_id; the link's `?sheet=` otherwise), written with `allow_overwrite:false`; text cannot start with `=`. Up to 100 cells.
+- `--check` resolves everything against the document as it is now and writes nothing (`edit_ready`). Then the write and a read-back: `doc_updated`. The same edit again finds it in place: `already_present`, nothing written. A lost answer: run the same edit again (it reads first; the request also carries an ID Feishu takes as the same write).
+- Needs the `docx:document` permission in the Feishu login, which logins ask for since plugin 1.7.0; an older login is told to authorize once more. Feishu refusing the edit (`HTTP 403`, `1770032`) means the user has no edit access to that document.
 
 ## Interruption recovery
 

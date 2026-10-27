@@ -41,13 +41,21 @@ Values are placeholders.
 - Rows: either all alike (`quantity` plus the fields on the group) or `items`, runs of rows in order, each with `quantity` and what differs (`primary_tag`, `secondary_tag`, `creative_form`, `keyword`; group values are defaults). With `items`, a group `quantity` is allowed only as their sum.
 - Per row: `primary_tag`, `secondary_tag` required, one part of the name each (no `_`); `creative_form` optional, only when stated (no `_`; empty stays empty; all rows of the request or none); `keyword` (提炼词) defaults to `关键词` (the user confirms that default; rows with 提炼词 of their own are `items` of `quantity` 1), may hold `_` but not at its ends or twice in a row, and cannot contain `/` or `\` (the name is also the CLS creative name). The name is `GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>` (`naming`); an empty 创意形式 drops out with its `_`. The plan keeps the formula of the row above when it names rows that way, else writes `=SUBSTITUTE(CONCATENATE("GOFCN",C,"_",H,"_",I,"_",K,"_",D),"__","_")`.
 - `material_name` (optional, per item or group): the name the rows must get, without the number (a leading `GOFCN<digits>_` or `GOFCNxxxxx_` is dropped), e.g. a file named for its row; the plan refuses when the formula makes another name, saying which. Older requests give it instead of the tags (`<一级>_<二级>_[<创意形式>_]<提炼词>`), and the tags are read from it.
-- `quantity`: positive integer. `reviewer` is required. `script_url` (company `wiki`/`docx`/`sheets` link as given) is required for a group with a CLS ticket (`cls`) and goes into its CSV; a group without `cls` may leave it out (absent or `""`), and then has no CSV (rows for finished materials, below). `supplier` is required for rows for finished materials (no `script_url`: they were made by someone, who is also the uploads' 制作人); a requirement may leave it out only when its supplier is not decided yet (absent or `""`: the cell stays empty, CLS takes `待定供应商`); a `supplier` equal to the `reviewer` is written as an empty cell (the plan summary says `supplier_cell_empty`), the person still being the CLS supplier, the message's 供应商 and the uploads' 制作人; the cell is filled in every group of a request, or in none.
+- `quantity`: positive integer. `reviewer` is required. `script_url` (company `wiki`/`docx`/`sheets` link as given, or `无` when the user says there is no document) is required for a group with a CLS ticket (`cls`) and goes into its CSV; a group without `cls` may leave it out (absent or `""`), and then has no CSV (numbers reserved before the requirement is written, or rows for finished materials, below). `supplier` is required for rows for finished materials (no `script_url`: they were made by someone, who is also the uploads' 制作人); a requirement may leave it out only when its supplier is not decided yet (absent or `""`: the cell stays empty, CLS takes `待定供应商`); a `supplier` equal to the `reviewer` is written as an empty cell (the plan summary says `supplier_cell_empty`), the person still being the CLS supplier, the message's 供应商 and the uploads' 制作人; the cell is filled in every group of a request, or in none.
 - `label` (optional, 1-20 characters, no brackets or stars): the requirement's short name in the group message; default the 一级标签. Printed by `plan` as `message_kind`.
 - `cls.direction`, `cls.task_type` are required unless the user excluded the ticket (then omit `cls`). `cls.requirement_name` is rejected: `gof cls` builds it as `GOFCN<first>-GOFCN<last>` (one row: `GOFCN<number>`).
 - Optional CLS keys: `subject`, `department`, `market_contact`, `currency`, `quotation`, `expected_completion`, `storyboard_time`, `first_draft_time`, `final_cut_time` (dates `YYYY-MM-DD`), and `supplier` / `creator` as exact CLS names when automatic matching fails (without a `supplier` on the group: `待定供应商`).
 - `reviewer` is also the CLS creator; `creator` cannot differ from it.
 - `client`, `creative_expression`, `creative_batch`, `head_reference`, `creative_reference` must be empty.
-- A later ticket for an already appended batch reuses its CSV; do not `prepare` or append again.
+- A later ticket for an already appended batch reuses its CSV; do not `prepare` or append again. Rows appended without a ticket get one with `gof batch ticket` (below).
+
+## Ticket for rows appended without one (`ticket.json`)
+
+```json
+{ "script_url": "https://centurygames.feishu.cn/wiki/DocOfTheSupplier", "cls": { "direction": "<direction>", "task_type": "<task type>" }, "label": "片头" }
+```
+
+Only `script_url` (a document link or `无`), `cls` (as in a request; `direction` and `task_type` required) and `label`. Everything appended (rows, names, tags, supplier, reviewer) stays as approved. `gof batch ticket --preview` checks it against the catalog and the batch and prints the requirement name, quantity, first and last name, `cls_names`, `native_defaults` and `message_kind`, writing nothing; without `--preview` it writes the group's CSV into the batch and records `ticket_attached` (allowed once the rows are verified, for a group approved without `cls`, until its CLS stage starts; attaching again replaces it). From then on `gof cls`, `record`, `message` and `report` take the group with that ticket.
 
 ## Rows for finished materials
 
@@ -77,7 +85,7 @@ Batches are told apart by their script links; groups without one by their rows' 
 
 ## CSV
 
-UTF-8 with BOM, CRLF, header `脚本名称,脚本内容,创意标签`. First row of each group has the script link, the rest `同上`. Tag is always `玩法卖点（单选，必选）/展示向/展示向`. `assets/csv-template.csv` is a reference only.
+UTF-8 with BOM, CRLF, header `脚本名称,脚本内容,创意标签`. First row of each group has the script link (or `无`), the rest `同上`. Tag is always `玩法卖点（单选，必选）/展示向/展示向`. `assets/csv-template.csv` is a reference only.
 
 ## Commands
 
@@ -89,6 +97,8 @@ gof batch verify --batch <batch> --snapshot after.xlsx --observed-url <real URL>
 gof batch record --batch <batch> --step <step> [--group 01] [--evidence file.json] [--snapshot fresh.xlsx --observed-url <real URL>]
 gof batch cls-check --batch <batch> --group 01 --action save_draft|import_scripts --observations observations.json
 gof batch status --batch <batch>
+gof batch list [--number <material number>]
+gof batch ticket --batch <batch> --group 01 --ticket ticket.json --catalog catalog.json [--preview]
 gof batch message --batch <batch>
 gof batch report --batch <batch> [--output <batch>/<new report>.json]
 ```
@@ -96,7 +106,8 @@ gof batch report --batch <batch> [--output <batch>/<new report>.json]
 - `plan` prints the plan JSON (plan_id, sheet/column mapping, append range, values, formulas, names, dropdown options). Historical duplicate numbers become `history_warnings`; an unreadable existing number that could clash stops it.
 - `verify` returns `complete`, `not_applied`, `partial` or `conflict` (history changed, wrong field or unplanned addition). Feishu may extend an existing filter to the new last row; other filter changes are `conflict`. For a batch written through the API (`gof feishu append`) only the appended rows and the written columns' dropdowns can make it `conflict`; colleagues' edits elsewhere come back as `foreign_changes`.
 - `report` prints the report (with `links`); `--output` saves a copy, which must lie inside the batch directory.
-- `record` steps: `append_started`, `append_verified`, `cls_started`, `cls_api_attempt`, `draft_saved`, `scripts_imported`, `handoff`, `blocked`, `resumed`, `requirement_number`. Events are append-only. Evidence containing credentials is rejected.
+- `list`: the user's batches, newest first: `batch` (its directory), sheet, `first_number` / `last_number`, `append_verified`, `blocked`, and per group quantity, first and last name, supplier, reviewer, `ticket` (whether it has a CLS ticket, approved or attached) and `steps`. `--number` keeps the batch holding that number (`67867` or `GOFCN67867`).
+- `record` steps: `append_started`, `append_verified`, `ticket_attached` (written by `batch ticket` only), `cls_started`, `cls_api_attempt`, `draft_saved`, `scripts_imported`, `handoff`, `blocked`, `resumed`, `requirement_number`. Events are append-only. Evidence containing credentials is rejected.
   - `append_verified` / `resumed`: `evidence.validations` = `{ "transport": "feishu_api", "proof": "<absolute path of this batch's rule proof>" }`.
   - `cls_api_attempt`: `action` (`save_draft` / `import_scripts`), `operation_id`, `observations`. One attempt per action per group.
   - `draft_saved`: `confirmed=true`, `unpublished=true`, `url`, `transport=cls_api`, `draft_id`, absolute operation and receipt paths; optional `requirement_number` (official `GOFCN` number actually read). `scripts_imported` adds `quantity` and `names`.

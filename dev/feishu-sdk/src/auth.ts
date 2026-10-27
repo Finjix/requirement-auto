@@ -1,6 +1,6 @@
 import { AccessTokenError } from '@larksuiteoapi/node-sdk';
 import { BridgeError } from './errors.ts';
-import { FEISHU, OFFLINE_SCOPE, REQUIRED_SCOPES, scopeList, type AppCredentials, type Endpoints } from './config.ts';
+import { DOC_EDIT_SCOPE, FEISHU, OFFLINE_SCOPE, REQUIRED_SCOPES, scopeList, type AppCredentials, type Endpoints } from './config.ts';
 import { createClient, lark } from './client.ts';
 import { readJson, removeFile, withLock, writeJsonAtomic } from './fsutil.ts';
 import type { DataPaths } from './paths.ts';
@@ -215,7 +215,7 @@ export class FeishuAuth {
   /** Asks Feishu for a device authorization the user confirms in their own browser. Nothing is stored but the pending request. */
   async startLogin(extraScopes: readonly string[] = []): Promise<LoginPrompt> {
     const app = this.credentials();
-    const scopes = unique([...REQUIRED_SCOPES, ...extraScopes, OFFLINE_SCOPE]);
+    const scopes = unique([...REQUIRED_SCOPES, DOC_EDIT_SCOPE, ...extraScopes, OFFLINE_SCOPE]);
     const existing = await this.readPending();
     if (existing && existing.expires_at - 10_000 > this.now() && sameSet(scopeList(existing.scope), scopes)) return this.prompt(existing, true);
 

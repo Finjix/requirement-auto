@@ -15,6 +15,12 @@ const OCCUPIED = /non[- ]?empty|occupied|cannot overwrite|not allowed to overwri
 const TOKEN_REJECTED = new Set([99991668, 99991677]);
 const SCOPE_MISSING = new Set([99991679, 99991672]);
 const MAX_WRITES = 100;
+/** A document read whole: larger ones are not edited here. */
+const MAX_DOC_BLOCKS = 50_000;
+/** At most this many blocks created by one insert, and text blocks set by one update. */
+const MAX_DOC_INSERT = 1000;
+const MAX_DOC_UPDATES = 200;
+const CLIENT_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** The only read endpoints the workflow uses. Anything else is refused before it is sent. */
 const READ_ALLOWLIST: readonly RegExp[] = [
@@ -33,7 +39,7 @@ export interface CellWrite {
 }
 
 interface Call {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH';
   url: string;
   params?: Record<string, string | number | boolean>;
   data?: unknown;
@@ -241,8 +247,70 @@ export class FeishuApi {
     return { requested: range, option, updated_ranges: done.length, ranges: done };
   }
 
-  private checkToken(token: string) {
-    if (typeof token !== 'string' || !TOKEN.test(token)) throw new BridgeError('invalid_request', '表格 token 格式无效');
+  /**
+   * Every block of a docx, page by page, with the revision they were read at. The revision is read before and after: a document
+   * edited in between is read again (twice at most), so the blocks are all of one revision.
+   */
+  async docxBlocks(documentId: string): Promise<{ revision: number; title: string; blocks: unknown[] }> {
+    this.checkToken(documentId, '文档');
+    const head = async () => (await this.send({ method: 'GET', url: `/open-apis/docx/v1/documents/${documentId}` }))?.document ?? {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = await head();
+      const blocks: unknown[] = [];
+      let page = '';
+      do {
+        const data = await this.send({ method: 'GET', url: `/open-apis/docx/v1/documents/${documentId}/blocks`,
+          params: { page_size: 500, document_revision_id: -1, ...(page ? { page_token: page } : {}) } });
+        if (!Array.isArray(data?.items)) throw new BridgeError('api', '文档块返回结构不匹配');
+        blocks.push(...data.items);
+        page = data.has_more ? String(data.page_token ?? '') : '';
+        if (data.has_more && !page) throw new BridgeError('api', '文档块分页没有返回下一页标记');
+        if (blocks.length > MAX_DOC_BLOCKS) throw new BridgeError('api', `文档超过 ${MAX_DOC_BLOCKS} 个块，不支持`);
+      } while (page);
+      const after = await head();
+      if (Number.isSafeInteger(before.revision_id) && before.revision_id === after.revision_id) {
+        return { revision: before.revision_id, title: String(before.title ?? ''), blocks };
+      }
+    }
+    throw new BridgeError('api', '文档读取期间一直在被编辑，稍后再读');
+  }
+
+  /**
+   * Creates blocks (with their children: table cells, their text) under `parentId` at `index`, in one request. Only ever adds: nothing
+   * existing is replaced or moved. `clientToken` makes the same request, sent again, a no-op on Feishu's side.
+   */
+  async docxInsert(documentId: string, parentId: string, index: number, childrenIds: string[], descendants: unknown[], clientToken: string): Promise<any> {
+    this.checkToken(documentId, '文档');
+    this.checkToken(parentId, '文档块');
+    if (!Number.isSafeInteger(index) || index < 0) throw new BridgeError('invalid_request', '插入位置无效');
+    if (!Array.isArray(childrenIds) || !childrenIds.length || !Array.isArray(descendants) || descendants.length > MAX_DOC_INSERT) {
+      throw new BridgeError('invalid_request', `插入内容为空或超过 ${MAX_DOC_INSERT} 个块`);
+    }
+    if (!CLIENT_TOKEN.test(clientToken)) throw new BridgeError('invalid_request', '缺少请求标识');
+    return this.send({
+      method: 'POST', write: true, url: `/open-apis/docx/v1/documents/${documentId}/blocks/${parentId}/descendant`,
+      params: { document_revision_id: -1, client_token: clientToken }, data: { children_id: childrenIds, index, descendants },
+    });
+  }
+
+  /** Sets the text of existing text blocks (the caller has checked they are empty): one batch_update request. */
+  async docxSetTexts(documentId: string, updates: { block_id: string; elements: unknown[] }[], clientToken: string): Promise<any> {
+    this.checkToken(documentId, '文档');
+    if (!Array.isArray(updates) || !updates.length || updates.length > MAX_DOC_UPDATES) throw new BridgeError('invalid_request', `更新数必须在 1 到 ${MAX_DOC_UPDATES} 之间`);
+    for (const u of updates) {
+      this.checkToken(u?.block_id, '文档块');
+      if (!Array.isArray(u.elements) || !u.elements.length) throw new BridgeError('invalid_request', '更新内容为空');
+    }
+    if (!CLIENT_TOKEN.test(clientToken)) throw new BridgeError('invalid_request', '缺少请求标识');
+    return this.send({
+      method: 'PATCH', write: true, url: `/open-apis/docx/v1/documents/${documentId}/blocks/batch_update`,
+      params: { document_revision_id: -1, client_token: clientToken },
+      data: { requests: updates.map(u => ({ block_id: u.block_id, update_text_elements: { elements: u.elements } })) },
+    });
+  }
+
+  private checkToken(token: string, what = '表格') {
+    if (typeof token !== 'string' || !TOKEN.test(token)) throw new BridgeError('invalid_request', `${what} token 格式无效`);
   }
 }
 

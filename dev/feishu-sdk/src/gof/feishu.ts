@@ -148,6 +148,21 @@ export class Bridge {
   async createWorkbook(title: string): Promise<any> {
     return this.call('sheets-create', { title }, { write: true });
   }
+
+  /** Every block of a docx, all of one revision (see doc.ts). */
+  async docxBlocks(document: string): Promise<{ revision: number; title: string; blocks: Obj[] }> {
+    return this.call('docx-blocks', { document });
+  }
+
+  /** New blocks in a docx (doc.ts plans them, checks the place and reads them back); never replaces anything. */
+  async docxInsert(args: Obj): Promise<any> {
+    return this.call('docx-insert', args, { write: true });
+  }
+
+  /** Text into empty text blocks of a docx (doc.ts checks they are empty and reads them back). */
+  async docxSetTexts(args: Obj): Promise<any> {
+    return this.call('docx-set-texts', args, { write: true });
+  }
 }
 
 async function revisionOf(bridge: Bridge, token: string): Promise<number> {

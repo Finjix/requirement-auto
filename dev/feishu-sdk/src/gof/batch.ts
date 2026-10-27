@@ -1,15 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CellRange, columnLetter, coordOf } from './a1.ts';
-import { makePlan, type Plan } from './plan.ts';
-import { itemsOf } from './request.ts';
+import { csvName, makePlan, type Plan } from './plan.ts';
+import { itemsOf, NO_SCRIPT, normalizeRequest, type Group } from './request.ts';
 import { resolveDataPaths } from '../paths.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { collectIds, hasContent, inlineOptions, plainRules, scanSheets, Snapshot, validationProjection, holds } from './snapshot.ts';
-import { PENDING_SUPPLIER, validateBatchReceipt, validateReceipt } from './cls.ts';
+import { buildPayload, PENDING_SUPPLIER, requirementName, validateBatchReceipt, validateReceipt } from './cls.ts';
 import { validateRuleEvidence } from './rules.ts';
 import {
-  Blocked, canonical, checkClsUrl, isInside, checkTarget, CSV_HEADERS, digest, FIXED_TAG, need, readJson, sha256, TARGET, writeJsonNew,
+  Blocked, canonical, checkClsUrl, isInside, isObject, checkTarget, CSV_HEADERS, digest, FIXED_TAG, need, readJson, sha256, TARGET, writeJsonNew,
 } from './util.ts';
 
 const BOM = String.fromCharCode(0xfeff);
@@ -41,6 +41,13 @@ function csvField(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
+/** The CSV CLS imports a group's scripts from: one line per row, the script link (or 无) on the first and 同上 below it, the fixed tag. */
+export function csvText(names: string[], scriptUrl: string): string {
+  const lines = [CSV_HEADERS.map(csvField).join(',')];
+  names.forEach((name, index) => lines.push([name, index === 0 ? scriptUrl : '同上', FIXED_TAG].map(csvField).join(',')));
+  return `${BOM}${lines.join('\r\n')}\r\n`;
+}
+
 export function clipboardTsv(plan: Plan): string {
   const area = new CellRange(plan.range);
   const lines: string[] = [];
@@ -60,11 +67,11 @@ export function clipboardTsv(plan: Plan): string {
 export interface PrepareOptions { workspace?: string | undefined; apiPlan?: Record<string, any> | undefined; outputRoot?: string | undefined }
 
 /**
- * What tells a requirement apart across batches: each group's script link, or for rows registered for finished materials (no link), the
- * names of its rows without their numbers.
+ * What tells a requirement apart across batches: each group's script link, or for rows without one (finished materials, reserved numbers,
+ * a requirement without a document), the names of its rows without their numbers.
  */
 function requirementKeys(plan: Plan): string[] {
-  return (plan.groups as Plan[]).flatMap(g => g.request.script_url
+  return (plan.groups as Plan[]).flatMap(g => g.request.script_url && g.request.script_url !== NO_SCRIPT
     ? [`link:${g.request.script_url}`] : (g.names as string[]).map(name => `name:${name.replace(/^GOFCN\d+_/, '')}`));
 }
 
@@ -122,14 +129,10 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   fs.copyFileSync(snapshot.path, path.join(dir, 'baseline.xlsx'), fs.constants.COPYFILE_EXCL);
   // Browser clipboard TSV is not CSV: quoting formulas makes them literal text.
   fs.writeFileSync(path.join(dir, 'append.tsv'), tsv, { encoding: 'utf8', flag: 'wx' });
-  // Groups of rows registered for finished materials have no CSV (see makePlan).
+  // Groups of rows appended without a script link have no CSV (see makePlan).
   const scripted = (plan.groups as Plan[]).filter(g => g.csv);
   for (const group of scripted) {
-    const lines = [CSV_HEADERS.map(csvField).join(',')];
-    group.names.forEach((name: string, index: number) => {
-      lines.push([name, index === 0 ? group.request.script_url : '同上', FIXED_TAG].map(csvField).join(','));
-    });
-    fs.writeFileSync(path.join(dir, group.csv), `${BOM}${lines.join('\r\n')}\r\n`, { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(path.join(dir, group.csv), csvText(group.names, group.request.script_url), { encoding: 'utf8', flag: 'wx' });
   }
   const files = ['append.tsv', ...scripted.map(g => g.csv)];
   if (apiPlan) {
@@ -398,8 +401,105 @@ function clsEvidence(evidence: Evidence, apiBatch: boolean): void {
 }
 
 const hasReason = (evidence: Evidence) => typeof evidence.reason === 'string' && evidence.reason.trim() !== '';
-/** A group of rows registered for finished materials: no script link, no CSV, and so no CLS ticket. */
-export const NO_TICKET = '这一组是为已做好的素材登记的行（没有脚本内容链接，也没有 CSV），不建 CLS 需求单';
+/** A group whose rows were appended without a CLS ticket, and none attached since. */
+export const NO_TICKET = '这一组的行追加时没有需求单（没有脚本内容，也没有 CSV）：要发单，先用 gof batch ticket 给这一组补上需求单';
+
+/** What a ticket attached to a batch group may give: the 脚本内容 (a Feishu document or 无), the CLS fields and the group message's label. */
+const TICKET_KEYS = ['script_url', 'cls', 'label'];
+
+/**
+ * A group's request with a CLS ticket put on it: the script link (or 无) and the CLS fields, checked the way a new requirement's are.
+ * Everything that was appended (rows, names, tags, supplier, reviewer) stays as it was approved.
+ */
+export function ticketRequest(group: Plan, input: unknown): Group {
+  need(isObject(input) && Object.keys(input).every(k => TICKET_KEYS.includes(k)), `需求单只接受 ${TICKET_KEYS.join('、')}`);
+  need(typeof input.script_url === 'string' && input.script_url.trim() !== '', `缺少脚本内容：需求文档链接，没有文档时写「${NO_SCRIPT}」`);
+  need(isObject(input.cls) && Object.keys(input.cls).length > 0, '缺少 CLS 字段（创意方向、任务类型）');
+  const [request] = normalizeRequest({ groups: [{ ...group.request, ...input }] }).groups;
+  const rest = (g: Record<string, any>) => Object.fromEntries(Object.entries(g).filter(([k]) => !TICKET_KEYS.includes(k)));
+  need(canonical(rest(request!)) === canonical(rest(group.request)), '需求单改变了已追加的行，只能补脚本内容和 CLS 字段');
+  return request!;
+}
+
+/**
+ * A group the way its CLS ticket sees it: the approved group, or for rows appended without a ticket, the one attached to it since
+ * (the last `ticket_attached`), with its own CSV.
+ */
+export function ticketGroup(plan: Plan, records: Pick<BatchEvent, 'group' | 'step' | 'evidence'>[], groupId: string | null): Plan {
+  const group = groupFor(plan, groupId);
+  const attached = [...records].reverse().find(e => e.group === groupId && e.step === 'ticket_attached');
+  if (!attached) return group;
+  const { csv, csv_sha256: _sha, ...ticket } = attached.evidence;
+  return { ...group, csv, request: ticketRequest(group, ticket) };
+}
+
+const ticketGroups = (plan: Plan, records: BatchEvent[]): Plan[] => (plan.groups as Plan[]).map(g => ticketGroup(plan, records, g.id));
+
+/**
+ * Puts a CLS ticket on a group whose rows were appended without one (numbers reserved first, the requirement written later): its CSV for
+ * the rows as they are in the sheet, recorded as `ticket_attached`; the CLS stage then runs for the group as for any other. `preview`
+ * writes nothing and returns what the user is asked to approve. Allowed until the group's CLS stage has started.
+ */
+export function attachTicket(dir: string, groupId: string, input: unknown, catalog: Record<string, any>, preview = false): Record<string, any> {
+  const { path: batchPath, manifest } = loadBatch(dir);
+  rejectSecrets(input);
+  rejectSecrets(catalog);
+  need(catalog.can_create === true, '没有建单权限');
+  const group = groupFor(manifest.plan, groupId);
+  const request = ticketRequest(group, input);
+  const [, , defaults, matched] = buildPayload(request, catalog, group.names);
+  const result: Record<string, any> = {
+    group: groupId, requirement_name: requirementName(group.names), quantity: request.quantity, first: group.names[0],
+    last: group.names[group.names.length - 1], script_url: request.script_url, supplier: request.supplier || PENDING_SUPPLIER,
+    reviewer: request.reviewer, cls_names: matched, native_defaults: defaults, message_kind: kindOf(request),
+  };
+  checkTicketAllowed(batchPath, manifest.plan, groupId);
+  if (preview) return { status: 'ticket_preview', ...result };
+  let csv = csvName(group.id, request);
+  for (let n = 2; fs.existsSync(path.join(batchPath, csv)); n++) csv = csvName(group.id, request).replace(/\.csv$/, `-${n}.csv`);
+  const text = csvText(group.names, request.script_url);
+  fs.writeFileSync(path.join(batchPath, csv), text, { encoding: 'utf8', flag: 'wx' });
+  record(batchPath, 'ticket_attached', groupId, { ...(input as Record<string, any>), csv, csv_sha256: sha256(text) });
+  return { status: 'ticket_attached', ...result, csv: path.join(batchPath, csv) };
+}
+
+/** A ticket can be attached to a group appended without one, once the rows are verified, until its CLS stage begins. */
+function checkTicketAllowed(batchPath: string, plan: Plan, groupId: string): void {
+  const state = status(batchPath);
+  need(!state.blocked, '批次已阻塞，先处理阻塞原因');
+  need(state.append_verified, '这一批的行还没有追加并验收，不能补需求单');
+  need(Object.keys(groupFor(plan, groupId).request.cls ?? {}).length === 0, '这一组获批时已带需求单，按原计划建单');
+  need(!(state.groups[groupId] as string[]).some(s => s.startsWith('cls_') || TICKET_STEPS.includes(s)), '这一组已开始建单，需求单不能再改');
+}
+
+/**
+ * The batches of this user (newest first), each with its sheet, numbers and groups, and whether a group has its CLS ticket; `number`
+ * keeps only the batch holding that material number. A folder that is not a readable batch is left out.
+ */
+export function listBatches(root: string = defaultBatchRoot(), number?: number): Record<string, any> {
+  const found: Record<string, any>[] = [];
+  for (const name of fs.existsSync(root) ? fs.readdirSync(root) : []) {
+    let entry: Record<string, any>;
+    try {
+      const { path: batchPath, manifest } = loadBatch(path.join(root, name));
+      const plan = manifest.plan as Plan;
+      if (number !== undefined && !(plan.first_number <= number && number <= plan.last_number)) continue;
+      const records = events(batchPath);
+      const state = status(batchPath);
+      entry = {
+        batch: batchPath, prepared_at: fs.statSync(path.join(batchPath, 'manifest.json')).mtime.toISOString(), worksheet: plan.worksheet,
+        first_number: plan.first_number, last_number: plan.last_number, append_verified: state.append_verified, blocked: state.blocked,
+        groups: ticketGroups(plan, records).map(g => ({
+          group: g.id, quantity: g.request.quantity, first: g.names[0], last: g.names[g.names.length - 1], supplier: g.request.supplier || null,
+          reviewer: g.request.reviewer, ticket: Object.keys(g.request.cls ?? {}).length > 0, steps: state.groups[g.id],
+        })),
+      };
+    } catch { continue; }
+    found.push(entry);
+  }
+  found.sort((a, b) => (a.prepared_at < b.prepared_at ? 1 : a.prepared_at > b.prepared_at ? -1 : 0));
+  return { status: 'batches', batches: found };
+}
 
 export function record(dir: string, step: string, groupId?: string | null, evidenceInput?: Evidence | null, fresh?: Snapshot): Record<string, any> {
   const { path: batchPath, manifest } = loadBatch(dir);
@@ -437,10 +537,18 @@ export function record(dir: string, step: string, groupId?: string | null, evide
   } else {
     need(state.append_verified, '进度表必须先验证');
     const planGroup = groupFor(manifest.plan, group);
-    const stages: string[] = state.groups[group as string];
+    // A ticket attached to the group is what its CLS stage works from, not a step of it.
+    const stages = (state.groups[group as string] as string[]).filter(s => s !== 'ticket_attached');
     need(!stages.includes('handoff') || step === 'requirement_number', '本组已移交，不自动继续');
-    if (step === 'cls_started') {
-      need(planGroup.csv, NO_TICKET);
+    if (step === 'ticket_attached') {
+      checkTicketAllowed(batchPath, manifest.plan, group as string);
+      const { csv, csv_sha256: sha, ...ticket } = evidence;
+      const request = ticketRequest(planGroup, ticket);
+      need(typeof csv === 'string' && path.basename(csv) === csv && /\.csv$/.test(csv) && !(csv in manifest.artifacts), '需求单的 CSV 文件名无效');
+      const text = fs.readFileSync(path.join(batchPath, csv), 'utf8');
+      need(sha256(text) === sha && text === csvText(planGroup.names, request.script_url), '需求单的 CSV 与本组的行不符');
+    } else if (step === 'cls_started') {
+      need(ticketGroup(manifest.plan, records, group).csv, NO_TICKET);
       need(stages.length === 0, '已有 CLS 尝试，先查草稿，不能重复新建');
     } else if (step === 'cls_api_attempt') {
       const action = evidence.action;
@@ -496,7 +604,8 @@ export function kindOf(g: Record<string, any>): string {
  */
 export function message(dir: string): Record<string, any> {
   const { path: batchPath, manifest } = loadBatch(dir);
-  return composeMessage(manifest.plan.groups as Plan[], events(batchPath));
+  const records = events(batchPath);
+  return composeMessage(ticketGroups(manifest.plan, records), records);
 }
 
 /** The group message from the plan's groups and the batch's events; the part of `message` that needs no batch on disk. */
@@ -536,7 +645,7 @@ export function report(dir: string): Record<string, any> {
   const plan = manifest.plan as Plan;
   const state = status(batchPath);
   const groups: Record<string, any>[] = [];
-  for (const group of plan.groups as Plan[]) {
+  for (const group of ticketGroups(plan, records)) {
     const result: Record<string, any> = { group: group.id, quantity: group.request.quantity, csv: group.csv ? path.join(batchPath, group.csv) : null, steps: state.groups[group.id] };
     for (const event of records) {
       if (event.group === group.id && (event.step === 'draft_saved' || event.step === 'scripts_imported')) {

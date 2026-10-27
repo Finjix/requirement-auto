@@ -15,11 +15,13 @@ export const BRIDGE_VERSION = 'feishu-sdk-bridge/1';
 export const COMMANDS = [
   'info', 'auth-status', 'auth-verify', 'auth-login', 'auth-poll', 'auth-logout', 'auth-check-scopes',
   'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create', 'sheets-dropdown-add',
+  'docx-blocks', 'docx-insert', 'docx-set-texts',
 ] as const;
 
 /** Commands that read their arguments from stdin; the rest take none. */
 export const INPUT_COMMANDS: ReadonlySet<string> = new Set([
   'auth-login', 'auth-poll', 'auth-check-scopes', 'api-get', 'sheets-revision', 'sheets-export', 'sheets-cells-set', 'sheets-create', 'sheets-dropdown-add',
+  'docx-blocks', 'docx-insert', 'docx-set-texts',
 ]);
 
 function object(input: unknown, command: string): Record<string, any> {
@@ -86,6 +88,12 @@ export async function runBridge(command: string, input: unknown, context: Bridge
         data = await api.addDropdownOption(String(args.token ?? ''), String(args.sheet_id ?? ''), String(args.column ?? ''), Number(args.first_row),
           Number(args.last_row), String(args.option ?? ''), String(args.color ?? ''));
         break;
+      case 'docx-blocks': data = await api.docxBlocks(String(args.document ?? '')); break;
+      case 'docx-insert':
+        data = await api.docxInsert(String(args.document ?? ''), String(args.parent ?? ''), Number(args.index), strings(args.children_id, 'children_id'),
+          args.descendants as unknown[], String(args.client_token ?? ''));
+        break;
+      case 'docx-set-texts': data = await api.docxSetTexts(String(args.document ?? ''), args.updates as never, String(args.client_token ?? '')); break;
       default: throw new BridgeError('invalid_request', `未知命令：${command}`);
     }
     return { ok: true, data };

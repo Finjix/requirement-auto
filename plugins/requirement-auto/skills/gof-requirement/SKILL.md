@@ -1,6 +1,6 @@
 ---
 name: gof-requirement
-description: "Publish GOFCN creative-material requirements (发布需求 / 素材需求 / 建单 / 创意进度表 / CLS 草稿) to suppliers from one or more Feishu requirement documents (sheet tab or doc links): work out rows, tags, 创意形式, 提炼词, supplier, reviewer and CLS fields from the documents (optionally 合并变体名称: one row per piece for its variants), append the rows to the Feishu creative progress sheet and verify them, build the CSV, save an unpublished CLS requirement draft with the CSV imported, hand back screenshots of the progress sheet and the CLS draft, and hand over one copyable group message. Only for materials still to be made: finished materials the user sends to upload are gof-creative-upload (rows, no ticket). Asks only what cannot be worked out; runs everything once the plan is approved."
+description: "Publish GOFCN creative-material requirements (发布需求 / 素材需求 / 建单 / 创意进度表 / CLS 草稿) to suppliers from one or more Feishu requirement documents (sheet tab or doc links): work out rows, tags, 创意形式, 提炼词, supplier, reviewer and CLS fields from the documents (optionally 合并变体名称: one row per piece for its variants), append the rows to the Feishu creative progress sheet and verify them, build the CSV, save an unpublished CLS requirement draft with the CSV imported, hand back screenshots of the progress sheet and the CLS draft, and hand over one copyable group message. Also in steps: reserve numbers first (占号) and build the ticket for those rows later (发单), and write the requirement into the user's Feishu requirement document (填需求表 / 写进文档). Only for materials still to be made: finished materials the user sends to upload are gof-creative-upload (rows, no ticket). Asks only what cannot be worked out; runs everything once the plan is approved."
 ---
 
 # GOFCN 发布需求 (publish a requirement)
@@ -14,6 +14,8 @@ Talk to the user in their language (Chinese unless they write otherwise). Field 
 The user gives the requirement documents; a CLS ticket asks a supplier to make the materials. A request is the **full flow** unless the user narrows it ("只要 CSV"): append progress rows -> verify -> CSV -> unpublished CLS draft -> import the CSV into it -> screenshots of the progress sheet and the draft -> copyable group message. Publishing the draft and sending the message are the user's.
 
 Material files the user sends to put into CLS are [gof-creative-upload](../gof-creative-upload/SKILL.md), not this skill.
+
+Users also take it in steps: **numbers first** ("帮我占 15 条编号", no document yet): rows only (a request without `cls` and `script_url`), then later **the ticket for those rows** ("发单", §5), and **writing into their requirement document** ("把需求填到文档里", §6). Each step has its own plan and go-ahead.
 
 **Several links in one message are one request:** one plan, one approval, one append of all rows, one CLS draft per document, one group message for all.
 
@@ -53,7 +55,7 @@ Run `gof login check` at the start of every task, after approval before the firs
 
 References: [feishu-sdk-workflow.md](references/feishu-sdk-workflow.md), [api-workflow.md](references/api-workflow.md), [data-contract.md](references/data-contract.md). Run `gof feishu doctor` once (Node, bridge, user, scopes); a missing permission goes to the user.
 
-The user gives one or more Feishu requirement links (sheet tab or doc, usually one per supplier); without a link, ask for it. Each link is its own group, handled in the order given.
+The user gives one or more Feishu requirement links (sheet tab or doc, usually one per supplier); without a link, ask for it. If the user says there is none (没有文档), the group's `script_url` is `无`, which is what its CSV's 脚本内容 says. If they only want numbers reserved for now, plan rows only (no `cls`, no `script_url`): the plan shows numbers and names and no CLS part, and the ticket comes later (§5). Each link is its own group, handled in the order given.
 
 Gather:
 1. `gof feishu document --url <link>` per link: `title` (usually names the supplier: 杨燃对接文档, 丁杰AI), wiki `path`, and the tab (linked, else newest: `sheet.chosen_by`) with header and rows, or the doc text. Add `--full` to read whole scripts.
@@ -70,7 +72,7 @@ Fields (first source that answers wins):
 - **创意者脚本审核人:** message or doc; else a name in the wiki `path` (张天伟) or initials in the title (…-TW → 张天伟), when it matches exactly one `reviewer` option or CLS person. The plan says where it came from ("审核人：张天伟（来自文档所在目录）"). The reviewer is also the CLS creator and the message's 创意人.
 - **CLS 创意方向 / 任务类型:** stated, else the best fit in `choices` (混剪 → 2D剪辑 / 视频; AI 视频 → AI视频 / AI生成).
 - **CLS 供应商 / 创意人:** the program matches the supplier and reviewer to CLS names; if the preview cannot, set `cls.supplier` / `cls.creator` to the `choices` name that is clearly the same.
-- **脚本内容:** the user's link as given.
+- **脚本内容:** the user's link as given; `无` when the user says there is no document.
 - **`label` (optional):** the short name the user or doc gives the requirement ("迭代", "素人剧情"); the plan shows it as `message_kind` ("素人剧情*25") and the user can correct it there.
 - **Dropdown values:** prefer an existing option that means the same (same spelling as in `options`). 一级/二级标签: add a new one only when the message or doc states it. 创意形式, 设计师供应商 and 创意者脚本审核人: a value the dropdown lacks is simply added. Either way the plan lists it (`new_options`: "新增创意形式 X"), and the user's go-ahead covers it.
 
@@ -103,3 +105,21 @@ Then:
 **Screenshots** (after the report, in the working directory; they go to the user with the reply): the progress sheet on the appended rows, `gof feishu screenshot --batch … --output progress-<time>.png`, and each group's CLS draft, `gof cls screenshot --batch … --group <group> --output cls-draft-<group>-<time>.png` (for a single document `--group` can be left out). Both only look at the pages in this user's own browser: the sheet opens as the user (the Feishu scan logs in the web page too), the draft in the CLS app. Take what the run produced: no progress picture when nothing was appended, no draft picture for a group without a draft. Then look at each picture yourself (open the PNG) before it goes out: a sign-in page, a "no permission" page, an empty sheet or a sheet that does not show the new GOFCN numbers is not handed over. A refused or poor picture never fails the task: say in one line which picture is missing and why (the command's `reason`, e.g. a lost Feishu web login: `gof login check`, then once more), and keep the links.
 
 Give the user: appended numbers, the links from the report's `links` (only those; not the CSV or other local files) ("创意进度表：<link>", "CLS 草稿：<link>", or with several documents "CLS 草稿（<供应商>·<类型名>）：<link>"), the copyable message and what is left for them (publish, fill in 需求编号, paste into the group, @李聪（Cici）, send). The screenshots go as attachments only: no text link to them, no local path or URL for the image (such a link does not open); the links above stay. Give the links for whatever exists also when the run stopped part-way.
+
+## 5. Ticket for rows already appended (占号 first, 发单 later)
+
+When the user asks to 发单 / 建单 for rows that were appended without a ticket (numbers reserved earlier), the rows are not appended again: the ticket is attached to their batch.
+
+1. The batch: the one this session made; else `gof batch list --number <a material number>` (lists the user's batches with numbers and groups; `ticket: false` = no ticket yet). Batches go after 7 days untouched; none found: tell the user the plugin cannot build this ticket now, and the names to do it by hand.
+2. Work out, as in §1: the requirement document (`script_url`, or `无`), CLS 创意方向 / 任务类型 (and `cls.supplier` / `cls.creator` if the preview cannot match them), `label` if given. `gof cls catalog`, then write `<tmp>/ticket-<group>.json` (`{"script_url": …, "cls": {…}, "label": …}`) and run `gof batch ticket --batch B --group 01 --ticket … --catalog … --preview`.
+3. Show the plan from the preview (requirement name, quantity, first and last name, 创意方向, 任务类型, CLS 供应商, 创意人, 脚本内容, saved unpublished with the scripts imported, `message_kind`); end with "确认后我就开始执行".
+4. After the go-ahead: the same command without `--preview` (writes the group's CSV and records the ticket), then §3 for that group and §4 (no progress screenshot: nothing was appended now). A correction before §3 starts: attach again; the last one counts.
+
+## 6. Writing into a requirement document
+
+When the user asks to put the requirement into their document ("把需求填到文档里", "把编号写进需求表"): read it, plan the edit, show it, write after the go-ahead. Only additions: new blocks, or text in empty cells; nothing in the document is changed or deleted. Details in [feishu-sdk-workflow.md](references/feishu-sdk-workflow.md#editing-a-requirement-document).
+
+1. Docx: `gof feishu document --url <link> --outline` (top-level blocks by `index`, a table by its first rows; `--block <index>` for one whole). Sheet: `gof feishu document --url …` (rows by sheet row, columns by letter).
+2. Follow the document's own layout: a dated log gets the new entry where the newest one is (usually at the top), headed and laid out like the entry before it (same heading level and title pattern, "需求数量：N条", a table with that entry's header and the names in the 命名 column); a table with an empty 命名 column gets the names filled in. Write the edit file (`insert` or `fill`) to `<tmp>` and run `gof feishu doc-edit --url … --edit … --check`.
+3. Show what will be written where in a few lines ("在「1023——AI片头衔接需求」上方新增：1027-AI片头需求 / 需求数量：15条 / 表格 命名、方向 15 行"), wait for the go-ahead, then run it without `--check`. `already_present`: it is in already, nothing was written. A refusal names the cell that is not empty or the place that moved: read again and plan again.
+4. A login from before document editing lacks the permission: the command says so; do the Feishu QR login (§0) once more, then run it again. `没有这份文档的编辑权限`: the user asks the document's owner for edit access.
