@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { attachTicket, clsCheck, listBatches, message, preflight, prepare, record, report, status, verify } from './batch.ts';
+import { adopt, attachTicket, clsCheck, listBatches, message, preflight, prepare, record, report, status, verify } from './batch.ts';
 import { ClsError } from './cls-adapter.ts';
 import { clsPreview, operation } from './cls.ts';
 import * as online from './cls-online.ts';
@@ -89,6 +89,16 @@ function batchCommand(command: string, args: string[]): Result {
     case 'list': {
       const number = str(parse(args, { number: { type: 'string' } }).values.number);
       return listBatches(undefined, number === undefined ? undefined : intOf(number.replace(/^GOFCN/i, ''), 'number'));
+    }
+    case 'adopt': {
+      const { values } = parse(args, { numbers: { type: 'string' }, snapshot: { type: 'string' }, supplier: { type: 'string' }, reviewer: { type: 'string' },
+        'output-root': { type: 'string' } });
+      const numbers = parseNumbers(mustHave(values.numbers, 'numbers'));
+      // The export from `gof feishu snapshot`, as for `gof feishu plan`: nothing is written, the rows are only read from it.
+      const snap = new Snapshot(mustHave(values.snapshot, 'snapshot'));
+      try {
+        return adopt(snap, numbers, { supplier: str(values.supplier), reviewer: str(values.reviewer), outputRoot: str(values['output-root']) });
+      } finally { snap.close(); }
     }
     case 'ticket': {
       const { values } = parse(args, { batch: { type: 'string' }, group: { type: 'string' }, ticket: { type: 'string' }, catalog: { type: 'string' },

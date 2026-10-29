@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "requirement-auto",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "GOFCN 素材需求自动化，两个技能：发布需求（按需求文档追加创意进度表并验收、生成 CSV、保存 CLS 未发布需求草稿并导入脚本、回传截图和群消息；也可先占号、之后再发单，或把需求写进飞书需求文档）；上传素材（把做好的素材登记进创意进度表，再按素材名称上传到 CLS 创意列表并返回截图）；飞书登录和飞书接口由 feishu 插件提供（需一并安装），与其他插件共用一次登录。",
   "keywords": ["feishu", "lark", "gofcn", "requirement", "automation", "cls", "upload"],
   "extensions": {

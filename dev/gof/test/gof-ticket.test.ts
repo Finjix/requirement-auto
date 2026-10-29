@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { attachTicket, csvText, listBatches, message, NO_TICKET, prepare, record, report, status } from '../src/gof/batch.ts';
+import { ADOPTED, adopt, attachTicket, csvText, listBatches, message, NO_TICKET, prepare, record, report, status, verify } from '../src/gof/batch.ts';
 import { operation, parseCsv } from '../src/gof/cls.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { normalizeRequest } from '../src/gof/request.ts';
@@ -160,4 +160,64 @@ test('the batches of the user are listed newest first, and found by a material n
   const { result, code } = await main(['batch', 'ticket', '--batch', dir, '--group', '01', '--ticket', ticketFile, '--catalog', path.join(fixtures, 'catalog.json'), '--preview']);
   assert.equal(code, 0, JSON.stringify(result));
   assert.equal(result.status, 'ticket_preview');
+});
+
+test('rows already in the sheet but in no batch are taken over as they are, and then get their ticket like reserved rows', async () => {
+  const root = tmp();
+  const sheet = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
+  assert.equal(reason(() => adopt(sheet, [1011, 1014], { outputRoot: root })), '进度表里没有这些编号的行：GOFCN1014');
+  assert.equal(reason(() => adopt(sheet, [1011, 1013], { outputRoot: root })),
+    '这些行的设计师供应商不一致（供应商丙、供应商甲）：用 --supplier 指明这张需求单的设计师供应商');
+  assert.deepEqual(fs.readdirSync(root), []);
+
+  // In any order; the sheet decides the names, the supplier and the reviewer.
+  const adopted = adopt(sheet, [1012, 1011], { outputRoot: root });
+  const dir = adopted.batch as string;
+  assert.deepEqual(adopted, {
+    status: 'rows_adopted', batch: dir, worksheet: 'GOFCN创意进度 26年3月', quantity: 2, first_number: 1011, last_number: 1012,
+    first: 'GOFCN1011_玩法_卖点_视频_新爆点', last: 'GOFCN1012_玩法_卖点_视频_新爆点', supplier: '供应商丙', reviewer: '张三',
+  });
+  assert.equal(status(dir).append_verified, true);
+  assert.equal(reason(() => adopt(sheet, [1012, 1013], { outputRoot: root })), `GOFCN1012 已在批次 ${dir} 里：用这一批继续（gof batch list --number 1012）`);
+
+  // Nothing to append or read back.
+  assert.equal(reason(() => record(dir, 'append_started', null)), ADOPTED);
+  assert.equal(reason(() => verify(dir, sheet)), ADOPTED);
+
+  // The ticket, the CLS operations and the message as for rows reserved first.
+  const preview = attachTicket(dir, '01', ticket, catalog, true);
+  assert.deepEqual([preview.requirement_name, preview.quantity, preview.message_kind, preview.cls_names.supplier],
+    ['GOFCN1011-GOFCN1012', 2, '玩法*2', '丙公司（供应商丙）']);
+  const attached = attachTicket(dir, '01', ticket, catalog);
+  assert.equal(fs.readFileSync(attached.csv, 'utf8'), csvText([adopted.first, adopted.last], LINK));
+  record(dir, 'cls_started', '01');
+  const save = operation(dir, '01', 'save_draft', catalog, observations);
+  assert.deepEqual([save.payload.name, save.expected.names], ['GOFCN1011-GOFCN1012', [adopted.first, adopted.last]]);
+  record(dir, 'handoff', '01', { reason: '用户在 CLS 手动建单' });
+  assert.ok((message(dir).message as string).includes('（玩法*2）\n供应商：供应商丙'));
+  const [listed] = listBatches(root, 1011).batches;
+  assert.deepEqual([listed.adopted, listed.groups[0].ticket], [true, true]);
+
+  // A stop is resumed by the user's word, with nothing to read back.
+  record(dir, 'blocked', null, { reason: '暂停' });
+  record(dir, 'resumed', null, { confirmed: true, reason: '继续', cls_reconciled: true });
+  assert.equal(status(dir).blocked, false);
+
+  // Rows of different people: the request names who the ticket is for. From the command line.
+  const other = tmp();
+  const { result, code } = await main(['batch', 'adopt', '--numbers', 'GOFCN1011-GOFCN1013', '--snapshot', sheet.path, '--supplier', '供应商甲',
+    '--reviewer', '李四', '--output-root', other]);
+  assert.equal(code, 0, JSON.stringify(result));
+  assert.deepEqual([result.quantity, result.supplier, result.reviewer], [3, '供应商甲', '李四']);
+  assert.equal(attachTicket(result.batch, '01', ticket, catalog, true).message_kind, '玩法*2，画面*1');
+});
+
+test('rows of a batch only prepared can still be taken over; once its write went out, the batch keeps them', () => {
+  const root = tmp();
+  const sheet = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
+  const { verify: appendedNow } = appended(root);
+  const elsewhere = tmp();
+  assert.equal(adopt(sheet, [1011], { outputRoot: elsewhere }).status, 'rows_adopted');
+  appendedNow();
+  assert.match(reason(() => adopt(sheet, [1011], { outputRoot: root })), /^GOFCN1011 已在批次 .+ 里：用这一批继续/);
 });

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CellRange, columnLetter } from './a1.ts';
 import { BRIDGE_VERSION, feishuServe, runFeishu, type BridgeReply } from './feishu-plugin.ts';
-import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
+import { ADOPTED, events, kindOf, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
 import { lookupRows, variantBases } from './creative.ts';
@@ -269,6 +269,7 @@ export async function apiPlan(bridge: Bridge, snapshot: Snapshot, plan: Plan): P
 /** The one production write: only after the isolated probe receipt, once per batch, then read back and verified. */
 export async function execute(bridge: Bridge, dir: string, receipt: string): Promise<Obj> {
   const { path: batchPath, manifest } = loadBatch(dir);
+  need(!manifest.plan.adopted, ADOPTED);
   need(!events(batchPath).some(e => e.step === 'append_started'), '已有接口写入尝试；只能回读验收，不再次发送');
   const context = readJson(path.join(batchPath, 'api-plan.json'));
   checkSeal(context, 'api_plan_id');
@@ -371,6 +372,7 @@ export async function probe(bridge: Bridge, receipt: string): Promise<Obj> {
 /** Re-read an existing batch without sending a write, even after an unknown result. */
 export async function reconcile(bridge: Bridge, dir: string): Promise<Obj> {
   const { path: batchPath, manifest } = loadBatch(dir);
+  need(!manifest.plan.adopted, ADOPTED);
   const context = readJson(path.join(batchPath, 'api-plan.json'));
   checkSeal(context, 'api_plan_id');
   await bridge.doctor();

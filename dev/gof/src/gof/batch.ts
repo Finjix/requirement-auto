@@ -7,6 +7,7 @@ import { resolveDataPaths } from '../paths.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { collectIds, hasContent, inlineOptions, plainRules, scanSheets, Snapshot, validationProjection, holds } from './snapshot.ts';
 import { buildPayload, PENDING_SUPPLIER, requirementName, validateBatchReceipt, validateReceipt } from './cls.ts';
+import { lookupRows, nameBody } from './creative.ts';
 import { validateRuleEvidence } from './rules.ts';
 import {
   Blocked, canonical, checkClsUrl, isInside, isObject, checkTarget, CSV_HEADERS, digest, FIXED_TAG, need, readJson, sha256, TARGET, writeJsonNew,
@@ -151,6 +152,83 @@ export function prepare(plan: Plan, snapshot: Snapshot, options: PrepareOptions 
   }
 }
 
+/** Why a batch made by `adopt` has nothing to append, verify or read back. */
+export const ADOPTED = '这一批接管的是进度表里已有的行（gof batch adopt），没有追加，也没有可核对的写入';
+
+export interface AdoptOptions { supplier?: string | undefined; reviewer?: string | undefined; outputRoot?: string | undefined }
+
+/**
+ * A batch for rows that are in the progress sheet already but in no batch of this user: registered by hand or by a colleague, or their
+ * batch is gone (an interrupted conversation, removed after 7 days). Nothing is written to the sheet. The rows are taken as the sheet has
+ * them (names, tags, supplier, reviewer), recorded as `rows_adopted`, and the batch is then like one whose rows were appended without a
+ * ticket: `attachTicket` gives it one. Refused only where the ticket would be unclear: a number the sheet lacks, one number on rows of
+ * different names, rows of different suppliers or reviewers (`supplier` / `reviewer` decide then), numbers another batch already holds.
+ */
+export function adopt(snapshot: Snapshot, numbers: number[], options: AdoptOptions = {}): Record<string, any> {
+  const wanted = [...new Set(numbers)].sort((a, b) => a - b);
+  need(wanted.length > 0, '缺少编号');
+  const base = options.outputRoot !== undefined ? path.resolve(options.outputRoot) : defaultBatchRoot();
+  fs.mkdirSync(base, { recursive: true });
+  // A batch holds its numbers once its rows went out or were taken over; one only prepared holds nothing yet.
+  for (const name of fs.readdirSync(base)) {
+    let plan: Plan;
+    let steps: string[];
+    try { plan = loadBatch(path.join(base, name)).manifest.plan; steps = events(path.join(base, name)).map(e => e.step); } catch { continue; }
+    if (!steps.some(s => ['append_started', 'append_verified', 'rows_adopted'].includes(s))) continue;
+    const held = (plan.rows as Plan[]).map(r => r.number as number).filter(n => wanted.includes(n));
+    need(held.length === 0, `GOFCN${held[0]} 已在批次 ${path.join(base, name)} 里：用这一批继续（gof batch list --number ${held[0]}）`);
+  }
+  const { byNumber } = lookupRows(snapshot, wanted);
+  const missing = wanted.filter(n => !byNumber.has(n));
+  need(missing.length === 0, `进度表里没有这些编号的行：${missing.map(n => `GOFCN${n}`).join('、')}`);
+  const rows = wanted.map(n => {
+    const found = byNumber.get(n)!;
+    const where = found.map(r => `${r.sheet} 第 ${r.row} 行`).join('、');
+    need(new Set(found.map(r => r.name)).size === 1, `GOFCN${n} 在进度表里有 ${found.length} 行、素材名称不同（${where}）`);
+    need(found[0]!.name, `GOFCN${n}（${where}）没有素材名称`);
+    return found[0]!;
+  });
+  const one = (field: 'supplier' | 'reviewer', label: string, given: string | undefined): string => {
+    if (given !== undefined && given.trim() !== '') return given.trim();
+    const values = [...new Set(rows.map(r => r[field]))];
+    need(values.length === 1, `这些行的${label}不一致（${values.map(v => v || '空').join('、')}）：用 --${field} 指明这张需求单的${label}`);
+    need(values[0] !== '', `这些行没有${label}：用 --${field} 指明`);
+    return values[0]!;
+  };
+  const supplier = one('supplier', '设计师供应商', options.supplier);
+  const reviewer = one('reviewer', '创意者脚本审核人', options.reviewer);
+  // The tags and form only name the requirement in the group message and its CSV; a row typed by hand without them has them in its name.
+  const items = rows.map(r => {
+    const parts = nameBody(r.name)?.split('_') ?? [];
+    return { quantity: 1, primary_tag: r.primary_tag || parts[0] || '', secondary_tag: r.secondary_tag || parts[1] || '',
+      creative_form: r.creative_form, ...(r.keyword ? { keyword: r.keyword } : {}) };
+  });
+  const request = normalizeRequest({ groups: [{ supplier, reviewer, items }] });
+  const names = rows.map(r => r.name!);
+  const plan: Plan = {
+    schema: 1, target: TARGET, adopted: true, worksheet: rows[0]!.sheet, current_sheet: null, request, baseline_digest: snapshot.fingerprint,
+    range: null, quantity: rows.length, first_number: wanted[0], last_number: wanted[wanted.length - 1],
+    rows: rows.map(r => ({ sheet: r.sheet, row: r.row, number: r.number, name: r.name, group: '01' })),
+    groups: [{ id: '01', csv: null, names, rows: rows.map(r => r.row), request: request.groups[0] }],
+  };
+  plan.plan_id = digest(plan).slice(0, 24);
+  let dir = path.join(base, plan.plan_id);
+  for (let n = 2; fs.existsSync(dir); n++) dir = path.join(base, `${plan.plan_id}-${n}`);
+  fs.mkdirSync(dir);
+  try {
+    // The export the rows were taken from, kept as the batch's baseline.
+    fs.copyFileSync(snapshot.path, path.join(dir, 'baseline.xlsx'), fs.constants.COPYFILE_EXCL);
+    writeJsonNew(path.join(dir, 'manifest.json'), { plan, baseline_sha256: sha256(fs.readFileSync(path.join(dir, 'baseline.xlsx'))), artifacts: {} });
+    fs.mkdirSync(path.join(dir, 'events'));
+    record(dir, 'rows_adopted', null, { snapshot_digest: snapshot.fingerprint });
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  return { status: 'rows_adopted', batch: dir, worksheet: plan.worksheet, quantity: plan.quantity, first_number: plan.first_number,
+    last_number: plan.last_number, first: names[0], last: names[names.length - 1], supplier, reviewer };
+}
+
 export function events(dir: string): BatchEvent[] {
   const folder = path.join(dir, 'events');
   const files = fs.readdirSync(folder).filter(f => f.endsWith('.json')).sort();
@@ -174,8 +252,10 @@ export function status(dir: string): Record<string, any> {
   for (const event of records) if (event.step === 'blocked' || event.step === 'resumed') blocked = event.step === 'blocked';
   const groups: Record<string, string[]> = {};
   for (const g of manifest.plan.groups) groups[g.id] = records.filter(e => e.group === g.id).map(e => e.step);
+  // Rows taken over from the sheet (adopt) are there already: for the ticket and CLS they count as appended and verified.
   return { status: 'recorded', plan_id: manifest.plan.plan_id, events: records,
-    append_verified: records.some(e => e.step === 'append_verified'), blocked, groups };
+    append_verified: records.some(e => e.step === 'append_verified' || e.step === 'rows_adopted'), blocked, groups,
+    ...(manifest.plan.adopted ? { adopted: true } : {}) };
 }
 
 function filterExtendsOnlyIntoAppend(before: Record<string, any> | null, after: Record<string, any> | null, area: CellRange): boolean {
@@ -217,6 +297,7 @@ function byPosition(a: string, b: string): number {
 export function verify(dir: string, fresh: Snapshot, validationEvidence?: unknown): Record<string, any> {
   const { path: batchPath, manifest } = loadBatch(dir);
   const plan = manifest.plan as Plan;
+  need(!plan.adopted, ADOPTED);
   let apiDropdowns: Plan[] | null = null;
   const evidenceIsApi = validationEvidence !== null && typeof validationEvidence === 'object' && !Array.isArray(validationEvidence)
     && (validationEvidence as Evidence).transport === 'feishu_api';
@@ -474,7 +555,8 @@ function checkTicketAllowed(batchPath: string, plan: Plan, groupId: string): voi
 
 /**
  * The batches of this user (newest first), each with its sheet, numbers and groups, and whether a group has its CLS ticket; `number`
- * keeps only the batch holding that material number. A folder that is not a readable batch is left out.
+ * keeps only the batch holding that material number. `adopted` marks one made of rows taken over from the sheet (see adopt). A folder
+ * that is not a readable batch is left out.
  */
 export function listBatches(root: string = defaultBatchRoot(), number?: number): Record<string, any> {
   const found: Record<string, any>[] = [];
@@ -489,6 +571,7 @@ export function listBatches(root: string = defaultBatchRoot(), number?: number):
       entry = {
         batch: batchPath, prepared_at: fs.statSync(path.join(batchPath, 'manifest.json')).mtime.toISOString(), worksheet: plan.worksheet,
         first_number: plan.first_number, last_number: plan.last_number, append_verified: state.append_verified, blocked: state.blocked,
+        ...(state.adopted ? { adopted: true } : {}),
         groups: ticketGroups(plan, records).map(g => ({
           group: g.id, quantity: g.request.quantity, first: g.names[0], last: g.names[g.names.length - 1], supplier: g.request.supplier || null,
           reviewer: g.request.reviewer, ticket: Object.keys(g.request.cls ?? {}).length > 0, steps: state.groups[g.id],
@@ -509,7 +592,16 @@ export function record(dir: string, step: string, groupId?: string | null, evide
   const state = status(batchPath);
   const group = groupId ?? null;
   need(!state.blocked || step === 'resumed', '已阻塞批次不能继续自动化；保留现场等待用户处理');
-  if (step === 'resumed') {
+  const adopted = manifest.plan.adopted === true;
+  need(!adopted || !['append_started', 'append_verified'].includes(step), ADOPTED);
+  if (step === 'rows_adopted') {
+    need(adopted && records.length === 0 && group === null, '只有 gof batch adopt 接管已有行时记录');
+  } else if (step === 'resumed' && adopted) {
+    // Nothing was appended, so there is no write to read back: only what CLS already has must have been looked at.
+    need(state.blocked && group === null, '恢复需阻塞记录');
+    need(evidence.confirmed === true && hasReason(evidence), '恢复需用户明确决定及原因');
+    if (records.some(e => e.step === 'cls_started')) need(evidence.cls_reconciled === true, '需先核对现有草稿/导入结果，避免重复工单');
+  } else if (step === 'resumed') {
     need(state.blocked && fresh !== undefined && group === null, '恢复需阻塞记录及最新快照');
     need(evidence.confirmed === true && hasReason(evidence), '恢复需用户明确决定及原因');
     const result = verify(batchPath, fresh, evidence.validations);
