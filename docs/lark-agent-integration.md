@@ -8,7 +8,7 @@ lark-agent（`D:\project\lark-agent`）已经实现了"插件文件夹拖进去�
 
 ```bat
 start.cmd stop
-robocopy D:\project\feishu-plugin\plugins\feishu plugins\feishu /MIR
+robocopy D:\project\feishu-plugin\plugins\feishu plugins\feishu-plugin /MIR
 robocopy D:\project\requirement-auto\plugins\requirement-auto plugins\requirement-auto /MIR
 start.cmd
 ```
