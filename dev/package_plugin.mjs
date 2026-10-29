@@ -16,9 +16,8 @@ const MARKETPLACE = path.join(ROOT, '.agents', 'plugins', 'marketplace.json');
 const FORBIDDEN_PARTS = new Set(['__pycache__', 'node_modules', '.state', '.git', '.codex', 'browser-profile']);
 const FORBIDDEN_NAMES = new Set(['auth.json', 'login.json', 'app.json', 'refresh.lock', '.env', 'account.json', 'login-qr.json']);
 const FORBIDDEN_EXTENSIONS = ['.py', '.pyc', '.pyd', '.dll', '.exe', '.png'];
-const ENTRY_POINTS = ['bridge', 'gof'].map(name => `server/dist/${name}.mjs`);
 const REQUIRED_FILES = [
-  'plugin.json', ...ENTRY_POINTS,
+  'plugin.json', 'server/dist/gof.mjs',
   ...SKILLS.flatMap(skill => [`skills/${skill}/SKILL.md`, `skills/${skill}/agents/openai.yaml`]),
   'skills/gof-requirement/assets/csv-template.csv', 'skills/gof-requirement/references/feishu-sdk-workflow.md',
 ];

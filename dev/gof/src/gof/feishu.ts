@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CellRange, columnLetter } from './a1.ts';
-import { BRIDGE_VERSION, runBridge, type BridgeContext, type BridgeReply } from '../bridge.ts';
+import { BRIDGE_VERSION, feishuServe, runFeishu, type BridgeReply } from './feishu-plugin.ts';
 import { events, kindOf, loadBatch, preflight, record, report, sheetUrl, status, verify } from './batch.ts';
 import { cellShown } from './brief.ts';
 import { requirementName } from './cls.ts';
@@ -14,8 +14,8 @@ import { FIELD_HEADERS, headerMatches, Snapshot } from './snapshot.ts';
 import { Blocked, canonical, digest, NODE, need, readJson, TARGET, writeJsonNew, WriteSent } from './util.ts';
 
 /**
- * The allowlisted Feishu transport: it calls the SDK bridge in this process (the same code the bridge command runs) and
- * orchestrates validate → write → read back → verify. No generic write, no v2 values write, no implicit retry, no target override.
+ * The allowlisted Feishu transport: it calls the feishu plugin's bridge (see feishu-plugin.ts) and orchestrates validate → write →
+ * read back → verify. No generic write, no v2 values write, no implicit retry, no target override.
  */
 
 type Obj = Record<string, any>;
@@ -34,8 +34,8 @@ export class Bridge {
   readonly calls: Obj[] = [];
   private readonly run: BridgeRunner;
 
-  constructor(run?: BridgeRunner, context: BridgeContext = {}) {
-    this.run = run ?? ((command, input) => runBridge(command, input, context));
+  constructor(run?: BridgeRunner) {
+    this.run = run ?? ((command, input) => feishuServe().call(command, input));
   }
 
   async call(name: string, payload?: unknown, options: { write?: boolean; path?: string } = {}): Promise<any> {
@@ -105,7 +105,7 @@ export class Bridge {
     need(info.bridge === BRIDGE_VERSION, '飞书桥版本与技能不匹配');
     need(info.app_configured === true, '未配置飞书应用（FEISHU_APP_ID / FEISHU_APP_SECRET），由宿主或管理员配置');
     const auth = await this.call('auth-status');
-    need(auth.logged_in === true, '飞书尚未授权：用 gof.mjs feishu login start 取得授权链接交给用户确认');
+    need(auth.logged_in === true, '飞书尚未授权：用 gof.mjs feishu login start 和 gof.mjs feishu authorize --qr 让用户扫码登录');
     await this.checkScopes(SCOPES);
     return { version: BRIDGE_VERSION, node: info.node, logged_in: true, identity: 'user', user_name: auth.name, open_id: auth.open_id,
       storage: auth.storage, required_scopes: SCOPES };
@@ -406,16 +406,23 @@ export async function reconcile(bridge: Bridge, dir: string): Promise<Obj> {
 }
 
 /** `gof feishu login start|poll|status|logout`: the device authorization. Never prints a token. */
-export async function login(bridge: Bridge, action: string, options: { wait?: number; probeScope?: boolean } = {}): Promise<any> {
-  if (action === 'start') return bridge.call('auth-login', { extra_scopes: options.probeScope ? ['sheets:spreadsheet:create'] : [] });
-  if (action === 'poll') {
-    const wait = options.wait ?? 40;
-    need(Number.isInteger(wait) && wait >= 0 && wait <= 50, '--wait 必须在 0 到 50 秒之间');
-    return bridge.call('auth-poll', { wait_ms: wait * 1000 });
+/**
+ * `gof feishu login …` and `gof feishu authorize …` are the feishu plugin's `login …` and `authorize …`, run as they are: the Feishu login is
+ * that plugin's, shared with the other plugins. `--probe-scope` asks for the permission the isolated overwrite probe needs on top.
+ */
+export async function login(action: string, options: { wait?: number; probeScope?: boolean } = {}): Promise<{ result: Obj; code: number }> {
+  need(['start', 'poll', 'status', 'logout'].includes(action), `未知登录动作：${action}`);
+  const args = ['login', action];
+  if (action === 'start' && options.probeScope) args.push('--extra-scope', 'sheets:spreadsheet:create');
+  if (action === 'poll' && options.wait !== undefined) {
+    need(Number.isInteger(options.wait) && options.wait >= 0 && options.wait <= 50, '--wait 必须在 0 到 50 秒之间');
+    args.push('--wait', String(options.wait));
   }
-  if (action === 'status') return bridge.call('auth-status');
-  need(action === 'logout', `未知登录动作：${action}`);
-  return bridge.call('auth-logout');
+  return runFeishu(args);
+}
+
+export async function authorizeFeishu(qr: string | undefined): Promise<{ result: Obj; code: number }> {
+  return runFeishu(['authorize', ...(qr !== undefined ? ['--qr', qr] : [])]);
 }
 
 /** The progress columns whose dropdown may gain an option, by the name `dropdown-add --field` takes (the plan's field names work too). */

@@ -1,11 +1,11 @@
-# Feishu SDK bridge
+# Feishu bridge
 
-Everything Feishu goes through `gof feishu …` (`gof` = `node <skill>/../../server/dist/gof.mjs`), which calls the in-plugin bridge (official `@larksuiteoapi/node-sdk`) in the same process.
+Everything Feishu goes through `gof feishu …` (`gof` = `node <skill>/../../server/dist/gof.mjs`), which calls the **feishu plugin**'s bridge (its `feishu.mjs`, official `@larksuiteoapi/node-sdk`). The feishu plugin must be installed next to this one; without it every Feishu command says so. The Feishu login is that plugin's and is shared with the user's other plugins.
 
 ## Runtime
 
-- Node.js 24+. The host sets `LARK_AGENT_USER_DIR` (absolute user dir), optionally `LARK_AGENT_USER_OPEN_ID`, and `FEISHU_APP_ID` / `FEISHU_APP_SECRET`. User data is under `<user dir>/requirement-auto/{feishu,batches,cls,tmp}`.
-- Standalone: data goes to `PLUGIN_DATA`, else `~/.requirement-auto/default`; app credentials may be in that dir's `app.json`.
+- Node.js 24+. The host sets `LARK_AGENT_USER_DIR` (absolute user dir), optionally `LARK_AGENT_USER_OPEN_ID`, and `FEISHU_APP_ID` / `FEISHU_APP_SECRET`; the feishu plugin runs with the same environment. requirement-auto's data is under `<user dir>/requirement-auto/{batches,cls,tmp}`; the Feishu login and the hidden browser under `<user dir>/feishu/`.
+- Standalone: requirement-auto's data goes to `PLUGIN_DATA`, else `~/.requirement-auto/default`; the Feishu login to `~/.feishu-plugin/default` (app credentials may be in that dir's `app.json`).
 
 ```text
 gof feishu doctor      # Node, bridge, current user's login and required scopes
@@ -20,7 +20,7 @@ gof feishu login status                  # local record only, no network
 gof feishu login logout                  # log out or switch accounts
 ```
 
-No output contains a token. The QR path (`gof feishu authorize --qr`) is in SKILL.md section 0.
+These and `gof feishu authorize [--qr]` are the feishu plugin's `login …` and `authorize …`, run as they are (same output). No output contains a token. The QR path is in SKILL.md section 0.
 
 If the host declares the user's Open ID, another authorized account is rejected.
 
@@ -90,4 +90,4 @@ The target is the test Wiki node `GH7cwIxzZi3gVdk2s3tc1dDbnQc`; the bridge resol
 
 ## Overwrite probe (maintainers)
 
-The receipt of the 2026-10-20 probe ships as `assets/overwrite-receipt.json`, bound to `feishu-sdk-bridge/1`. After a bridge version change: `gof feishu login start --probe-scope`, `login poll`, `gof feishu probe --receipt <new>.json` (creates a new `GOFCN_API_SAFETY_*` workbook and tries occupied writes), then replace the shipped file and record the server's "non-empty write refused" code in `OCCUPIED` in `dev/feishu-sdk/src/api.ts`.
+The receipt of the 2026-10-20 probe ships as `assets/overwrite-receipt.json`, bound to `feishu-sdk-bridge/1`. After a bridge version change: `gof feishu login start --probe-scope`, `login poll`, `gof feishu probe --receipt <new>.json` (creates a new `GOFCN_API_SAFETY_*` workbook and tries occupied writes), then replace the shipped file and record the server's "non-empty write refused" code in `OCCUPIED` in the feishu plugin's `dev/feishu-sdk/src/api.ts`.

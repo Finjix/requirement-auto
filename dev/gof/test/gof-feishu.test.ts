@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BRIDGE_VERSION, type BridgeReply } from '../src/bridge.ts';
+import { BRIDGE_VERSION, FeishuServe, type BridgeReply } from '../src/gof/feishu-plugin.ts';
 import { status } from '../src/gof/batch.ts';
-import { Bridge, OccupiedRefusal, SCOPES, addOption, apiPlan, execute, login, planWithApi, probe, readRules, reconcile, recomputeApiPlan, recomputePlan } from '../src/gof/feishu.ts';
+import { Bridge, OccupiedRefusal, SCOPES, addOption, apiPlan, authorizeFeishu, execute, login, planWithApi, probe, readRules, reconcile, recomputeApiPlan, recomputePlan } from '../src/gof/feishu.ts';
 import { readBrief } from '../src/gof/brief.ts';
 import { context } from '../src/gof/context.ts';
 import { makePlan } from '../src/gof/plan.ts';
@@ -113,13 +113,24 @@ test('doctor needs the right bridge, a configured app, a login and every scope',
   }
 });
 
-test('login commands pass through with bounded waits', async () => {
-  const { bridge, calls } = bridgeWith(() => reply({ state: 'pending', retry_after_s: 5, expires_in_s: 200 }));
-  assert.equal((await login(bridge, 'poll', { wait: 7 })).state, 'pending');
-  assert.deepEqual(calls.at(-1)!.payload, { wait_ms: 7000 });
-  await login(bridge, 'start', { probeScope: true });
-  assert.deepEqual(calls.at(-1)!.payload, { extra_scopes: ['sheets:spreadsheet:create'] });
-  await failsWith(login(bridge, 'poll', { wait: 51 }), /0 到 50/);
+test('login and authorize are the feishu plugin commands, run with this user’s environment, bounded waits checked first', async () => {
+  // A stand-in for feishu.mjs that answers with what it was asked and for whom.
+  const fake = path.join(tmp(), 'feishu.mjs');
+  fs.writeFileSync(fake, 'process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), user: process.env.LARK_AGENT_USER_DIR })); process.exitCode = process.argv.includes("poll") ? 2 : 0;');
+  const alice = path.join(tmp(), 'alice');
+  const before = { ...process.env };
+  Object.assign(process.env, { FEISHU_PLUGIN: fake, LARK_AGENT_USER_DIR: alice });
+  try {
+    assert.deepEqual(await login('start', { probeScope: true }), { result: { argv: ['login', 'start', '--extra-scope', 'sheets:spreadsheet:create'], user: alice }, code: 0 });
+    assert.deepEqual((await login('poll', { wait: 7 })), { result: { argv: ['login', 'poll', '--wait', '7'], user: alice }, code: 2 }, 'its exit code comes along');
+    assert.deepEqual((await authorizeFeishu('q.png')).result.argv, ['authorize', '--qr', 'q.png']);
+    const viaGof = await main(['feishu', 'login', 'status'], new Bridge(async () => { throw new Error('the bridge is not used'); }));
+    assert.deepEqual(viaGof, { result: { argv: ['login', 'status'], user: alice }, code: 0 });
+    await failsWith(login('poll', { wait: 51 }), /0 到 50/);
+    await failsWith(login('nope'), /未知登录动作/);
+  } finally {
+    for (const key of ['FEISHU_PLUGIN', 'LARK_AGENT_USER_DIR']) { if (before[key] === undefined) delete process.env[key]; else process.env[key] = before[key]; }
+  }
 });
 
 /** The server side of the safety probe: it refuses to write over a non-empty cell, like the real allow_overwrite=false. */
@@ -204,14 +215,17 @@ test('a server that overwrites fails the probe and no receipt is written', async
   assert.equal(fs.existsSync(receipt), false);
 });
 
-test('the in-process bridge answers local commands and enforces its own allowlist', async () => {
+test('the feishu plugin’s bridge (the real one, next to this repository) answers for this user and enforces its own allowlist', async () => {
   const userDir = tmp();
-  const bridge = new Bridge(undefined, { env: { LARK_AGENT_USER_DIR: userDir, FEISHU_APP_ID: 'cli_x', FEISHU_APP_SECRET: 'secret-000000' } });
-  const info = await bridge.call('info');
-  assert.deepEqual([info.bridge, info.storage], [BRIDGE_VERSION, 'host']);
-  assert.deepEqual([(await bridge.call('auth-status')).logged_in], [false]);
-  await failsWith(bridge.doctor(), /尚未授权/);
-  await failsWith(bridge.call('api-get', { path: '/open-apis/im/v1/messages' }), /invalid_request/);
+  const serve = new FeishuServe({ ...process.env, LARK_AGENT_USER_DIR: userDir, FEISHU_APP_ID: 'cli_x', FEISHU_APP_SECRET: 'secret-000000' });
+  try {
+    const bridge = new Bridge((command, input) => serve.call(command, input));
+    const info = await bridge.call('info');
+    assert.deepEqual([info.bridge, info.storage, info.browser_profile], [BRIDGE_VERSION, 'host', path.join(userDir, 'feishu', 'browser-profile')]);
+    assert.deepEqual([(await bridge.call('auth-status')).logged_in], [false]);
+    await failsWith(bridge.doctor(), /尚未授权/);
+    await failsWith(bridge.call('api-get', { path: '/open-apis/im/v1/messages' }), /invalid_request/);
+  } finally { serve.close(); }
 });
 
 test('a dropdown keeps the options of the rule it follows and adds only what the request asks for', () => {

@@ -22,7 +22,7 @@ test('old batches and temporary files go; the logins next to them, and anything 
   const batch = write(path.join(paths.batches, 'abc123', 'manifest.json'));
   write(path.join(paths.batches, 'abc123', 'nested', 'evidence.json'));
   const snapshot = write(path.join(paths.tmp, 'snap.xlsx'));
-  const auth = write(paths.auth);
+  const qr = write(path.join(paths.cls, 'login-qr.json'));
   const account = write(path.join(paths.root, 'cls', 'account.json'));
   const profile = write(path.join(paths.root, 'cls', 'browser-profile', 'Default', 'Cookies'));
 
@@ -32,7 +32,7 @@ test('old batches and temporary files go; the logins next to them, and anything 
   assert.equal(await pruneExpired(paths, later(8)), 2, 'the batch folder and the temporary file');
   assert.ok(!fs.existsSync(path.join(paths.batches, 'abc123')) && !fs.existsSync(snapshot));
   assert.ok(fs.existsSync(paths.batches) && fs.existsSync(paths.tmp), 'the folders themselves stay');
-  for (const kept of [auth, account, profile]) assert.ok(fs.existsSync(kept), `${kept} is login data and stays`);
+  for (const kept of [qr, account, profile]) assert.ok(fs.existsSync(kept), `${kept} is login data and stays`);
 });
 
 test('a batch is removed whole or not at all: one recently touched file keeps all of it', async () => {

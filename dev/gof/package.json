@@ -1,9 +1,9 @@
 {
-  "name": "requirement-auto-feishu-sdk",
+  "name": "requirement-auto-gof",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Feishu SDK layer of the requirement-auto plugin: device-flow login, per-user token store, allowlisted API calls, the bridge and the gof command line (the skill's business logic). Bundled into plugins/requirement-auto/server/dist.",
+  "description": "Source of requirement-auto's command line gof (the skills' business logic: progress sheet, CLS, material upload). Feishu goes through the feishu plugin. Bundled into plugins/requirement-auto/server/dist/gof.mjs.",
   "engines": {
     "node": ">=24"
   },
@@ -11,9 +11,6 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "node build.mjs",
     "test": "npm run typecheck && npm run build && node --test test/*.test.ts && node ../package_plugin.mjs --check"
-  },
-  "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.75.0"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

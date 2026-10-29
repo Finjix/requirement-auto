@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { findBrowser, openBrowser, type BrowserHandle, type Cdp } from './chromium.ts';
 import { resolveDataPaths } from '../paths.ts';
+import { browserProfileDir } from './feishu-plugin.ts';
 import { Blocked } from './util.ts';
 
 /*
@@ -337,19 +338,22 @@ export async function captureLoginQr(options: QrOptions): Promise<QrCapture> {
   }
 }
 
-/** The folders this user's CLS login lives in: the browser profile, under the user's own data directory. */
+/**
+ * The browser this user's CLS login lives in. It is the feishu plugin's (under the user's own directory): CLS signs in through the company's
+ * Feishu single sign-on, and that browser holds the user's Feishu web session from the Feishu login, so the user scans once for both.
+ */
 export function clsProfileDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveDataPaths(env).root, 'cls', 'browser-profile');
+  return browserProfileDir(env);
 }
 
 /** Where the QR picture that is waiting to be scanned is recorded (see cls-guard.ts). */
 export function clsQrFile(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveDataPaths(env).root, 'cls', 'login-qr.json');
+  return path.join(resolveDataPaths(env).cls, 'login-qr.json');
 }
 
 /** Which CLS account this user's login is pinned to (id and name only; see cls-guard.ts). */
 export function clsAccountFile(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveDataPaths(env).root, 'cls', 'account.json');
+  return path.join(resolveDataPaths(env).cls, 'account.json');
 }
 
 /** A session for the commands that talk to CLS: whoever is logged in on this user's profile, or a refusal that says to log in. */

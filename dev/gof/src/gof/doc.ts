@@ -1,4 +1,3 @@
-import { DOC_EDIT_SCOPE } from '../config.ts';
 import { columnLetter, parseCoord } from './a1.ts';
 import { docTarget } from './brief.ts';
 import { target, type Bridge } from './feishu.ts';
@@ -15,6 +14,9 @@ import { Blocked, canonical, digest, isObject, need, NODE } from './util.ts';
  */
 
 type Obj = Record<string, any>;
+
+/** Editing a Feishu document: the feishu plugin asks for it with every login, but a login from before it was added lacks it. */
+const DOC_EDIT_SCOPE = 'docx:document';
 
 const TYPE_NAMES: Record<number, string> = {
   1: 'page', 2: 'text', 3: 'heading1', 4: 'heading2', 5: 'heading3', 6: 'heading4', 7: 'heading5', 8: 'heading6', 9: 'heading7', 10: 'heading8',

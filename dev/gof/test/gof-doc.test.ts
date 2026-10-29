@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { BRIDGE_VERSION, type BridgeReply } from '../src/bridge.ts';
+import { BRIDGE_VERSION, type BridgeReply } from '../src/gof/feishu-plugin.ts';
 import { editDoc, outline } from '../src/gof/doc.ts';
 import { docPicture } from '../src/gof/shots-online.ts';
 import { Bridge } from '../src/gof/feishu.ts';

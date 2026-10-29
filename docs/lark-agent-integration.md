@@ -4,11 +4,12 @@ lark-agent（`D:\project\lark-agent`）已经实现了"插件文件夹拖进去�
 
 ## 怎么放
 
-把本仓库的 **`plugins/requirement-auto`**（里面直接是 `plugin.json` 的那个文件夹，不是整个仓库）复制到 lark-agent 的 **`plugins/`** 下，重启 lark-agent。在 lark-agent 目录里：
+把本仓库的 **`plugins/requirement-auto`**（里面直接是 `plugin.json` 的那个文件夹，不是整个仓库）和 feishu 仓库的 **`plugins/feishu`**（飞书登录和飞书接口都由它提供，必须一起放）复制到 lark-agent 的 **`plugins/`** 下，重启 lark-agent。在 lark-agent 目录里：
 
 ```bat
 start.cmd stop
-robocopy D:\project\requirement-auto\plugins\requirement-auto plugins\requirement-auto /MIR /XD .state /XF auth.json app.json
+robocopy D:\project\feishu\plugins\feishu plugins\feishu /MIR
+robocopy D:\project\requirement-auto\plugins\requirement-auto plugins\requirement-auto /MIR
 start.cmd
 ```
 
@@ -17,7 +18,7 @@ start.cmd
 - 以后改了插件：重复上面的复制和重启。内容变了（版本号没变也算）会自动整体替换；把文件夹从 `plugins/` 删掉就卸载；文件夹改名加 `_` 前缀就是停用。
 - 服务运行中复制没有效果，只在启动时扫描。
 
-用户不需要任何配置。用户在飞书里给来需求文档要发布素材需求时，Codex 会按技能描述自己选用 `requirement-auto:gof-requirement`（发布需求：进度表 + CLS 建单）；发来做好的素材要求上传时选用 `requirement-auto:gof-creative-upload`（上传素材：进度表 + CLS 上传素材，不建单）。需要飞书登录时，Codex 运行 `gof.mjs feishu login start` 和 `gof.mjs feishu authorize --qr`，把二维码发给用户。
+用户不需要任何配置。用户在飞书里给来需求文档要发布素材需求时，Codex 会按技能描述自己选用 `requirement-auto:gof-requirement`（发布需求：进度表 + CLS 建单）；发来做好的素材要求上传时选用 `requirement-auto:gof-creative-upload`（上传素材：进度表 + CLS 上传素材，不建单）。需要飞书登录时，Codex 运行 `gof.mjs feishu login start` 和 `gof.mjs feishu authorize --qr`（转给 feishu 插件），把二维码发给用户；用户在 gof-ad-audit 等别的插件里登录过的，这里不用再登录。
 
 ### 素材上传与附件
 
@@ -41,7 +42,7 @@ start.cmd
 | 插件在 Codex 里的名字 | `requirement-auto@lark-agent`；技能 `requirement-auto:gof-requirement`、`requirement-auto:gof-creative-upload` |
 | 每个用户每一轮的环境变量 | `LARK_AGENT_USER_DIR`（`user/<名>`，不是其中的 `workspace`）、`LARK_AGENT_USER_OPEN_ID`（飞书 Open ID）、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`（机器人的应用）。Codex 的 shell 工具拿得到，`gof.mjs` 直接读取 |
 | MCP 服务 | 插件不带 `mcp.json`，没有 MCP 服务。lark-agent 的 `mcpServers()` 读不到 `mcp.json` 时返回空，不注册、也不关闭任何服务；这段逻辑留着给以后声明了 MCP 的插件用 |
-| 数据位置 | `user/<名>/requirement-auto/{feishu,cls,batches,tmp}`。不在 `workspace/` 里，所以不在 lark-agent 的清理范围内，也不会被当作交付文件发给用户。登录（`feishu`、`cls`）一直保留；`batches` 和 `tmp` 由插件自己清理：每次运行 `gof` 开始时，删除 7 天（环境变量 `REQUIREMENT_AUTO_RETENTION_DAYS` 可改，整数天）内没有任何文件被创建、修改或移动过的批次目录和 tmp 文件（`src/retention.ts`）。批次整个删或整个不删，所以超过 7 天的未完成批次不能再恢复 |
+| 数据位置 | `user/<名>/requirement-auto/{cls,batches,tmp}`；飞书登录和无头浏览器（飞书网页和 CLS 的登录态）是 feishu 插件的，在 `user/<名>/feishu/`。都不在 `workspace/` 里，所以不在 lark-agent 的清理范围内，也不会被当作交付文件发给用户。登录（`feishu/`、`cls/`）一直保留；`batches` 和 `tmp` 由插件自己清理：每次运行 `gof` 开始时，删除 7 天（环境变量 `REQUIREMENT_AUTO_RETENTION_DAYS` 可改，整数天）内没有任何文件被创建、修改或移动过的批次目录和 tmp 文件（`src/retention.ts`）。批次整个删或整个不删，所以超过 7 天的未完成批次不能再恢复 |
 
 ### 为什么插件不带 MCP 服务
 
@@ -76,15 +77,15 @@ start.cmd
 
 1. 用真实模型回合走一遍：用户在飞书里提需求 → Codex 选用技能 → 运行 `gof.mjs login check` 和 `gof.mjs feishu login start`。
 2. 飞书应用后台：给应用的**用户身份**开通 `wiki:wiki:readonly sheets:spreadsheet:readonly sheets:spreadsheet:read sheets:spreadsheet:write_only sheets:spreadsheet drive:export:readonly docx:document:readonly offline_access`（隔离探测另需 `sheets:spreadsheet:create`），允许用户身份授权，并发布版本。lark-agent 不记录插件需要的权限，以这份清单为准。
-3. 真实设备授权登录，以及两个飞书账号分别登录互不串号（用 A 的链接让 B 确认应被拒绝；`user/<A>/requirement-auto/feishu/auth.json` 与 `user/<B>/…` 里的 `open_id` 不同）。
+3. 真实设备授权登录，以及两个飞书账号分别登录互不串号（用 A 的链接让 B 确认应被拒绝；`user/<A>/feishu/auth.json` 与 `user/<B>/…` 里的 `open_id` 不同）。
 4. 按 [README](../README.md) 的“还没做”清单做隔离探测，再在测试进度表上走全流程。CLS 登录本身已在真实环境验证（见 README），但还没有经过 lark-agent 的每用户环境走一遍。
 
 ## 已知限制
 
-- **CLS 登录走二维码，不需要有人在电脑前，也没有浏览器窗口**：技能先 `gof.mjs cls login --qr cls-login.png`，无头浏览器停在飞书扫码页，图片写在 Codex 的工作目录（`user/<名>/workspace`，也就是 lark-agent 的交付目录），随回复自动发给用户，由用户用飞书手机端扫码确认；之后 `gof.mjs cls session` 取得登录。二维码只能发给本人。登录保存在 `user/<名>/requirement-auto/cls/browser-profile`，之后的命令用无头浏览器静默取得会话并走 HTTP。前提是这台电脑装了 Chrome 或 Edge，不需要桌面会话。
+- **CLS 登录走二维码，不需要有人在电脑前，也没有浏览器窗口**：技能先 `gof.mjs cls login --qr cls-login.png`，无头浏览器停在飞书扫码页，图片写在 Codex 的工作目录（`user/<名>/workspace`，也就是 lark-agent 的交付目录），随回复自动发给用户，由用户用飞书手机端扫码确认；之后 `gof.mjs cls session` 取得登录。二维码只能发给本人。登录保存在 feishu 插件的浏览器资料 `user/<名>/feishu/browser-profile` 里，之后的命令用无头浏览器静默取得会话并走 HTTP。前提是这台电脑装了 Chrome 或 Edge，不需要桌面会话。
 - **机器人密钥**：有插件时，每个用户的每一轮 Codex 进程都带着 `FEISHU_APP_SECRET`。lark-agent 的 README 本来就声明 Codex 能读 `.env`，这里没有新增一类风险，但要知道。想收紧：给设备授权单独建一个飞书应用，把 `.env` 里的 `FEISHU_APP_ID/SECRET` 换成它。
 - **宿主设了 `LARK_AGENT_USER_OPEN_ID` 就必须同时设 `LARK_AGENT_USER_DIR`**，否则命令拒绝运行，不会回落到所有用户共用的目录。
-- **隔离是逻辑上的**：Codex 是 `danger-full-access`，同一个 Windows 账号。这防得住串号和误操作，防不住被提示词注入后主动去读别人目录（`cat user/别人/requirement-auto/feishu/auth.json`）的模型。要真隔离，得给每个用户单独的系统账号或沙箱。
+- **隔离是逻辑上的**：Codex 是 `danger-full-access`，同一个 Windows 账号。这防得住串号和误操作，防不住被提示词注入后主动去读别人目录（`cat user/别人/feishu/auth.json`）的模型。要真隔离，得给每个用户单独的系统账号或沙箱。
 
 | 防住的 | 怎么防 |
 |---|---|

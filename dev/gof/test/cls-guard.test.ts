@@ -6,7 +6,6 @@ import { main } from '../src/gof/cli.ts';
 import { checkPin, guardOnline, readPin, writeQr } from '../src/gof/cls-guard.ts';
 import type { Online } from '../src/gof/cls-online.ts';
 import { clsAccountFile, clsProfileDir, type Capture } from '../src/gof/cls-session.ts';
-import { BridgeError } from '../src/errors.ts';
 import { resolveDataPaths } from '../src/paths.ts';
 import { tempDir } from './helpers/tmp.ts';
 
@@ -22,11 +21,12 @@ function scripted(...answers: Capture[]): Online {
   };
 }
 
-test('each user has their own CLS profile and account file under their own directory', () => {
+test('each user has their own CLS profile and account file under their own directory; the browser is the feishu plugin’s', () => {
   const a = tempDir('ra-cls-a-'), b = tempDir('ra-cls-b-');
-  const envA = { LARK_AGENT_USER_DIR: a }, envB = { LARK_AGENT_USER_DIR: b };
-  assert.equal(clsProfileDir(envA), path.join(a, 'requirement-auto', 'cls', 'browser-profile'));
-  assert.equal(clsProfileDir(envB), path.join(b, 'requirement-auto', 'cls', 'browser-profile'));
+  const envA = { ...process.env, LARK_AGENT_USER_DIR: a }, envB = { ...process.env, LARK_AGENT_USER_DIR: b };
+  // Asked of the real feishu plugin next to this repository: its browser holds the Feishu web session CLS signs in with.
+  assert.equal(clsProfileDir(envA), path.join(a, 'feishu', 'browser-profile'));
+  assert.equal(clsProfileDir(envB), path.join(b, 'feishu', 'browser-profile'));
   assert.equal(clsAccountFile(envA), path.join(a, 'requirement-auto', 'cls', 'account.json'));
   assert.notEqual(clsProfileDir(envA), clsProfileDir(envB));
   for (const [file, dir] of [[clsProfileDir(envA), a], [clsAccountFile(envA), a], [clsProfileDir(envB), b], [clsAccountFile(envB), b]] as const) {
@@ -35,8 +35,8 @@ test('each user has their own CLS profile and account file under their own direc
 });
 
 test('a host that names the user but not the directory is refused instead of sharing one folder', () => {
-  assert.throws(() => resolveDataPaths({ LARK_AGENT_USER_OPEN_ID: 'ou_alice' }, tempDir('ra-home-')), (e: BridgeError) => e.kind === 'config' && /LARK_AGENT_USER_DIR/.test(e.message));
-  assert.throws(() => clsProfileDir({ LARK_AGENT_USER_OPEN_ID: 'ou_alice' }), (e: BridgeError) => e.kind === 'config');
+  assert.throws(() => resolveDataPaths({ LARK_AGENT_USER_OPEN_ID: 'ou_alice' }, tempDir('ra-home-')), (e: Error) => e.name === 'Blocked' && /LARK_AGENT_USER_DIR/.test(e.message));
+  assert.throws(() => clsProfileDir({ ...process.env, LARK_AGENT_USER_DIR: '', LARK_AGENT_USER_OPEN_ID: 'ou_alice' }), (e: Error) => e.name === 'Blocked' && /LARK_AGENT_USER_DIR/.test(e.message));
   // The single-machine modes are unchanged.
   assert.equal(resolveDataPaths({ PLUGIN_DATA: tempDir('ra-pd-') }).mode, 'plugin-data');
   assert.equal(resolveDataPaths({}, tempDir('ra-home-')).mode, 'standalone');

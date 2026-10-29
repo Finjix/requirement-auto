@@ -9,11 +9,10 @@ import * as online from './cls-online.ts';
 import * as creative from './creative-online.ts';
 import { parseNumbers } from './creative.ts';
 import { docPicture, draftPicture, sheetPicture } from './shots-online.ts';
-import { authorizeFeishu, realDeviceWeb, type DeviceWeb } from './feishu-web.ts';
 import { readBrief } from './brief.ts';
 import { editDoc, outline } from './doc.ts';
 import { context } from './context.ts';
-import { addOption, Bridge, execute, login, planSummary, planWithApi, probe, reconcile, recomputePlan, takeSnapshot } from './feishu.ts';
+import { addOption, authorizeFeishu, Bridge, execute, login, planSummary, planWithApi, probe, reconcile, recomputePlan, takeSnapshot } from './feishu.ts';
 import { makePlan } from './plan.ts';
 import { Snapshot } from './snapshot.ts';
 import { Blocked, checkTarget, isInside, need, readJson, writeJsonNew, WriteSent } from './util.ts';
@@ -119,7 +118,10 @@ function batchCommand(command: string, args: string[]): Result {
   }
 }
 
-async function feishuCommand(command: string, args: string[], bridge: Bridge, web: DeviceWeb, via: online.Online): Promise<Result> {
+/** Results of the feishu plugin's own commands (login, authorize) come back with its exit code. */
+type Forwarded = { forwarded: { result: Result; code: number } };
+
+async function feishuCommand(command: string, args: string[], bridge: Bridge, via: online.Online): Promise<Result | Forwarded> {
   switch (command) {
     case 'screenshot': {
       const { values } = parse(args, { batch: { type: 'string' }, output: { type: 'string' } });
@@ -130,11 +132,11 @@ async function feishuCommand(command: string, args: string[], bridge: Bridge, we
       const { values, positionals } = parse(args, { wait: { type: 'string' }, 'probe-scope': { type: 'boolean' } }, true);
       need(positionals.length === 1 && ['start', 'poll', 'status', 'logout'].includes(positionals[0]!), 'login 需要 start、poll、status 或 logout');
       const wait = str(values.wait);
-      return login(bridge, positionals[0]!, { ...(wait !== undefined ? { wait: Number(wait) } : {}), probeScope: values['probe-scope'] === true });
+      return { forwarded: await login(positionals[0]!, { ...(wait !== undefined ? { wait: Number(wait) } : {}), probeScope: values['probe-scope'] === true }) };
     }
     case 'authorize': {
       const { values } = parse(args, { qr: { type: 'string' } });
-      return authorizeFeishu(bridge, web, str(values.qr));
+      return { forwarded: await authorizeFeishu(str(values.qr)) };
     }
     case 'probe': return probe(bridge, mustHave(parse(args, { receipt: { type: 'string' } }).values.receipt, 'receipt'));
     case 'append': {
@@ -319,12 +321,16 @@ async function loginCheck(bridge: Bridge, via: online.Online): Promise<Result> {
   return { status, feishu, cls, ...(todo.length ? { todo } : {}) };
 }
 
-export async function main(argv: string[], bridge: Bridge = new Bridge(), via: online.Online = online.realOnline, web: DeviceWeb = realDeviceWeb): Promise<{ result: Result; code: number }> {
+export async function main(argv: string[], bridge: Bridge = new Bridge(), via: online.Online = online.realOnline): Promise<{ result: Result; code: number }> {
   try {
     const [group, command, ...rest] = argv;
     let result: Result;
     if (group === 'batch') result = batchCommand(command ?? '', rest);
-    else if (group === 'feishu') result = await feishuCommand(command ?? '', rest, bridge, web, via);
+    else if (group === 'feishu') {
+      const answer = await feishuCommand(command ?? '', rest, bridge, via);
+      if ('forwarded' in answer) return answer.forwarded as { result: Result; code: number };
+      result = answer;
+    }
     else if (group === 'login' && command === 'check') result = await loginCheck(bridge, via);
     else if (group === 'cls') result = CLS_ONLINE.includes(command ?? '') ? await clsOnlineCommand(command!, rest, via) : clsCommand(argv.slice(1));
     else if (group === 'creative') result = await creativeCommand(command ?? '', rest, bridge, via);
