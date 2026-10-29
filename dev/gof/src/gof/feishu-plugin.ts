@@ -9,7 +9,7 @@ import { Blocked } from './util.ts';
 type Child = ChildProcessByStdio<Writable, Readable, null>;
 
 /*
- * Feishu is the feishu plugin's (github.com/Finjix/feishu): the login, the allowlisted API calls and the hidden browser that holds the
+ * Feishu is the feishu plugin's (github.com/Finjix/feishu-plugin): the login, the allowlisted API calls and the hidden browser that holds the
  * user's Feishu web session all live there, shared with every plugin that works in Feishu, so the user logs in once. This file is how
  * requirement-auto reaches it: it finds the plugin's feishu.mjs and runs it with this process's environment (the host's user directory,
  * Open ID and app), so it serves the same user. The contract is the plugin's docs/for-plugins.md; nothing of the plugin is imported.
@@ -41,7 +41,7 @@ const newest = (pluginDir: string): string | undefined =>
 
 /**
  * Where feishu.mjs is: FEISHU_PLUGIN when it is set, else the first match going up from this file: the plugin folder next to this one
- * (lark-agent's plugins/), Codex's plugin cache (the same marketplace, or another), or the feishu repository next to this one (development).
+ * (lark-agent's plugins/), Codex's plugin cache (the same marketplace, or another), or the feishu-plugin repository next to this one (development).
  */
 export function locateFeishu(env: NodeJS.ProcessEnv = process.env, from: string = fileURLToPath(import.meta.url)): string {
   const named = env[FEISHU_PLUGIN_ENV]?.trim();
@@ -52,7 +52,7 @@ export function locateFeishu(env: NodeJS.ProcessEnv = process.env, from: string 
   for (let dir = path.dirname(from), level = 0; level < 8; level++) {
     const found = [path.join(dir, 'feishu', ENTRY)].find(isFile) ?? newest(path.join(dir, 'feishu'))
       ?? dirs(dir).map(market => newest(path.join(dir, market, 'feishu'))).find(Boolean)
-      ?? [path.join(dir, 'feishu', 'plugins', 'feishu', ENTRY)].find(isFile);
+      ?? [path.join(dir, 'feishu-plugin', 'plugins', 'feishu', ENTRY)].find(isFile);
     if (found) return found;
     const up = path.dirname(dir);
     if (up === dir) break;

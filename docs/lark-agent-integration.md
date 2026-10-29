@@ -4,11 +4,11 @@ lark-agent（`D:\project\lark-agent`）已经实现了"插件文件夹拖进去�
 
 ## 怎么放
 
-把本仓库的 **`plugins/requirement-auto`**（里面直接是 `plugin.json` 的那个文件夹，不是整个仓库）和 feishu 仓库的 **`plugins/feishu`**（飞书登录和飞书接口都由它提供，必须一起放）复制到 lark-agent 的 **`plugins/`** 下，重启 lark-agent。在 lark-agent 目录里：
+把本仓库的 **`plugins/requirement-auto`**（里面直接是 `plugin.json` 的那个文件夹，不是整个仓库）和 feishu-plugin 仓库的 **`plugins/feishu`**（飞书登录和飞书接口都由它提供，必须一起放）复制到 lark-agent 的 **`plugins/`** 下，重启 lark-agent。在 lark-agent 目录里：
 
 ```bat
 start.cmd stop
-robocopy D:\project\feishu\plugins\feishu plugins\feishu /MIR
+robocopy D:\project\feishu-plugin\plugins\feishu plugins\feishu /MIR
 robocopy D:\project\requirement-auto\plugins\requirement-auto plugins\requirement-auto /MIR
 start.cmd
 ```

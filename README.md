@@ -5,7 +5,7 @@ GOFCN 素材需求自动化的 **Codex 插件**（可被 ChatGPT/Codex 桌面版
 - **发布需求**（`gof-requirement`）：用户给来需求文档 → 通过飞书 SDK 防覆盖追加创意进度表并验收 → 生成 CSV，保存 CLS 未发布需求草稿、导入脚本 → 回传创意进度表和 CLS 草稿的截图，生成可复制群消息。CLS 需求单是把素材制作需求发给供应商。
 - **上传素材**（`gof-creative-upload`）：用户给来做好的素材 → 给还没登记的文件追加创意进度表的行并验收（文件已按进度表规则命名、编号待定时，如 `GOFCNxxxxx_AI玩法优化_搂冰块抢资源_割资源冰块对抗_竖版.mp4`，行照文件名整理；已在表里的不重复登记）→ 按每个文件那一行的素材名称，按 CLS「上传创意」页面的规则上传到创意列表 → 回传进度表和创意列表截图。素材已经做好，**不建 CLS 需求单**，没有 CSV 和群消息。
 
-飞书登录和飞书接口由 [feishu 插件](https://github.com/Finjix/feishu) 提供，必须一起安装：登录按用户隔离，用户扫一次码，飞书和 CLS 都登录好，和用户的其他插件（gof-ad-audit）共用这次登录。
+飞书登录和飞书接口由 [feishu 插件](https://github.com/Finjix/feishu-plugin) 提供，必须一起安装：登录按用户隔离，用户扫一次码，飞书和 CLS 都登录好，和用户的其他插件（gof-ad-audit）共用这次登录。
 
 ## 目录
 
@@ -24,7 +24,7 @@ docs/lark-agent-integration.md       放进 lark-agent：怎么放、两边的�
 
 ## 它怎么工作
 
-- **飞书全部经由 feishu 插件**：飞书的登录、白名单接口（读取 Wiki/文档/表格规则、导出完整 XLSX、防覆盖写入 `allow_overwrite:false`，服务端拒绝非空目标）和存着飞书网页登录态的无头浏览器都在 feishu 插件里（基于 `@larksuiteoapi/node-sdk`），本插件不再自带飞书 SDK。`gof.mjs` 找到 feishu 插件的 `feishu.mjs`（`src/gof/feishu-plugin.ts`：环境变量 `FEISHU_PLUGIN`，否则从自己的位置往上找并排的插件文件夹、Codex 插件缓存、开发时并排的仓库），每个命令起一个 `feishu.mjs serve` 子进程调用它的桥，子进程继承同一份环境，所以服务的是同一个用户；约定见 feishu 仓库的 `docs/for-plugins.md`。`gof.mjs feishu` 负责"校验 → 写 → 回读 → 验收"的编排；`gof.mjs batch` 离线规划追加行、校验快照、生成 CSV 和群消息，`gof.mjs cls` 构造 CLS 操作、校验回执，并负责 CLS 的登录和接口请求（见下一条）。XLSX 由 `src/gof/xlsx.ts` 里自带的只读解析器读取（zip + XML），不依赖其他库或运行时。
+- **飞书全部经由 feishu 插件**：飞书的登录、白名单接口（读取 Wiki/文档/表格规则、导出完整 XLSX、防覆盖写入 `allow_overwrite:false`，服务端拒绝非空目标）和存着飞书网页登录态的无头浏览器都在 feishu 插件里（基于 `@larksuiteoapi/node-sdk`），本插件不再自带飞书 SDK。`gof.mjs` 找到 feishu 插件的 `feishu.mjs`（`src/gof/feishu-plugin.ts`：环境变量 `FEISHU_PLUGIN`，否则从自己的位置往上找并排的插件文件夹、Codex 插件缓存、开发时并排的仓库），每个命令起一个 `feishu.mjs serve` 子进程调用它的桥，子进程继承同一份环境，所以服务的是同一个用户；约定见 feishu-plugin 仓库的 `docs/for-plugins.md`。`gof.mjs feishu` 负责"校验 → 写 → 回读 → 验收"的编排；`gof.mjs batch` 离线规划追加行、校验快照、生成 CSV 和群消息，`gof.mjs cls` 构造 CLS 操作、校验回执，并负责 CLS 的登录和接口请求（见下一条）。XLSX 由 `src/gof/xlsx.ts` 里自带的只读解析器读取（zip + XML），不依赖其他库或运行时。
 - **共享进度表上的验收**：接口追加只发送自己的范围，所以写后验收只对追加的行（所有列）和写入列的下拉规则严格；追加期间同事在工作簿别处的改动（其他单元格、其他页签、筛选、行列尺寸、别的列的下拉）列在 `foreign_changes` 里，不再让已写入的批次卡在 `conflict`。写入发出后的任何拒绝都带 `write_sent: true`，只能 `reconcile`；`prepare` 会拒绝为一个已有"写入发出、未核对、且行已在表里"批次的需求再建批次，防止重复追加。同一份计划再次 `prepare`（例如写入没有落地）另起 `<plan_id>-2` 目录，原批次记录保留。
 - **从需求链接自动整理需求，少问用户**：用户只需给飞书需求链接（表格的某一页，或文档；可以一次给多份，一份文档是一组：一张 CLS 单，行号在同一次追加里按链接顺序连续，最后只出一条群消息）。`gof.mjs feishu document` 把它读成文字（表格：标题、表头和每行需求；文档：全文），`gof.mjs feishu context` 给出目标进度表现在的下拉选项、该供应商最近几批行是怎么填的、本人以前的批次（含审核人和 CLS 方向、任务类型）。技能据此推断条数、一二级标签、提炼词（没写明就填“关键词”）、供应商、审核人、CLS 方向和任务类型，推不出的才问，最后给一份计划请用户确认。一二级标签先用文档写明的；没写明就读每行的脚本内容，从现有下拉选项里挑最贴切的。创意形式（制作形式）是选填：只填文档或用户写明的，不猜。设计师供应商要写明：文档和用户的话里都没有就问；只有用户说供应商还没定时，或供应商就是创意者脚本审核人本人时（CLS、群消息和上传的制作人仍是这个人），进度表那格才留空，CLS 供应商选 `待定供应商`，群消息写“供应商：待定供应商”（一批里要么每份需求都有供应商、要么都没有，因为接口一次写一整列）。同一文档里不同类型的行（如 设定3.0 / 设定2.0）用 `items` 按原顺序写进同一张 CLS 单；素材名称由命名公式算出，不再手写（`context` 和 `plan` 用表头的话给出 `naming`）。下拉里没有的值列在计划的 `new_options`，批准后用 `dropdown-add` 加进整列（一级、二级标签要文档写明才加；创意形式、设计师供应商、创意者脚本审核人没有就直接加；供应商列是多选，保持多选）。进度表和 CLS 的叫法不同（冯彦蓉 / 冯彦蓉-实习生，丁杰 / 北京柒曦文化传媒有限公司（丁杰）），程序按唯一包含关系自动对上，对不上的由请求写明 `cls.supplier` / `cls.creator`。批准后表格版本变了（加下拉、别人改了别处）不再要求重新批准，只要新增行、编号和名称不变。
 - **素材名称是 `GOFCN<编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>`**：进度表一贯的公式是 `=CONCATENATE("GOFCN",C,"_",H,"_",I,"_",K,"_",D,L)`。正式表从第 23282 行（2026-10-22）起的行用了不含创意形式和客户端的 `=CONCATENATE("GOFCN",C,"_",H,"_",I,"_",D)`，那是改错了，插件不跟。新行的公式：上一行的公式能按这个顺序命名时沿用它（同事的写法照留，比如末尾的客户端 L，插件不填它）；不能（如 23282 起那种）时插件自己写 `=SUBSTITUTE(CONCATENATE("GOFCN",C,"_",H,"_",I,"_",K,"_",D),"__","_")`。创意形式可以不填，`SUBSTITUTE` 把它留下的 `__` 合成一个 `_`（沿用的公式没套 SUBSTITUTE 时给它套上）；一批要么都填、要么都不填（接口一次写一整列），只有部分行写明时都不填、把它放在提炼词前面，名称一样。一二级标签和创意形式不能含 `_`，提炼词可以含 `_` 但不能在开头、结尾或连续出现（名称按 `_` 分段，否则一个名称有两种读法）。请求可以给某一行“必须叫什么”（`material_name`，前面的 `GOFCN<数字>_` 或 `GOFCNxxxxx_` 会去掉），算出的名称不同就拒绝并说出这一行会叫什么。
@@ -63,17 +63,17 @@ docs/lark-agent-integration.md       放进 lark-agent：怎么放、两边的�
 
 ## 安装与使用
 
-需要 Node.js 24+ 和 [feishu 插件](https://github.com/Finjix/feishu)，别无其他依赖（包约 250 KB）。
+需要 Node.js 24+ 和 [feishu 插件](https://github.com/Finjix/feishu-plugin)，别无其他依赖（包约 250 KB）。
 
 ```bash
-codex plugin marketplace add <feishu 仓库路径>
+codex plugin marketplace add <feishu-plugin 仓库路径>
 codex plugin add feishu@feishu
 codex plugin marketplace add <本仓库路径>
 codex plugin add requirement-auto@requirement-auto
 ```
 
 - **单机用 Codex 桌面版**：没有 `LARK_AGENT_USER_DIR` 时，批次存在 `PLUGIN_DATA`（环境里有的话），否则 `~/.requirement-auto/default`；飞书登录和应用凭证是 feishu 插件的（`~/.feishu-plugin/default`，见它的 README）。
-- **lark-agent（拖入即用）**：把 `plugins/requirement-auto` 和 feishu 仓库的 `plugins/feishu` 复制到 lark-agent 的 `plugins/` 下，重启 lark-agent，不需要任何配置。lark-agent 启动时自动安装，并按用户每轮注入用户目录和飞书应用。步骤和约定见 [docs/lark-agent-integration.md](docs/lark-agent-integration.md)。
+- **lark-agent（拖入即用）**：把 `plugins/requirement-auto` 和 feishu-plugin 仓库的 `plugins/feishu` 复制到 lark-agent 的 `plugins/` 下，重启 lark-agent，不需要任何配置。lark-agent 启动时自动安装，并按用户每轮注入用户目录和飞书应用。步骤和约定见 [docs/lark-agent-integration.md](docs/lark-agent-integration.md)。
 - 改了插件后要让已装副本生效：`codex plugin remove requirement-auto@requirement-auto` 再 `add`（或提升 `plugin.json` 的 version）。
 
 ### Codex 0.163.0 的实测结论
@@ -88,11 +88,11 @@ cd dev/gof && npm ci                    # 一次
 npm test                                # 类型检查 → 打包到 plugins/.../server/dist → node:test
 ```
 
-`npm test` 已经包含插件结构检查（`node dev/package_plugin.mjs --check`）。有两个测试调用真实的 feishu 插件（桥的白名单、浏览器位置），要求旁边有 feishu 仓库并已构建（`D:\project\feishu`，或用 `FEISHU_PLUGIN` 指向 `feishu.mjs`）。
+`npm test` 已经包含插件结构检查（`node dev/package_plugin.mjs --check`）。有两个测试调用真实的 feishu 插件（桥的白名单、浏览器位置），要求旁边有 feishu-plugin 仓库并已构建（`D:\project\feishu-plugin`，或用 `FEISHU_PLUGIN` 指向 `feishu.mjs`）。
 
 发布：`node dev/package_plugin.mjs --output dev/dist/requirement-auto.zip`（先校验结构，再打包并生成 SHA-256）。直接复制 `plugins/requirement-auto` 目录也可以；不要带上 `.state`、批次、`auth.json`、`app.json`。
 
-新增开发工具和测试放进 `dev/`；插件运行需要的脚本和资源放在 `plugins/requirement-auto/`。业务逻辑改在 `dev/gof/src/gof/`，`npm test` 会重新打包进 `server/dist`，记得把产物一起提交。飞书接口本身（登录、白名单、`OCCUPIED` 判断）改在 feishu 仓库。CLS 和截图用的 `src/gof/chromium.ts` 与 feishu 插件的 `browser.ts` 驱动同一个浏览器资料，资料目录锁和 `DevToolsActivePort` 的处理两边要一起改。
+新增开发工具和测试放进 `dev/`；插件运行需要的脚本和资源放在 `plugins/requirement-auto/`。业务逻辑改在 `dev/gof/src/gof/`，`npm test` 会重新打包进 `server/dist`，记得把产物一起提交。飞书接口本身（登录、白名单、`OCCUPIED` 判断）改在 feishu-plugin 仓库。CLS 和截图用的 `src/gof/chromium.ts` 与 feishu 插件的 `browser.ts` 驱动同一个浏览器资料，资料目录锁和 `DevToolsActivePort` 的处理两边要一起改。
 
 `dev/gof/test/fixtures/` 里的 XLSX 夹具和 `golden.json` 是移植前由 Python 版实现（用 openpyxl）生成并记录的"标准答案"（生成脚本在 git 历史里，提交 `test: capture the Python implementation's answers`）。测试比对行范围、编号、名称、CSV 文本、验收结论和拒绝原因，不比对摘要。
 
