@@ -23,6 +23,9 @@ const WRITE_PATHS = [SIGN, CREATE, ANNOTATE, LOG];
 /** Where an upload link may point: Tencent COS over https, as the links CLS hands out do. */
 export const COS_HOST = /^[a-z0-9-]+\.cos\.[a-z0-9-]+\.myqcloud\.com$/;
 
+/** Creatives per page of a name search, as the list page asks for them. */
+export const SEARCH_PAGE = 50;
+
 /**
  * The Content-Type the page sends with each file. The page puts the file with axios 0.19, whose default for PUT is form-urlencoded
  * and which keeps it for a File body; the storage link only signs the host, so this is about matching what CLS gets from the page.
@@ -186,9 +189,9 @@ export function createCreativeAdapter(config: CreativeAdapterConfig) {
     directories: (gameId: number) => get('/api/game/adsdesk/dirs', { id: gameId }),
     people: (gameId: number) => get('/api/game/recommend-filters', { id: gameId }),
     types: (gameId: number) => get('/api/material/filters', { confirmed: 1, fields: 'types', game_id: gameId }),
-    /** Creatives of the game whose name or ID contains the text (confirmed ones, or the 待确认 ones). */
-    search: (gameId: number, text: string, confirmed = true) => get('/api/creatives', {
-      page: 1, page_size: 50, game_id: gameId, keywords: text, keyword_type: 'creative', ...(confirmed ? {} : { confirmed: 0 }),
+    /** One page of the creatives of the game whose name or ID contains the text (confirmed ones, or the 待确认 ones). */
+    search: (gameId: number, text: string, confirmed = true, page = 1) => get('/api/creatives', {
+      page, page_size: SEARCH_PAGE, game_id: gameId, keywords: text, keyword_type: 'creative', ...(confirmed ? {} : { confirmed: 0 }),
     }),
     /** The newest creatives this user uploaded, as the list shows them. */
     mine: (gameId: number, userId: number, pageSize = 50) => get('/api/creatives', {

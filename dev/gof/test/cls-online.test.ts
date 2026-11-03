@@ -200,6 +200,19 @@ test('without a login every online command stops with the instruction to log in,
   } finally { cls.close(); }
 });
 
+test('cls login --qr while CLS is out of reach makes no code to scan: a scan could not log anybody in', async () => {
+  let made = 0;
+  const online: Online = {
+    session: async () => { throw new Error('not used'); },
+    capture: async () => ({ state: 'unreachable', reason: 'HTTP 502' }),
+    loginQr: async () => { made++; throw new Error('no code is to be made'); },
+  };
+  const png = path.join(tempDir('cls-qr-'), 'q.png');
+  const { result, code } = await main(['cls', 'login', '--qr', png], undefined, online);
+  assert.deepEqual([code, result.status, made, fs.existsSync(png)], [2, 'blocked', 0, false]);
+  assert.match(result.reason, /HTTP 502.*不说明登录失效/);
+});
+
 test('cls login --qr: a login that is already there is picked up by one hidden look, and no token is ever printed', async () => {
   const seen: number[] = [];
   const online: Online = {

@@ -62,9 +62,10 @@ export const PENDING_NUMBER = /^GOFCN(?:\d+|[xX×*＊?？#]*)_/;
 /**
  * One run of rows. `raw` holds the item's own keys and `inherited` the group's defaults for the tags, form and keyword. The tags are given;
  * an older request that gives only a name (`material_name`, 一级_二级_创意形式_提炼词) has them read from it. A given name is the one the
- * rows must get: the plan checks it against what the naming formula makes of the row.
+ * rows must get: the plan checks it against what the naming formula makes of the row. Rows taken over from the sheet (`adopted`) have their
+ * names already, so the rules for making a new name are not theirs to meet.
  */
-function item(raw: Record<string, any>, inherited: Record<string, any>, where: string): Item {
+function item(raw: Record<string, any>, inherited: Record<string, any>, where: string, adopted: boolean): Item {
   const q = raw.quantity;
   need(typeof q === 'number' && Number.isInteger(q) && q > 0, 'quantity 必须是正整数');
   const value = (key: string, fallback: unknown) => pick(raw, key, pick(inherited, key, fallback));
@@ -73,9 +74,9 @@ function item(raw: Record<string, any>, inherited: Record<string, any>, where: s
   const keyword = cellText(value('keyword', DEFAULT_KEYWORD), 'keyword');
   need(keyword.trim() !== '', '缺少 keyword');
   // The name is cut into its parts at _ and the formula folds "__" into one: a 提炼词 may hold _, but not at its ends or twice in a row.
-  need(!/^_|_$|__/.test(keyword), `${where}的提炼词“${keyword}”不能以 _ 开头或结尾，也不能有连续的 _`);
+  need(adopted || !/^_|_$|__/.test(keyword), `${where}的提炼词“${keyword}”不能以 _ 开头或结尾，也不能有连续的 _`);
   // It ends up in the 素材名称, which is also the creative's name in CLS, where / and \ cannot be: such a row could never be uploaded.
-  need(!/[\\/]/.test(keyword), `提炼词“${keyword}”不能含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）：换成别的写法`);
+  need(adopted || !/[\\/]/.test(keyword), `提炼词“${keyword}”不能含 / 或 \\（素材名称也是 CLS 里的创意名称，那里不能有）：换成别的写法`);
   const result: Record<string, any> = { quantity: q, creative_form: form, keyword };
   const given = value('material_name', undefined);
   const tagged = ['primary_tag', 'secondary_tag'].every(key => typeof value(key, '') === 'string' && value(key, '').trim() !== '');
@@ -107,12 +108,18 @@ function item(raw: Record<string, any>, inherited: Record<string, any>, where: s
   }
   // A 素材名称 is cut into its parts at _: a tag or form with one of its own would make a name that can be read two ways (no option has one).
   for (const [key, label] of [['primary_tag', '一级标签'], ['secondary_tag', '二级标签'], ['creative_form', '创意形式']] as const) {
-    need(!result[key].includes('_'), `${where}的${label}“${result[key]}”不能含 _：素材名称按 _ 分段，标签和创意形式各占一段，其余写进提炼词`);
+    need(adopted || !result[key].includes('_'), `${where}的${label}“${result[key]}”不能含 _：素材名称按 _ 分段，标签和创意形式各占一段，其余写进提炼词`);
   }
   return result as Item;
 }
 
-export function normalizeRequest(request: unknown): NormalizedRequest {
+export interface NormalizeOptions {
+  /** Rows taken over as the sheet has them (`gof batch adopt`): named already, they need not meet the rules for making a new name. */
+  adopted?: boolean;
+}
+
+export function normalizeRequest(request: unknown, options: NormalizeOptions = {}): NormalizedRequest {
+  const adopted = options.adopted === true;
   need(isObject(request) && subset(Object.keys(request), ['worksheet', 'groups']), '请求有未知字段/目标覆盖');
   const groups = request.groups;
   need(Array.isArray(groups) && groups.length > 0, '需要至少一个供应商/题材组');
@@ -128,7 +135,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
       need(!['material_name', 'topic'].some(k => k in raw), `第 ${index} 组已按 items 分行，素材名称写在各项里`);
       const items = list.map((entry: unknown, i: number) => {
         need(isObject(entry) && subset(Object.keys(entry), ITEM_KEYS), `第 ${index} 组第 ${i + 1} 项有未知字段`);
-        return item(entry, raw, `第 ${index} 组第 ${i + 1} 项`);
+        return item(entry, raw, `第 ${index} 组第 ${i + 1} 项`, adopted);
       });
       const total = items.reduce((n: number, it: Item) => n + it.quantity, 0);
       // A normalized request is normalized again when a batch is prepared: its total is the items' sum.
@@ -137,7 +144,7 @@ export function normalizeRequest(request: unknown): NormalizedRequest {
       if (items.length === 1) Object.assign(g, items[0]);
       else Object.assign(g, { quantity: total, items });
     } else {
-      Object.assign(g, item(raw, {}, `第 ${index} 组`));
+      Object.assign(g, item(raw, {}, `第 ${index} 组`, adopted));
     }
     // The script link goes into the CSV and the CLS ticket. Rows registered for finished materials (the upload skill) get neither: without
     // `cls` they may go without it ('' = none).

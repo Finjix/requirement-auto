@@ -1,15 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ClsError } from './cls-adapter.ts';
-import { createCreativeAdapter, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
+import { createCreativeAdapter, SEARCH_PAGE, signatureEnd, type CreativeAdapter, type CreativeAdapterConfig } from './creative-adapter.ts';
 import {
   appendUploadEvent, buildUploadPlan, DEFAULT_DIRECTORY, findDirectory, flattenDirectories, hashFile, isZip, loadUploadPlan, lookupRows,
   matchPeople, materialRefusal, nameBody, nameParts, normalizeUploadRequest, registeredRow, pendingBody, scanMaterials, searchProgressRows, shownFile, uploadEvents, uploadPlanSummary, variantBases,
-  type DirNode, type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
+  type DirNode, type Material, type ProgressRow, type Skipped, type UploadOptions, type UploadRequest,
 } from './creative.ts';
-import { unpackZip } from './unzip.ts';
+import { unpackZip, type Unpacked } from './unzip.ts';
 import type { Online, Session } from './cls-online.ts';
-import { clsProfileDir } from './cls-session.ts';
+import { checkToken, clsProfileDir } from './cls-session.ts';
+import { notLoaded } from './shot-page.ts';
 import { listScreenshot, type ShotOptions } from './creative-shot.ts';
 import { target, type Bridge } from './feishu.ts';
 import { Snapshot } from './snapshot.ts';
@@ -91,6 +92,24 @@ export async function uploadOptions(online: Online, query: { find?: string; crea
   };
 }
 
+/** How many pages of a name search are read at most (1000 creatives): a short name (01, 封面) is in the names of very many. */
+const SEARCH_PAGES = 20;
+
+/**
+ * The creatives named exactly so, confirmed or waiting for confirmation (待确认). The search finds names that contain the text, newest
+ * first, so the one of exactly this name can be on any page: they are read until the list ends (or, with `first`, until one is found).
+ */
+async function sameName(api: CreativeAdapter, gameId: number, name: string, confirmed: boolean, first = false): Promise<Obj[]> {
+  const hits: Obj[] = [];
+  for (let page = 1; page <= SEARCH_PAGES; page++) {
+    const data = await api.search(gameId, name, confirmed, page);
+    const list: Obj[] = Array.isArray(data?.creatives) ? data.creatives : [];
+    hits.push(...list.filter(c => c.name === name));
+    if ((first && hits.length) || list.length < SEARCH_PAGE || (typeof data?.total === 'number' && page * SEARCH_PAGE >= data.total)) break;
+  }
+  return hits;
+}
+
 /** Exact names CLS already has a creative of, confirmed or waiting for confirmation (待确认). */
 async function existingNames(api: CreativeAdapter, gameId: number, names: string[]): Promise<Set<string>> {
   const found = new Set<string>();
@@ -98,8 +117,7 @@ async function existingNames(api: CreativeAdapter, gameId: number, names: string
   const worker = async () => {
     for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
       for (const confirmed of [true, false]) {
-        const data = await api.search(gameId, name, confirmed);
-        if ((data?.creatives ?? []).some((c: Obj) => c.name === name)) found.add(name);
+        if (!found.has(name) && (await sameName(api, gameId, name, confirmed, true)).length) found.add(name);
       }
     }
   };
@@ -162,8 +180,11 @@ export async function findRows(bridge: Bridge, query: { numbers: number[]; texts
   });
 }
 
-/** The zips among the given files (or directly inside a given folder), unpacked: zip path → its folder, and what inside cannot go up. */
-async function unpackArchives(inputs: string[], root: string): Promise<{ unpacked: Map<string, string>; skipped: Skipped[] }> {
+/**
+ * The zips among the given files (or directly inside a given folder), unpacked: zip path → its folder, what inside cannot go up, and the
+ * files that had to be stored under another name (characters a Windows file name cannot hold).
+ */
+async function unpackArchives(inputs: string[], root: string): Promise<{ unpacked: Map<string, string>; skipped: Skipped[]; renamed: Unpacked['renamed'] }> {
   const zips: string[] = [];
   for (const input of inputs) {
     const full = path.resolve(input);
@@ -173,19 +194,38 @@ async function unpackArchives(inputs: string[], root: string): Promise<{ unpacke
   }
   const unpacked = new Map<string, string>();
   const skipped: Skipped[] = [];
+  const renamed: Unpacked['renamed'] = [];
   for (const zip of zips) {
     const result = await unpackZip(zip, root, materialRefusal);
     unpacked.set(zip.toLowerCase(), result.dir);
     skipped.push(...result.skipped);
+    renamed.push(...result.renamed);
   }
-  return { unpacked, skipped };
+  return { unpacked, skipped, renamed };
 }
 
 /** The files behind what the user gave, zips unpacked into this user's tmp (a folder reaches lark-agent only as a zip), and what cannot go up. */
-async function gather(inputs: string[], deps: UploadDeps): Promise<{ materials: ReturnType<typeof scanMaterials>['materials']; skipped: Skipped[] }> {
+async function gather(inputs: string[], deps: UploadDeps): Promise<{ materials: Material[]; skipped: Skipped[]; renamed: Unpacked['renamed'] }> {
   const archives = await unpackArchives(inputs, path.join(deps.tmpDir ?? resolveDataPaths().tmp, UNPACKED));
   const scanned = scanMaterials(inputs, archives.unpacked);
-  return { materials: scanned.materials, skipped: [...scanned.skipped, ...archives.skipped] };
+  return { materials: scanned.materials, skipped: [...scanned.skipped, ...archives.skipped], renamed: archives.renamed };
+}
+
+/**
+ * Files of exactly the same content (one file twice: under two names, or given loose and in a zip), as file → the others. CLS makes one
+ * creative of one content, so such files are one row and one upload. Only files of the same size are read.
+ */
+async function sameContent(materials: Material[]): Promise<Map<string, string[]>> {
+  const bySize = new Map<number, Material[]>();
+  for (const m of materials) bySize.set(m.size, [...(bySize.get(m.size) ?? []), m]);
+  const byHash = new Map<string, Material[]>();
+  for (const group of bySize.values()) {
+    if (group.length < 2) continue;
+    for (const m of group) { const { md5 } = await hashFile(m.file); byHash.set(md5, [...(byHash.get(md5) ?? []), m]); }
+  }
+  const twins = new Map<string, string[]>();
+  for (const group of byHash.values()) if (group.length > 1) for (const m of group) twins.set(m.file, group.filter(o => o !== m).map(o => o.origin ?? o.file_name));
+  return twins;
 }
 
 /**
@@ -195,7 +235,8 @@ async function gather(inputs: string[], deps: UploadDeps): Promise<{ materials: 
  * (`row`, see registeredRow): files that carry their numbers have most likely been registered, and are verified rather than appended.
  */
 export async function listFiles(inputs: string[], deps: UploadDeps = {}, check?: { bridge: Bridge; progress: true | string }): Promise<Obj> {
-  const { materials, skipped } = await gather(inputs, deps);
+  const { materials, skipped, renamed } = await gather(inputs, deps);
+  const twins = await sameContent(materials);
   const bodies = materials.map(m => pendingBody(m.name) ?? nameBody(m.name)).filter((b): b is string => b !== null);
   const numbers = materials.map(m => m.number).filter((n): n is number => n !== null);
   const sheet = check && (numbers.length || bodies.length)
@@ -206,6 +247,7 @@ export async function listFiles(inputs: string[], deps: UploadDeps = {}, check?:
     return { file: m.origin ?? m.file_name, path: m.file, name: m.name, kind: m.kind, size: m.size,
       ...(m.number !== null ? { number: m.number } : {}),
       ...(pending !== null ? { pending_number: true, name_without_number: pending, parts: nameParts(pending) } : {}),
+      ...(twins.has(m.file) ? { same_content: twins.get(m.file) } : {}),
       ...(row ? { row } : {}) };
   });
   const registered = listed.filter(f => f.row?.status === 'registered').length;
@@ -213,6 +255,7 @@ export async function listFiles(inputs: string[], deps: UploadDeps = {}, check?:
     status: 'files', count: materials.length, files: listed,
     ...(check ? { progress_source: sheet?.label ?? null, registered, to_verify: listed.filter(f => f.row && f.row.status !== 'registered').length } : {}),
     ...(skipped.length ? { skipped: skipped.map(s => ({ file: shownFile(s.file), reason: s.reason })) } : {}),
+    ...(renamed.length ? { zip_renamed: renamed } : {}),
   };
 }
 
@@ -221,7 +264,7 @@ export async function planUpload(online: Online, bridge: Bridge | undefined, req
   const file = path.resolve(output);
   need(!fs.existsSync(file), '计划文件已存在，不覆盖');
   const request: UploadRequest = normalizeUploadRequest(readJson(requestFile));
-  const { materials, skipped } = await gather(request.files, deps);
+  const { materials, skipped, renamed } = await gather(request.files, deps);
   const hashed = [];
   for (const material of materials) {
     const { sha256, md5, size } = await hashFile(material.file);
@@ -249,13 +292,16 @@ export async function planUpload(online: Online, bridge: Bridge | undefined, req
     progressSource = lookup.label;
   }
   const input = { request, options, materials: hashed, skipped, existing: new Set<string>(), ...(progress ? { progress } : {}), ...(named ? { named } : {}), ...(progressSource ? { progressSource } : {}), ...(deps.now ? { now: deps.now() } : {}) };
-  // The names come out of the plan itself (a file may be renamed), so they are known only after a first pass.
-  const first = buildUploadPlan(input);
-  const existing = await existingNames(api, options.game.id, first.items.map((i: Obj) => i.name));
-  const plan = existing.size ? buildUploadPlan({ ...input, existing }) : first;
+  // The names come out of the plan itself (a file may be renamed), so they are known only after a first pass. They are asked for even when
+  // that pass found other problems, so that a name CLS already has is in the same refusal as the rest.
+  const names: string[] = [];
+  let first: Obj | undefined;
+  try { first = buildUploadPlan(input, names); } catch (error) { if (!(error instanceof Blocked)) throw error; }
+  const existing = await existingNames(api, options.game.id, names);
+  const plan = first && !existing.size ? first : buildUploadPlan({ ...input, existing });
   fs.mkdirSync(path.dirname(file), { recursive: true });
   writeJsonNew(file, plan);
-  return uploadPlanSummary(plan, file);
+  return { ...uploadPlanSummary(plan, file), ...(renamed.length ? { zip_renamed: renamed } : {}) };
 }
 
 // ---- the run ------------------------------------------------------------------------------------------------------------------
@@ -321,8 +367,7 @@ async function findCreated(api: CreativeAdapter, gameId: number, account: number
   const found = new Map<string, number>();
   for (const [name, item] of wanted) {
     for (const confirmed of [true, false]) {
-      const data = await api.search(gameId, name, confirmed);
-      const hits = (data?.creatives ?? []).filter((c: Obj) => c.name === name && c.upload_user_id === account);
+      const hits = (await sameName(api, gameId, name, confirmed)).filter(c => c.upload_user_id === account);
       const ours: number[] = [];
       for (const hit of hits) {
         const material = (await api.creative(hit.id))?.materials?.[0];
@@ -365,18 +410,18 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
   const dir = openBatch(plan, deps);
   const record = (step: string, data: Obj = {}) => appendUploadEvent(dir, step, data, deps.now);
   const sleep = deps.sleep ?? pause;
-  const session = await online.session();
-  need(session.account.id === plan.account.id, `当前登录的 CLS 账号“${session.account.name}”不是计划里的“${plan.account.name}”`);
+  const sameAccount = (s: Session) => need(s.account.id === plan.account.id, `当前登录的 CLS 账号“${s.account.name}”不是计划里的“${plan.account.name}”`);
+  let session = await online.session();
+  sameAccount(session);
   const createMarker = path.join(dir, 'create-sent.json');
   // The create goes out once per batch, whatever happens to this process: the marker is made (exclusively) right before it is sent.
   // An annotation only sets values, so its record in the journal is all it needs.
-  const api = adapterFor(session, deps, {
-    beforeWrite: apiPath => {
-      if (!apiPath.includes('multiple-upload')) return;
-      try { writeJsonNew(createMarker, { plan_id: plan.plan_id, at: (deps.now?.() ?? new Date()).toISOString() }); }
-      catch { throw new ClsError('这个批次已经发出过创建请求；先回读核对，不重发', 'unknown'); }
-    },
-  });
+  const beforeWrite = (apiPath: string) => {
+    if (!apiPath.includes('multiple-upload')) return;
+    try { writeJsonNew(createMarker, { plan_id: plan.plan_id, at: (deps.now?.() ?? new Date()).toISOString() }); }
+    catch { throw new ClsError('这个批次已经发出过创建请求；先回读核对，不重发', 'unknown'); }
+  };
+  let api = adapterFor(session, deps, { beforeWrite });
   const gameId: number = plan.game.id;
   const items: Obj[] = plan.items;
 
@@ -399,7 +444,8 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
       const byKey = new Map(signed.files.map(f => [f.key, f]));
       const missing = keys.filter(k => !byKey.has(k));
       need(missing.length === 0, `CLS 没有给这些文件上传链接（格式不受支持）：${missing.join('、')}`);
-      record('signed', { keys, objects: signed.files.map(f => f.object), mapping: signed.mapping });
+      // Lists, not objects keyed by name: a material name is never taken for a credential's field (see seal.ts).
+      record('signed', { keys, objects: signed.files.map(f => f.object), mapping: Object.entries(signed.mapping).map(([key, to]) => ({ key, to })) });
       await api.log(`${session.account.name}获取预签名链接: ${JSON.stringify(keys)}（requirement-auto）`);
       for (const item of group) {
         const key = `${item.name}/${item.upload_name ?? item.file_name}`;
@@ -413,7 +459,7 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
             need(fresh, `CLS 没有再给 ${item.file_name} 上传链接`);
             link = fresh;
             signed.mapping[key] = again.mapping[key]!;
-            record('signed', { keys: [key], objects: [fresh.object], mapping: { [key]: again.mapping[key] } });
+            record('signed', { keys: [key], objects: [fresh.object], mapping: [{ key, to: again.mapping[key] }] });
           }
           try { receipt = await api.put(key, item.file, item.size); } catch (error) {
             if (attempt >= 3) throw error;
@@ -426,9 +472,19 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
       }
     }
     await api.log(`成功上传以下文件至游戏: ${plan.game.name}; 文件列表: ${JSON.stringify(finished)}（requirement-auto）`);
+    // The uploads may have taken long: the create goes out with a login CLS still takes (taken again from the browser if it has run out),
+    // and not at all while CLS cannot be asked, since nothing has been made yet and the next run starts over.
+    const still = await checkToken(session.origin, session.authorization, deps.adapter?.fetch);
+    if ('unreachable' in still) throw new Blocked('CLS 暂时无法访问，还没有创建任何创意：稍后再运行本命令（文件会重新上传，不会重复创建）');
+    if ('rejected' in still) {
+      session = await online.session();
+      sameAccount(session);
+      api = adapterFor(session, deps, { beforeWrite });
+    }
     const names = items.map(i => mapped.get(i.name)!);
     const directories = Object.fromEntries(items.map(i => [mapped.get(i.name)!, i.directory.id]));
-    record('create_attempt', { names, directories, renamed: items.filter(i => mapped.get(i.name) !== i.name).map(i => ({ from: i.name, to: mapped.get(i.name) })) });
+    record('create_attempt', { names, directories: items.map(i => ({ name: mapped.get(i.name), id: i.directory.id })),
+      renamed: items.filter(i => mapped.get(i.name) !== i.name).map(i => ({ from: i.name, to: mapped.get(i.name) })) });
     try {
       const created = await api.createCreatives(gameId, names, directories);
       record('created', created);
@@ -454,6 +510,12 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
   if (created) {
     for (const s of created.succ) ids.set(s.name, s.id);
     failed = created.fail;
+    // A name the answer left out of both lists may have been made all the same: it is looked for, on this run and on every later one.
+    const unaccounted = names.filter(n => !ids.has(n) && !failed.includes(n));
+    if (unaccounted.length) {
+      for (const [name, id] of await findCreated(api, gameId, plan.account.id, unaccounted.map(name => [name, itemOf.get(name)!]))) ids.set(name, id);
+      record('reconciled', { found: unaccounted.filter(n => ids.has(n)).map(name => ({ name, id: ids.get(name) })), missing: unaccounted.filter(n => !ids.has(n)) });
+    }
   } else {
     // A create whose answer was lost: look for what it made, for a while (the server may still be working on it). A refused one is
     // looked at once, since a refusal does not prove that nothing was made.
@@ -463,7 +525,7 @@ export async function runUpload(online: Online, planFile: string, deps: UploadDe
       if (ids.size === names.length) break;
       if (i < tries - 1) await sleep(15_000);
     }
-    record('reconciled', { found: Object.fromEntries(ids), missing: names.filter(n => !ids.has(n)) });
+    record('reconciled', { found: [...ids].map(([name, id]) => ({ name, id })), missing: names.filter(n => !ids.has(n)) });
     events = uploadEvents(dir);
     if (refused && ids.size === 0) return { status: 'blocked', batch: dir, reason: `CLS 没有创建创意：${refused.reason}`, uploaded: [] };
     if (refused) failed = names.filter(n => !ids.has(n));
@@ -537,6 +599,7 @@ export async function listPicture(online: Online, output: string, rows: number |
   const game = (Array.isArray(games) ? games : []).find((g: Obj) => g.code === 'GOFCN');
   need(game, `CLS 账号“${session.account.name}”没有 GOFCN 项目`);
   const result = await listScreenshot({ profileDir: clsProfileDir(), output, accountId: session.account.id, game, ...(rows !== undefined ? { rows } : {}), ...deps.shot });
+  if (result.state === 'unreachable') throw new Blocked(notLoaded('创意列表', result.reason));
   if (result.state === 'login_required') throw new Blocked('CLS 登录已失效（页面停在登录页）：先运行 gof.mjs login check 再截图');
   if (result.state === 'no_access') throw new Blocked(`创意列表打不开（停在 ${result.where}）：账号可能没有这个页面的权限`);
   return { status: 'screenshot_saved', file: result.file, rows: result.rows, total: result.total, list_url: LIST_URL };

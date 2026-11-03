@@ -41,7 +41,8 @@ const newest = (pluginDir: string): string | undefined =>
 
 /**
  * Where feishu.mjs is: FEISHU_PLUGIN when it is set, else the first match going up from this file: the plugin folder next to this one
- * (lark-agent's plugins/), Codex's plugin cache (the same marketplace, or another), or the feishu-plugin repository next to this one (development).
+ * (`feishu`, or `feishu-plugin` as lark-agent's plugins/ has it), Codex's plugin cache (the same marketplace, or another), or the
+ * feishu-plugin repository next to this one (development).
  */
 export function locateFeishu(env: NodeJS.ProcessEnv = process.env, from: string = fileURLToPath(import.meta.url)): string {
   const named = env[FEISHU_PLUGIN_ENV]?.trim();
@@ -50,7 +51,7 @@ export function locateFeishu(env: NodeJS.ProcessEnv = process.env, from: string 
     throw new Blocked(`${FEISHU_PLUGIN_ENV} 不是 feishu.mjs 的绝对路径`);
   }
   for (let dir = path.dirname(from), level = 0; level < 8; level++) {
-    const found = [path.join(dir, 'feishu', ENTRY)].find(isFile) ?? newest(path.join(dir, 'feishu'))
+    const found = [path.join(dir, 'feishu', ENTRY), path.join(dir, 'feishu-plugin', ENTRY)].find(isFile) ?? newest(path.join(dir, 'feishu'))
       ?? dirs(dir).map(market => newest(path.join(dir, market, 'feishu'))).find(Boolean)
       ?? [path.join(dir, 'feishu-plugin', 'plugins', 'feishu', ENTRY)].find(isFile);
     if (found) return found;
@@ -82,7 +83,7 @@ export function runFeishu(args: string[], env: NodeJS.ProcessEnv = process.env):
 export class FeishuServe {
   private child: Child | undefined;
   private next = 1;
-  private readonly waiting = new Map<number, { resolve: (reply: BridgeReply) => void; reject: (error: Error) => void }>();
+  private readonly waiting = new Map<number, { child: Child; resolve: (reply: BridgeReply) => void; reject: (error: Error) => void }>();
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(env: NodeJS.ProcessEnv = process.env) { this.env = env; }
@@ -101,11 +102,14 @@ export class FeishuServe {
     });
     const gone = (error: Error) => {
       if (this.child === child) this.child = undefined;
-      for (const waiter of this.waiting.values()) waiter.reject(error);
-      this.waiting.clear();
+      // Only the calls sent to this process: a later call may be waiting on the one started after it.
+      for (const [id, waiter] of this.waiting) if (waiter.child === child) { this.waiting.delete(id); waiter.reject(error); }
     };
     child.once('error', error => gone(error));
     child.once('close', () => gone(new Error('feishu 插件进程已结束')));
+    // A request written to a process that has gone (it crashed, or ended before reading) fails on the pipe. That is no reason to end this
+    // command with a crash and no answer: the 'close' above rejects what was waiting, which the caller takes as no answer.
+    child.stdin.on('error', () => {});
     this.child = child;
     return child;
   }
@@ -122,7 +126,7 @@ export class FeishuServe {
     const child = this.start();
     const id = this.next++;
     return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
+      this.waiting.set(id, { child, resolve, reject });
       this.hold();
       child.stdin.write(`${JSON.stringify({ id, command, input })}\n`);
     });

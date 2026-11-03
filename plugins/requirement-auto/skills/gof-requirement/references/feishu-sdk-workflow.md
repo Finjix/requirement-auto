@@ -32,7 +32,7 @@ gof feishu document --url <docx link> --outline [--full] | --block <index>
 gof feishu doc-edit --url <requirement link> --edit <edit>.json [--check]
 gof feishu doc-screenshot --url <requirement link> --output <new>.png [--block <id>] [--sheet <sheet_id> --range <A1>]
 gof feishu snapshot --output <new>.xlsx
-gof feishu context --snapshot <snapshot>.xlsx [--supplier <name>] [--worksheet <name>]
+gof feishu context --snapshot <snapshot>.xlsx [--worksheet <name>]
 gof feishu plan --request request.json --snapshot <snapshot>.xlsx [--output <new plan>.json]
 gof feishu dropdown-add --field primary|secondary|form|supplier|reviewer --option <value> --sheet <sheet name>
 gof feishu prepare --plan <approved plan>.json --snapshot <fresh>.xlsx
@@ -42,11 +42,11 @@ gof feishu reconcile --batch <batch>
 
 The target is the test Wiki node `GH7cwIxzZi3gVdk2s3tc1dDbnQc`; the bridge resolves the real spreadsheet.
 
-- `document` reads a company `wiki`, `docx` or `sheets` link: `title`, wiki `path` (folders above, outermost first), and for a sheet the `?sheet=` tab (else the last visible tab, `chosen_by: last`; `--sheet` picks another), `tabs`, `columns`, `header`, non-empty `rows` (`row` = sheet row; attachments `[附件:<name>]`, images `[图片]`), cells clipped at 300 characters unless `--full`, up to 300 rows (`more_rows`). For a docx: `text` (clipped at 30,000 characters unless `--full`).
+- `document` reads a company `wiki`, `docx` or `sheets` link: `title`, wiki `path` (folders above, outermost first), and for a sheet the `?sheet=` tab (else the last visible tab, `chosen_by: last`; `--sheet` picks another), `tabs`, `columns`, `header`, non-empty `rows` (`row` = sheet row; attachments `[附件:<name>]`, images `[图片]`), cells clipped at 300 characters unless `--full`, up to 300 rows (`more_rows`: the tab's grid is taller than what was read; its rows may still be empty, `row_count` counts the rows with something in them). For a docx: `text` (clipped at 30,000 characters unless `--full`).
 - `context`: target sheet and its ID, `next_number`, `naming` (how the next row is named, in header words: `GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词>`), current dropdown `options` of the five fields (read from the API rules; the XLSX's lists are unreliable).
 - `snapshot` exports the full XLSX (formulas included) and checks the revision did not move during export.
 - `plan` builds `batch_plan` and `api_plan`; each new row gets the naming formula of the row above when that one names rows `GOFCN<编号>_<一级>_<二级>_<创意形式>_<提炼词>` (kept as colleagues spell it, wrapped in `SUBSTITUTE(…,"__","_")` when the rows have no 创意形式), else `=SUBSTITUTE(CONCATENATE("GOFCN",C,"_",H,"_",I,"_",K,"_",D),"__","_")`; the names are what it gives. With `--output` it saves both and prints a summary: sheet, range, numbers, `naming`, `same_name_rows` (rows already in the sheet under a `material_name` the request gives; absent when none), `variant_rows` (rows a given `material_name` may be a variant of: named as its start, cut at a `_` or within its first word; absent when none), per group requirement name, supplier, reviewer, link, first and last item name, `message_kind`, `default_keyword_rows` (how many of the group's rows have the default 提炼词 `关键词`; absent when none), and `new_options` (`field`, `option`) the dropdowns lack.
-- `dropdown-add` adds the option to every dropdown rule of that column (each rule keeps its options, colors and mode; cell values untouched; ranges that already have it are skipped). Re-running is harmless.
+- `dropdown-add` adds the option to every dropdown rule of that column (each rule keeps its options, colors and mode; cell values untouched; ranges that already have it are skipped). Re-running changes nothing: when every rule of the column has the option already it is refused with "没有任何范围需要新增该选项（已存在，或该列没有下拉）", which after an earlier run of the same command means the option is in (a column without any dropdown is refused at `prepare` as well).
 - `prepare` re-makes the approved plan on the fresh snapshot and creates the batch; it refuses if rows, numbers, values, names or groups differ from the approved plan. Revision changes elsewhere are fine.
 - `append` runs the preflight (receipt, user, revision, fresh XLSX, hidden columns, formulas, merges, numbers, rules), then one `invoke_write` with `allow_overwrite:false`. This batch's rows get the dropdown of the rows above. Then a full export and rule read-back; success records `append_verified`. Writes are not retried by the tool: an unknown result is resolved by `reconcile`.
 
@@ -83,6 +83,7 @@ The target is the test Wiki node `GH7cwIxzZi3gVdk2s3tc1dDbnQc`; the bridge resol
 
 - Complete: reuse the original CSV; if `append_verified` is not yet recorded, record it with the reconcile evidence, then continue to CLS (check existing drafts first if CLS had started).
 - An attempted write is never re-sent (the tool refuses), even when everything reads back empty. Partial, occupied or conflicting results are reported to the user. When the new rows lack their planned dropdowns, reconcile still gives the values' verdict (`not_applied`, `partial`, `conflict`) with the rule problem in `rule_issue`.
+- A `conflict` with `matched_cells` equal to `expected_cells` is someone else's edit in the new rows (every cell the batch wrote is in place): the batch can never verify, and `gof batch adopt` takes its rows over for their ticket (see data-contract.md), closing it.
 - Every refusal of `append` after the write went out carries `write_sent: true`. A request whose earlier batch was sent but never verified is planned again only when none of that batch's rows are in the sheet (`prepare` refuses otherwise).
 - Verification of an API batch is strict on the appended rows (every column) and on the appended columns' dropdown rules. Edits colleagues make elsewhere in the shared workbook while it runs (other cells, other tabs, filters, sizes, hidden rows, rules of other columns) are listed in `foreign_changes` and do not fail it.
 - A never-attempted batch can continue if baseline, rules and approved revision are unchanged.

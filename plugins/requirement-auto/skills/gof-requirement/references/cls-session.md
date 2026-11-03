@@ -1,6 +1,6 @@
 # CLS login and session
 
-CLS sits behind company SSO (Feishu web QR login), so the user logs in by scanning a QR code with their phone. `gof cls login --qr` opens CLS in the installed Chrome or Edge, headless (override with env `REQUIREMENT_AUTO_BROWSER` = absolute path), screenshots the Feishu QR page, then takes the `Authorization` header of the page's own CLS API calls and confirms it with `/api/userinfo`. Later work is plain HTTP.
+CLS sits behind company SSO (Feishu web QR login), so the user logs in by scanning a QR code with their phone. `gof cls login --qr` opens CLS in the installed Chrome or Edge, headless (override with env `FEISHU_BROWSER` = absolute path, the variable the feishu plugin reads too, so both start the same browser), screenshots the Feishu QR page, then takes the `Authorization` header of the page's own CLS API calls and confirms it with `/api/userinfo`. Later work is plain HTTP.
 
 The browser is the feishu plugin's (it holds the user's Feishu web session): Feishu is logged in first in it (`gof feishu authorize --qr`, SKILL.md section 0), and that scan normally covers CLS too.
 
@@ -10,10 +10,11 @@ gof cls session                     # check; after the scan, take the login and 
 ```
 
 - Online `cls` commands (`catalog`, `observe`, `run`, `read-draft`, `verify`) get the login themselves; without one they say to run `cls login --qr`.
-- `cls login --qr`: silent check first (up to 12 s); logged in -> `logged_in`. Otherwise it stops on the Feishu QR page, writes the PNG and returns `qr_ready`; the browser waits in the background. `no_qr`: the page is not on a QR code; run `cls session` first.
+- CLS out of reach (an outage, a gateway, the network or a proxy) is not a lost login: `gof login check` gives `unknown` with the reason, and commands refuse with `CLS 暂时无法访问（…）`, having sent nothing. Make no QR code and ask for no scan; run it again a little later.
+- `cls login --qr`: silent check first (up to 12 s); logged in -> `logged_in`. Otherwise it stops on the Feishu QR page, writes the PNG and returns `qr_ready`; the browser waits in the background. `no_qr`: the page is not on a QR code; run `cls session` first. With CLS out of reach it makes no code.
 - The image in the working directory is sent to the user with the reply. It expires in a few minutes; run the command again for a fresh one. After 15 minutes without a scan the waiting browser is closed.
 - After the user confirms: `cls session` (~25 s) attaches to the waiting browser, presses 【授权】 on the `dsc_admin` consent page (only that app and, once bound, that account), takes the login and closes the browser so cookies persist.
-- Whoever scans is who logs in. The first account is bound in `<user dir>/requirement-auto/cls/account.json`; another account is refused, naming the one to use. To change it, clear that file and the browser profile (`<user dir>/feishu/browser-profile`, which also signs Feishu web out), then log in again.
+- Whoever scans is who logs in. The first account is bound in `<user dir>/requirement-auto/cls/account.json`; another account is refused, naming the one to use. The same account under a new name stays bound (the file takes the new name), and the consent page may show the name without the suffix CLS adds (`钟丰骏` for `钟丰骏-实习生`). To change the account, clear that file and the browser profile (`<user dir>/feishu/browser-profile`, which also signs Feishu web out), then log in again.
 
 ## Keeping the login
 
@@ -24,4 +25,4 @@ gof cls session                     # check; after the scan, take the login and 
 ## Environment
 
 - Needs Chrome or Edge on the machine; nobody needs to be at it.
-- Behind a corporate proxy set `NODE_USE_ENV_PROXY=1` and `HTTPS_PROXY`.
+- Behind a corporate proxy set `NODE_USE_ENV_PROXY=1`, `HTTPS_PROXY` and `NO_PROXY=127.0.0.1,localhost`. The hidden browser is driven over `http://127.0.0.1`; with `HTTP_PROXY` set as well, that traffic would go to the proxy unless `NO_PROXY` keeps it out (`localhost` alone does not cover `127.0.0.1`), and the browser commands refuse with what to set.

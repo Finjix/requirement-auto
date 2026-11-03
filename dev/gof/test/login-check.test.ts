@@ -84,6 +84,12 @@ test('login check: a problem that logging in again cannot fix is "blocked", and 
   assert.equal(unreachable.result.todo, undefined, 'no new login is asked for when Feishu merely did not answer');
 });
 
+test('login check: CLS out of reach is "unknown" and asks nobody to scan, as Feishu out of reach is', async () => {
+  const cls = await main(['login', 'check'], bridgeSaying(goodFeishu), clsSaying('unreachable', { reason: '连接失败' }));
+  assert.deepEqual([cls.code, cls.result.status, cls.result.cls.status, cls.result.todo], [2, 'unknown', 'unknown', undefined]);
+  assert.match(cls.result.cls.reason, /连接失败.*不说明登录失效/);
+});
+
 test('login check never prints a token', async () => {
   const text = JSON.stringify([
     await main(['login', 'check'], bridgeSaying(goodFeishu), clsSaying('ok')),

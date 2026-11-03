@@ -49,7 +49,7 @@ test('within one process the lock is shared, and let go of only when every holde
 test('a browser that is running but slow to answer is not taken for gone: no second one is started and its port file stays', async () => {
   // Answers /json/version like a browser, but its DevTools socket cannot be joined.
   const server = http.createServer((request, response) => {
-    if (request.url === '/json/version') response.end('{"Browser":"Chrome"}');
+    if (request.url === '/json/version') response.end(JSON.stringify({ Browser: 'Chrome', webSocketDebuggerUrl: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/devtools/browser/abc` }));
     else { response.statusCode = 404; response.end(); }
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -74,4 +74,44 @@ test('the port file of a browser that is gone is no obstacle: the start is tried
   fs.writeFileSync(path.join(profileDir, 'DevToolsActivePort'), `${port}\n/devtools/browser/abc`);
   await assert.rejects(openBrowser({ exe: path.join(profileDir, 'no-such-browser.exe'), profileDir }), /浏览器没有启动成功/);
   assert.ok(!fs.existsSync(lockOf(profileDir)));
+});
+
+test('a lock its holder stopped renewing is taken over, though its process id is alive (Windows gives a dead one’s id to others)', async () => {
+  const profileDir = path.join(tempDir('ra-lock-'), 'browser-profile');
+  fs.mkdirSync(path.dirname(profileDir), { recursive: true });
+  fs.writeFileSync(lockOf(profileDir), JSON.stringify({ pid: process.pid, at: Date.now() - 3 * 60_000 }));
+  (await lockProfile(profileDir, 1_000))();
+  assert.ok(!fs.existsSync(lockOf(profileDir)));
+});
+
+test('a holder lets go of its own lock only, and a lock path that cannot be read is waited on in time, not spun on', async () => {
+  const profileDir = path.join(tempDir('ra-lock-'), 'browser-profile');
+  const release = await lockProfile(profileDir, 1_000);
+  // Taken over meanwhile as abandoned: the old holder must not remove the new holder's lock.
+  fs.writeFileSync(lockOf(profileDir), JSON.stringify({ pid: process.pid, at: Date.now(), token: 'theirs' }));
+  release();
+  assert.equal(JSON.parse(fs.readFileSync(lockOf(profileDir), 'utf8')).token, 'theirs');
+  fs.rmSync(lockOf(profileDir));
+  fs.mkdirSync(lockOf(profileDir));
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 20);
+  await assert.rejects(lockProfile(profileDir, 300), (e: Error) => e instanceof Blocked);
+  clearInterval(timer);
+  assert.ok(ticks > 3, `the process went on meanwhile (${ticks} ticks)`);
+});
+
+test('a port file whose port another browser answers on by now is stale: the start is tried', async () => {
+  const server = http.createServer((request, response) => {
+    if (request.url === '/json/version') response.end(JSON.stringify({ Browser: 'Chrome', webSocketDebuggerUrl: `ws://127.0.0.1:${(server.address() as AddressInfo).port}/devtools/browser/someone-else` }));
+    else { response.statusCode = 404; response.end(); }
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const profileDir = path.join(tempDir('ra-lock-'), 'browser-profile');
+    fs.mkdirSync(profileDir, { recursive: true });
+    fs.writeFileSync(path.join(profileDir, 'DevToolsActivePort'), `${(server.address() as AddressInfo).port}
+/devtools/browser/abc`);
+    await assert.rejects(openBrowser({ exe: path.join(profileDir, 'no-such-browser.exe'), profileDir }), /浏览器没有启动成功/);
+    assert.ok(!fs.existsSync(lockOf(profileDir)));
+  } finally { server.close(); }
 });

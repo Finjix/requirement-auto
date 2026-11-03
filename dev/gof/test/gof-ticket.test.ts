@@ -9,8 +9,9 @@ import { operation, parseCsv } from '../src/gof/cls.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { normalizeRequest } from '../src/gof/request.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
-import { Blocked, readJson } from '../src/gof/util.ts';
+import { Blocked, digest, readJson, sha256, TARGET, writeJsonNew } from '../src/gof/util.ts';
 import { main } from '../src/gof/cli.ts';
+import { makeXlsx } from './helpers/xlsx-writer.ts';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const catalog = readJson(path.join(fixtures, 'catalog.json'));
@@ -136,10 +137,14 @@ test('a ticket is refused for a group approved with one, and a CSV changed after
 
   const { dir, verify } = appended();
   verify();
-  const attached = attachTicket(dir, '02', { ...ticket, script_url: '无' }, catalog);
+  const given = { ...ticket, script_url: '无' };
+  const attached = attachTicket(dir, '02', given, catalog);
+  const recorded = { ...given, csv: path.basename(attached.csv), csv_sha256: sha256(fs.readFileSync(attached.csv, 'utf8')) };
+  // The ticket's CSV is taken while the file is what the ticket recorded …
+  assert.equal(record(dir, 'ticket_attached', '02', recorded).status, 'recorded');
+  // … and no longer once it has changed: the same record is refused.
   fs.appendFileSync(attached.csv, 'x');
-  assert.match(reason(() => record(dir, 'ticket_attached', '02', { ...ticket, csv: path.basename(attached.csv), csv_sha256: '0'.repeat(64) })),
-    /需求单的 CSV 与本组的行不符/);
+  assert.match(reason(() => record(dir, 'ticket_attached', '02', recorded)), /需求单的 CSV 与本组的行不符/);
 });
 
 test('the batches of the user are listed newest first, and found by a material number', async () => {
@@ -166,7 +171,7 @@ test('rows already in the sheet but in no batch are taken over as they are, and 
   const root = tmp();
   const sheet = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
   assert.equal(reason(() => adopt(sheet, [1011, 1014], { outputRoot: root })), '进度表里没有这些编号的行：GOFCN1014');
-  assert.equal(reason(() => adopt(sheet, [1011, 1013], { outputRoot: root })),
+  assert.equal(reason(() => adopt(sheet, [1011, 1012, 1013], { outputRoot: root })),
     '这些行的设计师供应商不一致（供应商丙、供应商甲）：用 --supplier 指明这张需求单的设计师供应商');
   assert.deepEqual(fs.readdirSync(root), []);
 
@@ -212,12 +217,90 @@ test('rows already in the sheet but in no batch are taken over as they are, and 
   assert.equal(attachTicket(result.batch, '01', ticket, catalog, true).message_kind, '玩法*2，画面*1');
 });
 
-test('rows of a batch only prepared can still be taken over; once its write went out, the batch keeps them', () => {
+test('rows of a batch only prepared can still be taken over; once its rows are verified, the batch keeps them', () => {
+  const sheet = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
+  // The batch prepared for the rows is in the folder adopt looks in: it sent nothing, so it holds nothing.
+  const prepared = tmp();
+  appended(prepared);
+  assert.equal(adopt(sheet, [1011], { outputRoot: prepared }).status, 'rows_adopted');
+  const verified = tmp();
+  const { verify: appendedNow } = appended(verified);
+  appendedNow();
+  assert.match(reason(() => adopt(sheet, [1011], { outputRoot: verified })), /^GOFCN1011 已在批次 .+ 里：用这一批继续/);
+});
+
+test('a batch whose write went out but can never be verified gives its rows to adopt once every cell it wrote is in place, and goes no further', () => {
+  const root = tmp();
+  const { dir } = appended(root);
+  // The write went out, its verification failed (a colleague's edit moved the revision during the export), and the batch was blocked.
+  record(dir, 'append_started', null);
+  record(dir, 'blocked', null, { reason: '导出期间出现并发变化' });
+  // Then a colleague filled in a cell the plugin leaves empty in a new row: every verification is a conflict from now on.
+  const now = new Snapshot(path.join(fixtures, 'applied-occupied-optional.xlsx'));
+  const verdict = verify(dir, now);
+  assert.deepEqual([verdict.status, verdict.matched_cells, verdict.expected_cells], ['conflict', 24, 24]);
+  // A cell it wrote that is not as written keeps the rows where they are.
+  assert.match(reason(() => adopt(new Snapshot(path.join(fixtures, 'applied-bad-value.xlsx')), [1011, 1012], { outputRoot: root })),
+    /^GOFCN1011 在批次 .+ 里，那一批的写入发出后没有核对通过，表里 D6 和它写的不一样/);
+  assert.equal(status(dir).taken_over, undefined);
+  const taken = adopt(now, [1011, 1012], { outputRoot: root });
+  assert.deepEqual([taken.status, taken.taken_over, taken.first], ['rows_adopted', [dir], 'GOFCN1011_玩法_卖点_视频_新爆点']);
+  // The old batch goes no further, so the rows cannot get a ticket there as well; the new batch gets theirs.
+  assert.equal(status(dir).taken_over, taken.batch);
+  assert.match(reason(() => record(dir, 'resumed', null, { confirmed: true, reason: '继续' }, now)), /^这一批的行已由批次 .+ 接管/);
+  assert.match(reason(() => attachTicket(dir, '01', ticket, catalog, true)), /^这一批的行已由批次 .+ 接管/);
+  assert.equal(attachTicket(taken.batch, '01', ticket, catalog, true).requirement_name, 'GOFCN1011-GOFCN1012');
+  assert.equal(listBatches(root, 1011).batches.find((b: any) => b.batch === dir).taken_over, taken.batch);
+  // Its other rows are free to be taken over as well, and appending the same rows again is still refused.
+  assert.equal(adopt(now, [1013], { outputRoot: root }).status, 'rows_adopted');
+  assert.throws(() => prepare(makePlan(now, reserved()), now, { outputRoot: root }), /已有一批写入发出、尚未核对/);
+});
+
+/** A batch an earlier version took over with a gap between its numbers (adopt takes one run of numbers now). */
+function gappedBatch(root: string, sheet: Snapshot): string {
+  const gapped = normalizeRequest({ groups: [{ supplier: '供应商甲', reviewer: '李四', items: [
+    { quantity: 1, primary_tag: '玩法', secondary_tag: '卖点', creative_form: '视频', keyword: '新爆点' },
+    { quantity: 1, primary_tag: '画面', secondary_tag: '体验', creative_form: '图文', keyword: '另一个' }] }] });
+  const names = ['GOFCN1011_玩法_卖点_视频_新爆点', 'GOFCN1013_画面_体验_图文_另一个'];
+  const sheetName = 'GOFCN创意进度 26年3月';
+  const plan: Record<string, any> = { schema: 1, target: TARGET, adopted: true, worksheet: sheetName, current_sheet: null, request: gapped,
+    baseline_digest: sheet.fingerprint, range: null, quantity: 2, first_number: 1011, last_number: 1013,
+    rows: [{ sheet: sheetName, row: 6, number: 1011, name: names[0], group: '01' }, { sheet: sheetName, row: 8, number: 1013, name: names[1], group: '01' }],
+    groups: [{ id: '01', csv: null, names, rows: [6, 8], request: gapped.groups[0] }] };
+  plan.plan_id = digest(plan).slice(0, 24);
+  const dir = path.join(root, plan.plan_id);
+  fs.mkdirSync(path.join(dir, 'events'), { recursive: true });
+  fs.copyFileSync(sheet.path, path.join(dir, 'baseline.xlsx'));
+  writeJsonNew(path.join(dir, 'manifest.json'), { plan, baseline_sha256: sha256(fs.readFileSync(path.join(dir, 'baseline.xlsx'))), artifacts: {} });
+  record(dir, 'rows_adopted', null, { snapshot_digest: sheet.fingerprint });
+  return dir;
+}
+
+test('a batch is found by a number it holds, not by one between its first and last; a ticket is for one run of numbers', () => {
   const root = tmp();
   const sheet = new Snapshot(path.join(fixtures, 'applied-complete.xlsx'));
-  const { verify: appendedNow } = appended(root);
-  const elsewhere = tmp();
-  assert.equal(adopt(sheet, [1011], { outputRoot: elsewhere }).status, 'rows_adopted');
-  appendedNow();
-  assert.match(reason(() => adopt(sheet, [1011], { outputRoot: root })), /^GOFCN1011 已在批次 .+ 里：用这一批继续/);
+  const gapped = gappedBatch(root, sheet);
+  assert.deepEqual(listBatches(root, 1013).batches.map((b: any) => b.batch), [gapped]);
+  assert.deepEqual(listBatches(root, 1012).batches, []);
+  // 1012 is in no batch: it can be taken over. A run with a gap cannot be one ticket (its name would be GOFCN1011-GOFCN1013).
+  assert.equal(adopt(sheet, [1012], { outputRoot: root }).status, 'rows_adopted');
+  assert.equal(reason(() => adopt(sheet, [1011, 1013], { outputRoot: tmp(), supplier: '供应商甲', reviewer: '李四' })),
+    '编号要连成一段：GOFCN1011 之后是 GOFCN1013。一张需求单的名称是 GOFCN首号-GOFCN末号，不连续的编号分段各接管一次');
+});
+
+test('rows typed by hand are taken over as they are, though a new row could not be named like them', () => {
+  const header = ['素材编号', '提炼词', '素材名称', '一级标签', '二级标签', '创意形式', '客户端', '设计师供应商', '创意者脚本审核人'];
+  const file = path.join(tmp(), 'by-hand.xlsx');
+  fs.writeFileSync(file, makeXlsx([{ name: '26年1月-GOFCN', rows: [header,
+    [67679, '横版/竖版', 'GOFCN67679_玩法_卖点_2D_横版/竖版', '玩法', '卖点', '2D', null, '供应商丙', '张三'],
+    [67680, '_开头', 'GOFCN67680_玩法_卖点_3D_AI__开头', '玩法', '卖点', '3D_AI', null, '供应商丙', '张三']] }]));
+  const taken = adopt(new Snapshot(file), [67679, 67680], { outputRoot: tmp() });
+  assert.deepEqual([taken.status, taken.first, taken.last], ['rows_adopted', 'GOFCN67679_玩法_卖点_2D_横版/竖版', 'GOFCN67680_玩法_卖点_3D_AI__开头']);
+  const preview = attachTicket(taken.batch, '01', ticket, catalog, true);
+  assert.deepEqual([preview.requirement_name, preview.message_kind], ['GOFCN67679-GOFCN67680', '玩法*2']);
+  const attached = attachTicket(taken.batch, '01', ticket, catalog);
+  assert.equal(fs.readFileSync(attached.csv, 'utf8'), csvText([taken.first, taken.last], LINK));
+  // A new row still has to be one a name can be made of.
+  assert.throws(() => normalizeRequest({ groups: [{ supplier: '供应商丙', reviewer: '张三', primary_tag: '玩法', secondary_tag: '卖点', quantity: 1, keyword: '横版/竖版' }] }),
+    /不能含 \/ 或/);
 });

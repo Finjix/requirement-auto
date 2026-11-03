@@ -25,7 +25,9 @@ export interface DraftShotOptions {
 export type DraftShotResult =
   | { state: 'ok'; file: string; title: string | null }
   | { state: 'login_required'; where: string }
-  | { state: 'no_access'; where: string };
+  | { state: 'no_access'; where: string }
+  /** The app did not load at all (the network, a proxy, DNS): nothing is known about the login. */
+  | { state: 'unreachable'; where: string; reason: string };
 
 const WIDTH = 1700;
 const MIN_HEIGHT = 1000;
@@ -41,14 +43,18 @@ export async function draftScreenshot(options: DraftShotOptions): Promise<DraftS
   return withShotPage({ profileDir: options.profileDir, origin: options.origin ?? CLS_ORIGIN, exe: options.exe, env: options.env, waitMs: options.waitMs,
     width: WIDTH, height: MIN_HEIGHT }, async page => {
     const { evaluate, until, where, answered, wait } = page;
-    if (!await page.openAppForGame(options.game)) return { state: 'login_required', where: await where() };
+    const unreachable = async (): Promise<DraftShotResult | undefined> => {
+      const broken = await page.loadError();
+      return broken ? { state: 'unreachable', where: await where(), reason: broken } : undefined;
+    };
+    if (!await page.openAppForGame(options.game)) return await unreachable() ?? { state: 'login_required', where: await where() };
     const read = answered.get(`/api/workflow/script/${id}`) ?? 0;
     // In-app navigation, as a click on the draft in the requirement list does: a fresh page load can be turned away before the app knows its pages.
     const routed = await evaluate(`(async () => { const vm = window.DD_VUE_INSTANCE; if (!vm || !vm.$router) return false; await vm.$router.push(${JSON.stringify(draftPath(id))}); return true; })()`);
     if (!routed) await page.navigate(`${page.origin}${draftPath(id)}`);
     await until(async () => { const at = await where(); return at.endsWith(draftPath(id)) || /feishu|larksuite/.test(at); }, wait);
     const here = await where();
-    if (!here.endsWith(draftPath(id))) return { state: /feishu|larksuite/.test(here) ? 'login_required' : 'no_access', where: here };
+    if (!here.endsWith(draftPath(id))) return await unreachable() ?? { state: /feishu|larksuite/.test(here) ? 'login_required' : 'no_access', where: here };
     // The page asks for the draft itself; if it asks otherwise than this tool knows, the loading marks and the text below decide.
     await until(() => (answered.get(`/api/workflow/script/${id}`) ?? 0) > read, 8_000);
     // The page is drawn when nothing on it is still loading; then its images, and a moment for the last repaint.

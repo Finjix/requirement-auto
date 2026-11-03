@@ -5,7 +5,7 @@ import { ClsError, createClsAdapter } from './cls-adapter.ts';
 import { catalogChoices } from './cls.ts';
 import { attachBrowser } from './chromium.ts';
 import { guardOnline, pinState, writeQr } from './cls-guard.ts';
-import { captureAuthorization, captureLoginQr, clsAccountFile, clsProfileDir, clsQrFile, openSession, type Account, type Capture, type ConsentOptions } from './cls-session.ts';
+import { captureAuthorization, captureLoginQr, clsAccountFile, clsProfileDir, clsQrFile, openSession, unreachableReason, type Account, type Capture, type ConsentOptions } from './cls-session.ts';
 import { checkSeal, rejectSecrets } from './seal.ts';
 import { Blocked, isInside, need, readJson, writeJsonNew } from './util.ts';
 
@@ -84,6 +84,8 @@ export async function loginWithQr(online: Online, file: string): Promise<Result>
   const quiet = await online.capture(12_000);
   if (quiet.state === 'ok') return { status: 'logged_in', account: account(quiet.account) };
   if (quiet.state === 'consent_refused') throw new Blocked(quiet.reason);
+  // A code scanned while CLS cannot be reached would not log anybody in.
+  if (quiet.state === 'unreachable') throw new Blocked(unreachableReason(quiet.reason));
   need(online.loginQr, '这个环境不能用二维码登录');
   const outcome = await online.loginQr(path.resolve(file));
   if (outcome.state === 'not_login_page') {
@@ -96,12 +98,16 @@ export async function loginWithQr(online: Online, file: string): Promise<Result>
   };
 }
 
-/** Is the CLS login good right now? One look in a hidden browser, with the real session behind it: ok | login_required | blocked. */
+/**
+ * Is the CLS login good right now? One look in a hidden browser, with the real session behind it: ok | login_required | blocked, or
+ * unknown when CLS could not be asked (the login is not lost, and no code is to be scanned for it).
+ */
 export async function check(online: Online): Promise<Result> {
   try {
     const seen = await online.capture(25_000);
     if (seen.state === 'ok') return { status: 'ok', account: account(seen.account) };
     if (seen.state === 'consent_refused') return { status: 'blocked', reason: seen.reason };
+    if (seen.state === 'unreachable') return { status: 'unknown', reason: unreachableReason(seen.reason) };
     return { status: 'login_required' };
   } catch (error) {
     if (error instanceof Blocked) return { status: 'blocked', reason: error.message };

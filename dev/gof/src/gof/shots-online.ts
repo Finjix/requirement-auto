@@ -5,6 +5,7 @@ import { clsProfileDir } from './cls-session.ts';
 import { draftScreenshot, type DraftShotOptions } from './draft-shot.ts';
 import { docScreenshot, type DocShotOptions } from './doc-shot.ts';
 import { sheetScreenshot, type SheetShotOptions } from './sheet-shot.ts';
+import { notLoaded } from './shot-page.ts';
 import { Blocked, checkTarget, feishuDocPath, need, NODE } from './util.ts';
 
 /*
@@ -31,6 +32,7 @@ export async function sheetPicture(online: Online, batch: string, output: string
   // The browser profile is the CLS one: it must be this user's own, and the Feishu login that fills it is checked with the CLS one.
   await online.session();
   const shot = await sheetScreenshot({ profileDir: clsProfileDir(), output, url, range: result.range, ...deps.sheet });
+  if (shot.state === 'unreachable') throw new Blocked(notLoaded('进度表', shot.reason));
   if (shot.state === 'login_required') throw new Blocked(`飞书网页登录已失效（页面停在 ${shot.where}）：先运行 gof.mjs login check 再截图`);
   if (shot.state === 'no_access') throw new Blocked(`进度表打不开（停在 ${shot.where}）：账号可能没有这张表的权限`);
   return { status: 'screenshot_saved', file: shot.file, worksheet: result.worksheet, range: result.range, progress_sheet: url };
@@ -55,6 +57,7 @@ export async function draftPicture(online: Online, batch: string, group: string 
   const game = (Array.isArray(games) ? games : []).find((g: Obj) => g.code === 'GOFCN');
   need(game, `CLS 账号“${session.account.name}”没有 GOFCN 项目`);
   const shot = await draftScreenshot({ profileDir: clsProfileDir(), output, draftId: draft.id, game, ...deps.draft });
+  if (shot.state === 'unreachable') throw new Blocked(notLoaded('CLS 草稿页', shot.reason));
   if (shot.state === 'login_required') throw new Blocked('CLS 登录已失效（页面停在登录页）：先运行 gof.mjs login check 再截图');
   if (shot.state === 'no_access') throw new Blocked(`草稿页打不开（停在 ${shot.where}）：账号可能没有这个页面的权限`);
   return { status: 'screenshot_saved', file: shot.file, group: draft.group, draft_id: draft.id, draft_url: draft.url };
@@ -77,11 +80,13 @@ export async function docPicture(online: Online, url: string, focus: { block?: s
     const located = new URL(url);
     if (focus.sheet_id) located.searchParams.set('sheet', focus.sheet_id);
     const shot = await sheetScreenshot({ profileDir: clsProfileDir(), output, url: located.toString(), range: focus.range, ...deps.sheet });
+    if (shot.state === 'unreachable') throw new Blocked(notLoaded('表格', shot.reason));
     if (shot.state === 'login_required') throw new Blocked(`飞书网页登录已失效（页面停在 ${shot.where}）：先运行 gof.mjs login check 再截图`);
     if (shot.state === 'no_access') throw new Blocked(`表格打不开（停在 ${shot.where}）：账号可能没有这份表格的权限`);
     return { status: 'screenshot_saved', file: shot.file, url: located.toString(), ...(focus.range ? { range: focus.range } : {}) };
   }
   const shot = await docScreenshot({ profileDir: clsProfileDir(), output, url, block: focus.block, ...deps.doc });
+  if (shot.state === 'unreachable') throw new Blocked(notLoaded('文档', shot.reason));
   if (shot.state === 'login_required') throw new Blocked(`飞书网页登录已失效（页面停在 ${shot.where}）：先运行 gof.mjs login check 再截图`);
   if (shot.state === 'no_access') throw new Blocked(`文档打不开（停在 ${shot.where}）：账号可能没有这份文档的权限`);
   return { status: 'screenshot_saved', file: shot.file, url, ...(focus.block ? { block: focus.block } : {}) };

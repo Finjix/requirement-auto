@@ -64,6 +64,17 @@ test('the list picture shows GOFCN and this account’s uploads, newest first, a
   } finally { app.close(); }
 });
 
+test('a list that does not load is reported as that, not as a lapsed login', needBrowser, async () => {
+  const free = http.createServer();
+  await new Promise<void>(resolve => free.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(free.address() as AddressInfo).port}`;
+  await new Promise<void>(resolve => free.close(() => resolve()));
+  const output = path.join(tempDir('shot-'), 'creatives.png');
+  const result = await listScreenshot({ profileDir: tempDir('shot-profile-'), output, accountId: 1565, game: GAME, origin, exe, waitMs: 5_000 });
+  assert.equal(result.state, 'unreachable', JSON.stringify(result));
+  assert.equal(fs.existsSync(output), false);
+});
+
 test('without a login the picture is not taken and the sign-in page is reported', needBrowser, async () => {
   const app = await fakeApp(false);
   try {

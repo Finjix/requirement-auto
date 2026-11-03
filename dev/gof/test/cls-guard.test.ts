@@ -55,6 +55,17 @@ test('the first CLS account is pinned, the same one passes, another is refused w
   assert.ok(!/authorization|token|secret/i.test(text), 'the pin holds id and name only');
 });
 
+test('the same CLS account under a new name keeps its pin under the new name, which the consent page is then checked against', () => {
+  const file = path.join(tempDir('ra-pin-rename-'), 'cls', 'account.json');
+  checkPin(file, { id: 1565, name: '钟丰骏-实习生' }, () => new Date('2026-10-20T08:00:00Z'));
+  checkPin(file, { id: 1565, name: '钟丰骏' });
+  assert.deepEqual(readPin(file), { id: 1565, name: '钟丰骏', pinned_at: '2026-10-20T08:00:00.000Z' }, 'renamed, pinned as before');
+  checkPin(file, { id: 1565, name: '' });
+  assert.equal(readPin(file)?.name, '钟丰骏', 'a login that gives no name changes nothing');
+  assert.throws(() => checkPin(file, bob), /已绑定为“钟丰骏”/);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['account.json'], 'nothing is left beside the pin');
+});
+
 test('through the commands: login pins, a different account is refused by login and by every later command', async () => {
   const dir = tempDir('ra-pin-cmd-');
   const pinFile = path.join(dir, 'account.json');

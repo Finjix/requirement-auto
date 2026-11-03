@@ -1,4 +1,5 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Blocked } from './util.ts';
@@ -7,13 +8,21 @@ import { Blocked } from './util.ts';
  * A minimal Chromium driver: find the Chrome or Edge that is already installed, start it with its own profile folder and
  * speak the DevTools protocol to it over a WebSocket. No download, no npm dependency, no UI automation: it exists so that a
  * person can log in to a web site in an ordinary browser window and the login can then be observed.
+ *
+ * The feishu plugin drives the same profile (its Feishu web session is what CLS signs in with) with its own copy of this file, browser.ts.
+ * The two copies share the profile through the lock below (a file beside the profile) and the DevToolsActivePort file in it, so
+ * those two must stay the same in both: change them together or not at all.
  */
 
 type Obj = Record<string, any>;
 type Handler = (params: Obj, sessionId: string | undefined) => void;
 
-/** Environment variable that names the browser executable to use instead of searching for one. */
-export const BROWSER_ENV = 'REQUIREMENT_AUTO_BROWSER';
+/**
+ * Environment variable that names the browser executable to use instead of searching for one. requirement-auto's older name is read too:
+ * both plugins must start the same browser on the profile they share, or the Feishu web session would not carry over.
+ */
+export const BROWSER_ENV = 'FEISHU_BROWSER';
+const OLD_BROWSER_ENV = 'REQUIREMENT_AUTO_BROWSER';
 
 /** The browsers searched, in order, when the environment does not name one. Edge ships with Windows 10 and 11, so it is the usual find there. */
 export function browserCandidates(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string[] {
@@ -31,7 +40,7 @@ export function browserCandidates(platform: NodeJS.Platform = process.platform, 
 }
 
 export function findBrowser(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | undefined {
-  const named = env[BROWSER_ENV]?.trim();
+  const named = env[BROWSER_ENV]?.trim() || env[OLD_BROWSER_ENV]?.trim();
   if (named) return path.isAbsolute(named) && fs.statSync(named, { throwIfNoEntry: false })?.isFile() ? named : undefined;
   return browserCandidates(platform, env).find(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile());
 }
@@ -142,7 +151,17 @@ function killTree(pid: number): Promise<void> {
 
 /** Whether a browser's DevTools endpoint answers on this port. */
 async function answers(port: number, timeoutMs = 3_000): Promise<boolean> {
-  try { return (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(timeoutMs) })).ok; } catch { return false; }
+  return await endpointOn(port, timeoutMs) !== undefined;
+}
+
+/** The path of the browser endpoint that answers on this port (/devtools/browser/<id>, '' when it does not say), or nothing when none answers. */
+async function endpointOn(port: number, timeoutMs = 3_000): Promise<string | undefined> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) return undefined;
+    const url = (await response.json().catch(() => ({})) as { webSocketDebuggerUrl?: unknown }).webSocketDebuggerUrl;
+    try { return typeof url === 'string' ? new URL(url).pathname : ''; } catch { return ''; }
+  } catch { return undefined; }
 }
 
 /** Joins a browser that is already running on this profile (a login window left open by an earlier command), if there is one. */
@@ -152,9 +171,11 @@ async function joinBrowser(profileDir: string): Promise<BrowserHandle | undefine
   const url = `ws://127.0.0.1:${found.port}${found.path}`;
   let cdp: Cdp;
   try { cdp = await Cdp.connect(url, 2_000); } catch {
-    // The port file of a browser that was killed stays behind; a running one that is only slow to answer must not be taken for gone: a second
-    // browser started on its profile is handed over to it by Chrome and exits, and the port file deleted on the way leaves it unreachable.
-    if (!await answers(found.port)) return undefined;
+    // The port file of a browser that was killed stays behind, and its port may belong to another browser by now; a running one that is
+    // only slow to answer must not be taken for gone: a second browser started on its profile is handed over to it by Chrome and exits,
+    // and the port file deleted on the way leaves it unreachable.
+    const answering = await endpointOn(found.port);
+    if (answering === undefined || (answering && answering !== found.path)) return undefined;
     try { cdp = await Cdp.connect(url, 15_000); } catch { throw new Blocked('这个用户的浏览器在运行，但调试接口没有响应；请稍后再试'); }
   }
   return {
@@ -172,17 +193,18 @@ async function joinBrowser(profileDir: string): Promise<BrowserHandle | undefine
 /*
  * One command at a time drives a profile's browser. Two would share its first tab and one would close the browser under the other. The lock
  * is a file beside the profile, held from opening the browser until this process lets go of it: by closing the browser, or only its
- * connection when the browser is left running for a scan. A holder whose process has ended does not count. Within one process the lock is
- * shared (nested opens of a profile are the caller's own business).
+ * connection when the browser is left running for a scan. The holder renews it every LOCK_RENEW_MS. A holder whose process has ended does
+ * not count, and neither does one that has not renewed it for LOCK_STALE_MS (Windows soon gives a dead process's id to another one, which
+ * would otherwise keep the lock alive). Within one process the lock is shared (nested opens of a profile are the caller's own business).
  */
-const LOCK_WAIT_MS = 120_000, LOCK_STALE_MS = 15 * 60_000;
-const held = new Map<string, number>();
+const LOCK_WAIT_MS = 120_000, LOCK_RENEW_MS = 30_000, LOCK_STALE_MS = 2 * 60_000;
+const held = new Map<string, { count: number; token: string; timer: NodeJS.Timeout }>();
 
 function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
-/** Whether a lock file is of nobody any more: its process ended, it is very old, or it was never finished being written. */
+/** Whether a lock file is of nobody any more: its process ended, it has not been renewed for long, or it was never finished being written. */
 function abandoned(file: string, text: string): boolean {
   let holder: { pid?: unknown; at?: unknown } | undefined;
   try { holder = JSON.parse(text); } catch { /* half written */ }
@@ -193,35 +215,50 @@ function abandoned(file: string, text: string): boolean {
   return !alive(holder.pid) || Date.now() - holder.at > LOCK_STALE_MS;
 }
 
+/** Whether the lock file is still the one this holder wrote (it may have been taken over as abandoned meanwhile). */
+function ownedBy(file: string, token: string): boolean {
+  try { return (JSON.parse(fs.readFileSync(file, 'utf8')) as { token?: unknown }).token === token; } catch { return false; }
+}
+
 export async function lockProfile(profileDir: string, waitMs = LOCK_WAIT_MS): Promise<() => void> {
   const file = `${path.resolve(profileDir)}.lock`;
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
-    const left = (held.get(file) ?? 1) - 1;
-    if (left > 0) held.set(file, left);
-    else { held.delete(file); fs.rmSync(file, { force: true }); }
+    const mine = held.get(file);
+    if (!mine || --mine.count > 0) return;
+    held.delete(file);
+    clearInterval(mine.timer);
+    if (ownedBy(file, mine.token)) fs.rmSync(file, { force: true });
   };
-  if (held.has(file)) { held.set(file, held.get(file)! + 1); return release; }
+  const mine = held.get(file);
+  if (mine) { mine.count++; return release; }
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  const token = randomUUID();
+  const content = () => JSON.stringify({ pid: process.pid, at: Date.now(), token });
   for (const deadline = Date.now() + waitMs; ;) {
     try {
-      fs.writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: 'wx' });
-      held.set(file, 1);
+      fs.writeFileSync(file, content(), { flag: 'wx' });
+      const timer = setInterval(() => { if (ownedBy(file, token)) { try { fs.writeFileSync(file, content()); } catch { /* renewed at the next beat */ } } }, LOCK_RENEW_MS);
+      timer.unref();
+      held.set(file, { count: 1, token, timer });
       return release;
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    let text = '';
-    try { text = fs.readFileSync(file, 'utf8'); } catch { continue; } // let go of a moment ago
-    if (abandoned(file, text)) {
+    let text: string | undefined;
+    try { text = fs.readFileSync(file, 'utf8'); } catch { /* let go of a moment ago, or not a file that can be read: waited on like a held lock */ }
+    if (text !== undefined && abandoned(file, text)) {
       // Taken away under a name of its own, so that of several waiters seeing the same dead lock none removes a lock just made by another.
       const aside = `${file}.${process.pid}-${Math.random().toString(16).slice(2)}`;
-      try { fs.renameSync(file, aside); } catch { continue; }
-      let moved = '';
-      try { moved = fs.readFileSync(aside, 'utf8'); } catch { /* gone */ }
-      if (moved === text) fs.rmSync(aside, { force: true });
-      else { try { fs.renameSync(aside, file); } catch { fs.rmSync(aside, { force: true }); } }
-      continue;
+      let taken = true;
+      try { fs.renameSync(file, aside); } catch { taken = false; }
+      if (taken) {
+        let moved = '';
+        try { moved = fs.readFileSync(aside, 'utf8'); } catch { /* gone */ }
+        if (moved === text) fs.rmSync(aside, { force: true });
+        else { try { fs.renameSync(aside, file); } catch { fs.rmSync(aside, { force: true }); } }
+        continue;
+      }
     }
     if (Date.now() > deadline) {
       throw new Blocked('这个用户的浏览器正被另一个命令使用：同一时间只能运行一个用到浏览器的命令（登录、检查登录、截图、素材上传），请等它结束后再运行');

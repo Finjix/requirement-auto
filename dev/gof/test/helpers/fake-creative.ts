@@ -20,6 +20,8 @@ export interface FakeCreative {
   annotateMode: 'normal' | 'ignore-once' | 'refuse';
   /** The signing call hands out links to a host the client must refuse. */
   signElsewhere: boolean;
+  /** The Authorization values CLS takes; a test takes one away to have a login run out. */
+  tokens: Set<string>;
   close(): void;
 }
 
@@ -43,7 +45,7 @@ export const TYPES = [{ id: 'video', name: '视频' }, { id: '2d_video', name: '
 export async function fakeCreative(options: { existing?: Obj[]; canUpload?: boolean } = {}): Promise<FakeCreative> {
   const state: FakeCreative = {
     origin: '', requests: [], creatives: new Map(), objects: new Map(), logs: [],
-    createMode: 'normal', annotateMode: 'normal', signElsewhere: false, close: () => undefined,
+    createMode: 'normal', annotateMode: 'normal', signElsewhere: false, tokens: new Set(['Bearer good']), close: () => undefined,
   };
   let nextId = 556000;
   let ignored = false;
@@ -69,7 +71,7 @@ export async function fakeCreative(options: { existing?: Obj[]; canUpload?: bool
         response.writeHead(200, { ETag: `"${createHash('md5').update(raw).digest('hex')}"` });
         return response.end();
       }
-      if (request.headers.authorization !== 'Bearer good') return send(null, 401, 401, 'unauthorized');
+      if (!state.tokens.has(String(request.headers.authorization))) return send(null, 401, 401, 'unauthorized');
       const q = url.searchParams;
       if (request.method === 'GET') {
         if (path === '/api/creative/games') return send([GAME]);
@@ -87,7 +89,8 @@ export async function fakeCreative(options: { existing?: Obj[]; canUpload?: bool
           if (keywords) list = list.filter(c => c.name.includes(keywords) || String(c.id) === keywords);
           if (uploaders.length) list = list.filter(c => uploaders.includes(c.upload_user_id));
           list.sort((a, b) => b.id - a.id);
-          return send({ creatives: list.slice(0, Number(q.get('page_size') ?? 50)).map(c => ({ id: c.id, name: c.name, upload_user_id: c.upload_user_id, user_id: c.user_id, user_ids: c.user_ids,
+          const size = Number(q.get('page_size') ?? 50), page = Number(q.get('page') ?? 1);
+          return send({ creatives: list.slice((page - 1) * size, page * size).map(c => ({ id: c.id, name: c.name, upload_user_id: c.upload_user_id, user_id: c.user_id, user_ids: c.user_ids,
             sync_status: { adsdesk: { status: 0, total: 1, succ: 0, fail: 0 } } })), total: list.length });
         }
         const one = /^\/api\/creative\/(\d+)$/.exec(path);

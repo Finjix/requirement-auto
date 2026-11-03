@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { attachBrowser } from './chromium.ts';
 import type { Online } from './cls-online.ts';
-import type { Account, Capture } from './cls-session.ts';
+import { checkLoopbackProxy, type Account, type Capture } from './cls-session.ts';
 import { Blocked } from './util.ts';
 
 /*
@@ -54,6 +54,13 @@ export function checkPin(file: string, account: Account, now: () => Date = () =>
       `这个用户的 CLS 账号已绑定为“${pin.name}”，这次登录的是另一个账号，已拒绝。请用“${pin.name}”的公司账号登录；`
       + '如果确实要更换账号，需要管理员清除该用户的 CLS 登录资料后重新登录。');
   }
+  // The same account under another name (an intern taken on, say): the consent page is checked against the name it goes by now. Written
+  // aside and moved into place, so that a pin is never left half written.
+  if (pin && account.name && account.name !== pin.name) {
+    const aside = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(aside, `${JSON.stringify({ id: pin.id, name: account.name, pinned_at: pin.pinned_at }, null, 2)}\n`, 'utf8');
+    fs.renameSync(aside, file);
+  }
 }
 
 /*
@@ -97,6 +104,8 @@ export function clearQr(recordFile: string): void {
 export async function reapStaleQr(recordFile: string, profileDir: string, now: () => number = Date.now): Promise<void> {
   const record = readQr(recordFile);
   if (!record || now() - record.created_at < QR_MAX_AGE_MS) return;
+  // A browser that cannot be reached through a proxy would be taken for gone, and its record dropped while it keeps running.
+  await checkLoopbackProxy();
   const browser = await attachBrowser(profileDir);
   if (browser) await browser.close();
   clearQr(recordFile);

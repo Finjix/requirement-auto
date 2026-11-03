@@ -113,8 +113,11 @@ export function makePlan(snapshot: Snapshot, requestInput: unknown, current?: st
         }
         const nameCoord = coordOf(cols.name!, r);
         const formula = rowFormula(snapshot, sheet, cols, r, withoutForm);
-        // The name is what the formula makes of the row; a name the request gives (a file named for its row) must come out exactly.
-        const name = concatenate(formula, values);
+        // The name is what the formula makes of the row; a name the request gives (a file named for its row) must come out exactly. A cell of
+        // the row outside the appended columns that a colleague's formula takes as well (rowFormula took it empty) is empty in a new row:
+        // preflight refuses a row with anything in it.
+        const outside = Object.fromEntries(formulaRefs(formula).filter(coord => Number(/\d+$/.exec(coord)![0]) === r).map(coord => [coord, null]));
+        const name = concatenate(formula, { ...outside, ...values });
         need(name.startsWith(`GOFCN${number}_`), '命名公式未产生正确 GOFCN 编号');
         need(item.material_name === undefined || name === `GOFCN${number}_${item.material_name}`,
           `按进度表的命名（${naming}），这一行会叫“${name}”，不是要求的“GOFCN${number}_${item.material_name}”：核对一级标签、二级标签、创意形式和提炼词`);

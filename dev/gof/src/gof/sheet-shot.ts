@@ -23,7 +23,9 @@ export interface SheetShotOptions {
 export type SheetShotResult =
   | { state: 'ok'; file: string; where: string }
   | { state: 'login_required'; where: string }
-  | { state: 'no_access'; where: string };
+  | { state: 'no_access'; where: string }
+  /** The page did not load at all (the network, a proxy, DNS): nothing is known about the login. */
+  | { state: 'unreachable'; where: string; reason: string };
 
 const WIDTH = 2000;
 const HEIGHT = 1100;
@@ -57,6 +59,8 @@ export async function sheetScreenshot(options: SheetShotOptions): Promise<SheetS
       return await evaluate(`document.readyState === 'complete' && document.querySelectorAll('canvas').length > 0`) === true;
     }, wait);
     const here = await where();
+    const broken = await page.loadError();
+    if (broken) return { state: 'unreachable', where: here, reason: broken };
     if (!here.startsWith(home) || signIn(here)) return { state: 'login_required', where: here };
     if (await evaluate(`document.querySelectorAll('canvas').length`) === 0) return { state: 'no_access', where: here };
     // The sheet's cells come in after the page: wait for its data to stop arriving, then for the canvas to be painted.

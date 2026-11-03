@@ -451,6 +451,18 @@ test('a new row is named GOFCN<编号>_<一级>_<二级>_<创意形式>_<提炼�
     `=SUBSTITUTE(${OLD(5)},"__","_")`);
 });
 
+test('a formula above that also takes a cell left of the appended columns is followed too: in a new row that cell is empty', () => {
+  // B is 创意批次, outside C:N, which the append writes.
+  const withBatch = liveSheet(r => `CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",K${r},"_",D${r},B${r})`);
+  const plan = makePlan(withBatch, { groups: [derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D' })] });
+  assert.equal(plan.range, 'C5:N5');
+  assert.deepEqual([plan.rows[0].values.G5, plan.rows[0].name], ['=CONCATENATE("GOFCN",C5,"_",H5,"_",I5,"_",K5,"_",D5,B5)', 'GOFCN67738_AI生成_设定3.0_3D_关键词']);
+  assert.equal(plan.naming, 'GOFCN<素材编号>_<一级标签>_<二级标签>_<创意形式>_<提炼词><创意批次>');
+  // A reference to another row is no naming of this one: the sheet's own naming is written instead.
+  const crossRow = liveSheet(r => `CONCATENATE("GOFCN",C${r},"_",H${r},"_",I${r},"_",K${r},"_",D${r - 1})`);
+  assert.equal(makePlan(crossRow, { groups: [derived({ quantity: 1, primary_tag: 'AI生成', secondary_tag: '设定3.0', creative_form: '3D' })] }).rows[0].values.G5, OWN(5));
+});
+
 test('files named for rows not appended yet (GOFCNxxxxx_…) become rows of exactly those names, checked against the formula', () => {
   const snapshot = liveSheet();
   // Two versions of one piece: 兵临城下塔防 is no 创意形式 here but the start of each 提炼词.

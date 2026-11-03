@@ -44,7 +44,9 @@ export class Bridge {
     let reply: BridgeReply;
     try {
       reply = await this.run(name, payload === undefined ? {} : payload);
-    } catch {
+    } catch (error) {
+      // A refusal before anything went out (the feishu plugin is not installed, FEISHU_PLUGIN is wrong) says what is to be done about it.
+      if (error instanceof Blocked) throw error;
       throw new Blocked(write ? '接口写入结果未知，必须回读，不可重试' : '飞书桥调用失败');
     }
     this.calls.push({ command: [name], path: options.path ?? null, write, elapsed_ms: Date.now() - started, ok: reply.ok });
@@ -81,7 +83,11 @@ export class Bridge {
    */
   async checkLogin(): Promise<Obj> {
     let reply: BridgeReply;
-    try { reply = await this.run('auth-verify', {}); } catch { return { status: 'unreachable', reason: '飞书桥调用失败' }; }
+    try { reply = await this.run('auth-verify', {}); } catch (error) {
+      // A feishu plugin that cannot be found is not a moment's outage: checking again later does not help.
+      if (error instanceof Blocked) return { status: 'blocked', reason: error.message };
+      return { status: 'unreachable', reason: '飞书桥调用失败' };
+    }
     if (!reply || typeof reply !== 'object' || typeof reply.ok !== 'boolean') return { status: 'blocked', reason: '飞书桥返回结构不匹配' };
     if (reply.ok) {
       const data = reply.data as Obj;
@@ -277,10 +283,9 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
   await bridge.doctor();
   const token = await target(bridge);
   need(token === context.spreadsheet_token && approved.production_token === token, '目标与安全验证记录不匹配');
-  const attempt = path.join(batchPath, `api-attempt-${String(events(batchPath).length + 1).padStart(6, '0')}`);
-  // No append_started yet (checked above), so a folder of that name is what a killed, unsent attempt left behind.
-  fs.rmSync(attempt, { recursive: true, force: true });
-  fs.mkdirSync(attempt);
+  // A folder of this run's own: two appends of one batch at once (a retry while the first is still exporting) must not share one, or the
+  // one that loses the append_started race takes the other's export and proof away with it. A killed run's folder is left as it is.
+  const attempt = fs.mkdtempSync(path.join(batchPath, `api-attempt-${String(events(batchPath).length + 1).padStart(6, '0')}-`));
   let fresh: Snapshot | undefined;
   let started = false;
   try {
@@ -313,7 +318,9 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
     return { status: 'append_verified', batch: batchPath, worksheet: manifest.plan.worksheet, sheet_id: context.sheet_id, sheet_url: sheetUrl(context.sheet_id),
       range: manifest.plan.range, report: reportPath, calls: bridge.calls, ...(result.foreign_changes ? { foreign_changes: result.foreign_changes } : {}) };
   } catch (error) {
-    if (started && !status(batchPath).blocked) {
+    const state = started ? status(batchPath) : undefined;
+    // Rows taken over meanwhile (gof batch adopt) belong to that batch now: this one records nothing more.
+    if (state && !state.blocked && !state.taken_over) {
       record(batchPath, 'blocked', null, { reason: '飞书接口写入/验收失败或结果未知；先回读，不重试', transport: 'feishu_api' });
     }
     // A refusal after the send reads much like one before it ("…期间出现并发变化"): say plainly that the rows may be in the sheet already.
@@ -321,7 +328,7 @@ export async function execute(bridge: Bridge, dir: string, receipt: string): Pro
     throw error;
   } finally {
     fresh?.close();
-    // Nothing was sent: the attempt directory holds only a preflight export, and a retry must be able to use its name again.
+    // Nothing was sent: this run's attempt directory holds only its preflight export.
     if (!started) fs.rmSync(attempt, { recursive: true, force: true });
   }
 }

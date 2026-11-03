@@ -14,6 +14,7 @@ start.cmd
 ```
 
 - 第一次放，直接把文件夹拖进 `plugins/` 也一样；之后更新用 `/MIR`（镜像）而不是覆盖粘贴：覆盖粘贴会把旧版里已删除的文件留在 `plugins/` 里。（`robocopy` 返回 1 到 7 都是成功。）
+- feishu 插件的文件夹叫 `feishu-plugin`（如上）或 `feishu` 都行：Codex 运行的是装进 `.codex/plugins/cache/lark-agent/` 的副本，在那里按插件名 `feishu` 找到；直接运行 `plugins/requirement-auto/server/dist/gof.mjs`（比如下面验证用的 `feishu doctor`）时，`gof.mjs` 认并排的 `plugins/feishu-plugin` 和 `plugins/feishu` 两种名字。
 - 日志里出现 `已安装插件`、`插件已就绪`，`http://127.0.0.1:8765/health` 的 `plugins.loaded` 里有 `requirement-auto`，就是装好了。`start.cmd doctor` 不改动任何东西，只告诉你 `plugins/` 下每个文件夹的状态。
 - 以后改了插件：重复上面的复制和重启。内容变了（版本号没变也算）会自动整体替换；把文件夹从 `plugins/` 删掉就卸载；文件夹改名加 `_` 前缀就是停用。
 - 服务运行中复制没有效果，只在启动时扫描。

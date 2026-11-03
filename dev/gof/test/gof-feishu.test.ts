@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BRIDGE_VERSION, FeishuServe, type BridgeReply } from '../src/gof/feishu-plugin.ts';
-import { status } from '../src/gof/batch.ts';
+import { BRIDGE_VERSION, FeishuServe, locateFeishu, MISSING, type BridgeReply } from '../src/gof/feishu-plugin.ts';
+import { report, status } from '../src/gof/batch.ts';
 import { Bridge, OccupiedRefusal, SCOPES, addOption, apiPlan, authorizeFeishu, execute, login, planWithApi, probe, readRules, reconcile, recomputeApiPlan, recomputePlan } from '../src/gof/feishu.ts';
 import { readBrief } from '../src/gof/brief.ts';
 import { context } from '../src/gof/context.ts';
@@ -15,7 +15,9 @@ import { acceptance, dropdowns } from '../src/gof/rules.ts';
 import { seal } from '../src/gof/seal.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { Blocked, NODE, readJson, WriteSent } from '../src/gof/util.ts';
+import { ZipReader } from '../src/gof/zip.ts';
 import { main } from '../src/gof/cli.ts';
+import { makeZip } from './helpers/zip-writer.ts';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'gof-feishu-'));
@@ -228,6 +230,41 @@ test('the feishu plugin’s bridge (the real one, next to this repository) answe
   } finally { serve.close(); }
 });
 
+test('a bridge process that ends before it reads a request rejects the call: the command does not crash on the broken pipe', async () => {
+  // A feishu.mjs that does not serve (an old or broken copy): it ends at once and never reads its input.
+  const fake = path.join(tmp(), 'feishu.mjs');
+  fs.writeFileSync(fake, 'process.exitCode = 2;');
+  const serve = new FeishuServe({ ...process.env, FEISHU_PLUGIN: fake });
+  // Far more than a pipe holds, so it is still being written when the process ends.
+  await assert.rejects(serve.call('sheets-cells-set', { writes: 'x'.repeat(4 << 20) }), /feishu 插件进程已结束/);
+  serve.close();
+});
+
+test('a feishu plugin that cannot be found is said as such, not as a failed bridge call', async () => {
+  const serve = new FeishuServe({ ...process.env, FEISHU_PLUGIN: path.join(tmp(), 'nowhere', 'feishu.mjs') });
+  const bridge = new Bridge((command, input) => serve.call(command, input));
+  await failsWith(bridge.doctor(), /^FEISHU_PLUGIN 不是 feishu\.mjs 的绝对路径$/);
+  await failsWith(bridge.cellsSet('shtABCDEFGH', [{ sheet_id: 's', range: 'A1:A1', cells: [[{ value: 1 }]], allow_overwrite: false }]), /^FEISHU_PLUGIN/);
+  assert.deepEqual(await bridge.checkLogin(), { status: 'blocked', reason: 'FEISHU_PLUGIN 不是 feishu.mjs 的绝对路径' });
+  // Not installed anywhere: the message tells the user what to do.
+  assert.throws(() => locateFeishu({}, path.join(tmp(), 'plugins', 'requirement-auto', 'server', 'dist', 'gof.mjs')), (e: Error) => e instanceof Blocked && e.message === MISSING);
+});
+
+test('the feishu plugin is found next to this one as `feishu`, or as lark-agent names its folder, `feishu-plugin`', () => {
+  const plugins = path.join(tmp(), 'plugins');
+  const gof = path.join(plugins, 'requirement-auto', 'server', 'dist', 'gof.mjs');
+  const entry = (folder: string) => {
+    const file = path.join(plugins, folder, 'server', 'dist', 'feishu.mjs');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '');
+    return file;
+  };
+  const larkAgent = entry('feishu-plugin');
+  assert.equal(locateFeishu({}, gof), larkAgent);
+  const own = entry('feishu');
+  assert.equal(locateFeishu({}, gof), own, 'the plugin\'s own name comes first');
+});
+
 test('a dropdown keeps the options of the rule it follows and adds only what the request asks for', () => {
   const rule = { sheet_id: 's1', ranges: ['E2:E5'], type: 'list' as const, options: ['a', 'b'], multiple: false, highlight: true, colors: { a: '#111111', b: '#222222' } };
   // `spec.options` comes from the XLSX export, which can carry the options of a stray rule on a few old cells; none of that may be written.
@@ -264,8 +301,12 @@ class FakeProduction {
   appended = false;
   productionWrites = 0;
   failWrite: BridgeReply | undefined;
+  /** What the workbook looks like before the write (a fixture, or a file of the test's own). */
+  base = 'base.xlsx';
   /** What the workbook looks like once the write landed: the appended rows, plus whatever colleagues changed meanwhile. */
   after = 'applied-complete.xlsx';
+  /** How long an export takes. */
+  delay = 0;
   /** A write that lands but whose answer is lost on the way back. */
   landThenFail: BridgeReply | undefined;
   /** Dropdown rules colleagues change once the write is in. */
@@ -288,7 +329,8 @@ class FakeProduction {
     }
     if (name === 'sheets-revision') return reply({ revision: 42 });
     if (name === 'sheets-export') {
-      fs.copyFileSync(path.join(fixtures, this.appended ? this.after : 'base.xlsx'), payload.output, fs.constants.COPYFILE_EXCL);
+      if (this.delay) await new Promise(resolve => setTimeout(resolve, this.delay));
+      fs.copyFileSync(path.resolve(fixtures, this.appended ? this.after : this.base), payload.output, fs.constants.COPYFILE_EXCL);
       return reply({ path: payload.output, bytes: 1 });
     }
     if (name === 'sheets-cells-set') {
@@ -318,12 +360,13 @@ class FakeProduction {
   }
 }
 
-async function approvedBatch() {
+async function approvedBatch(setUp: (fake: FakeProduction) => void = () => {}) {
   const fake = new FakeProduction();
+  setUp(fake);
   const probeServer = new FakeSheets();
   probeServer.production = fake.handle;
   const bridge = new Bridge(async (name, payload) => probeServer.handle(name, payload));
-  const base = new Snapshot(path.join(fixtures, 'base.xlsx'));
+  const base = new Snapshot(path.resolve(fixtures, fake.base));
   const request = readJson(path.join(fixtures, 'requests', 'basic.json'));
   const approved = await planWithApi(bridge, base, request);
   assert.equal(approved.api_plan.sheet_id, 's3');
@@ -393,6 +436,49 @@ test('a dropdown a colleague changes in a column the append does not write is th
   const written = await approvedBatch();
   written.fake.colleagueRules = rules => rules.map((r, i) => i === 0 ? { ...r, conditionValues: [...r.conditionValues, '新玩法'] } : r);
   await failsWith(execute(written.bridge, written.dir, written.receipt), /写入已发出.*历史下拉规则/, WriteSent);
+});
+
+/** A fixture with one more dropdown rule on the appended sheet, as the XLSX export can show one that the API has elsewhere or not at all. */
+function withRule(fixture: string, rule: string): string {
+  const zip = new ZipReader(fs.readFileSync(path.join(fixtures, fixture)));
+  const sheet = 'xl/worksheets/sheet3.xml';
+  const xml = zip.text(sheet).replace(/<dataValidations count="(\d+)">/, (_, n: string) => `<dataValidations count="${Number(n) + 1}">${rule}`);
+  assert.notEqual(xml, zip.text(sheet));
+  const file = path.join(tmp(), fixture);
+  fs.writeFileSync(file, makeZip(zip.names().map(name => ({ name, data: name === sheet ? xml : zip.read(name) }))));
+  return file;
+}
+
+test('a dropdown the XLSX export lists with options the API’s rule lacks does not fail a correct append: the new rows are judged by the rules read back through the API', async () => {
+  const stray = '<dataValidation sqref="E2:E1048576" type="list" allowBlank="1"><formula1>"老选项"</formula1></dataValidation>';
+  const setUp = (fake: FakeProduction) => {
+    fake.base = withRule('base.xlsx', stray);
+    fake.after = withRule('applied-complete.xlsx', stray);
+    // Through the API the stray rule is on the one old cell it really is on.
+    fake.extraRules.push({ dataValidationType: 'list', conditionValues: ['老选项'], ranges: ['s3!E3:E3'], options: { multipleValues: false, highlightValidData: false, colorValueMap: {} } });
+  };
+  const { fake, bridge, dir, receipt, approved } = await approvedBatch(setUp);
+  const options = (plan: any) => plan.dropdowns.find((d: any) => d.field === 'secondary_tag').options;
+  assert.deepEqual([options(approved.batch_plan), options(approved.api_plan)], [['老选项', '卖点', '体验'], ['卖点', '体验']], 'the plan reads the export’s list, the append writes the API’s');
+  assert.equal((await execute(bridge, dir, receipt)).status, 'append_verified');
+  assert.equal(fake.productionWrites, 1);
+  assert.equal((await reconcile(bridge, dir)).status, 'complete');
+  // What the append wrote is still checked: a new row whose dropdown reads back without one of its options fails it.
+  const lost = await approvedBatch(f => { setUp(f); f.colleagueRules = rules => rules.map(r => (r.ranges[0] === 's3!E6:E8' ? { ...r, conditionValues: ['卖点'] } : r)); });
+  await failsWith(execute(lost.bridge, lost.dir, lost.receipt), /写入已发出.*新增下拉规则缺失\/冲突/, WriteSent);
+});
+
+test('two appends of one batch at once send one write: the first is verified, the second is refused before it sends anything', async () => {
+  const { fake, bridge, dir, receipt } = await approvedBatch(f => { f.delay = 300; });
+  const [first, second] = await Promise.allSettled([execute(bridge, dir, receipt),
+    // A retry while the first is still exporting.
+    new Promise(resolve => setTimeout(resolve, 100)).then(() => execute(bridge, dir, receipt))]);
+  assert.equal(first.status === 'fulfilled' && first.value.status, 'append_verified', first.status === 'rejected' ? String(first.reason) : '');
+  assert.ok(second.status === 'rejected' && second.reason instanceof Blocked && !(second.reason instanceof WriteSent), String((second as PromiseRejectedResult).reason));
+  assert.equal(fake.productionWrites, 1);
+  assert.deepEqual([status(dir).append_verified, status(dir).blocked], [true, false]);
+  // The first run's export and proof are where its record says: the report verifies them again.
+  assert.equal(report(dir).status, 'report_ready');
 });
 
 test('what touches the appended rows still fails the append, and every refusal after the send says the write went out', async () => {

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findBrowser, openBrowser, type Cdp } from './chromium.ts';
+import { checkLoopbackProxy, NO_BROWSER } from './cls-session.ts';
 import { Blocked, need } from './util.ts';
 
 /*
@@ -14,8 +15,11 @@ type Obj = Record<string, any>;
 export const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 /** The current game the CLS app keeps in local storage (DD-CLS-GLOBAL-CURGAME). */
 const GAME_KEY = 'DD-CLS-GLOBAL-CURGAME';
-export const NO_BROWSER = '没有找到 Chrome 或 Edge：请安装其一，或用环境变量 REQUIREMENT_AUTO_BROWSER 指定浏览器的绝对路径';
+export { NO_BROWSER };
 export const EXISTS = '截图文件已存在，不覆盖；换一个新的 .png 文件名';
+
+/** A page that did not load at all: the network or the site, not the login (which a refusal would otherwise send the user to renew). */
+export const notLoaded = (what: string, reason: string): string => `${what}打不开（${reason}）：网络或网站暂时不可用，不是登录失效；稍后再截图`;
 
 /** Checks the target of a picture before anything is started: a .png that does not exist yet. */
 export function checkPictureTarget(target: string): string {
@@ -57,6 +61,8 @@ export interface ShotPage {
   where: () => Promise<string>;
   until: (condition: () => boolean | Promise<boolean>, ms: number) => Promise<boolean>;
   navigate: (url: string) => Promise<void>;
+  /** Why the page did not load (the network, a proxy, DNS: Chrome's error page, or a navigation that failed), or undefined when it did. */
+  loadError: () => Promise<string | undefined>;
   resize: (width: number, height: number) => Promise<void>;
   /** The page as it is now, as PNG bytes. */
   capture: () => Promise<Buffer>;
@@ -73,6 +79,7 @@ export interface ShotPage {
 export async function withShotPage<T>(options: PageOptions, run: (page: ShotPage) => Promise<T>): Promise<T> {
   const exe = options.exe ?? findBrowser(options.env ?? undefined);
   if (!exe) throw new Blocked(NO_BROWSER);
+  await checkLoopbackProxy(options.env ?? undefined);
   const wait = options.waitMs ?? 30_000;
   const origin = options.origin;
   const browser = await openBrowser({ exe, profileDir: options.profileDir, ...(options.env ? { env: options.env } : {}) });
@@ -117,10 +124,20 @@ export async function withShotPage<T>(options: PageOptions, run: (page: ShotPage
       for (const end = Date.now() + ms; Date.now() < end; await pause(250)) if (await condition()) return true;
       return condition();
     };
-    const navigate = async (url: string) => { await cdp.send('Page.navigate', { url }, sessionId); };
+    // A page that cannot be reached is not a sign-in page: what the last navigation said is kept for loadError.
+    let failed: string | undefined;
+    const navigate = async (url: string) => {
+      const { errorText } = await cdp.send<{ errorText?: string }>('Page.navigate', { url }, sessionId);
+      failed = errorText && errorText !== 'net::ERR_ABORTED' ? errorText : undefined;
+    };
+    const loadError = async (): Promise<string | undefined> => {
+      const href = String(await evaluate('location.href').catch(() => ''));
+      return href.startsWith('chrome-error:') ? failed ?? '页面打不开' : failed;
+    };
     const openApp = async (): Promise<boolean> => {
       const before = answered.get('/api/userinfo') ?? 0;
       await navigate(`${origin}/requirements`);
+      if (failed) return false;
       return until(() => (answered.get('/api/userinfo') ?? 0) > before, wait);
     };
     const openAppForGame = async (game: Obj): Promise<boolean> => {
@@ -135,7 +152,7 @@ export async function withShotPage<T>(options: PageOptions, run: (page: ShotPage
     const imagesDrawn = async (selector: string, ms: number): Promise<void> => {
       await until(async () => await evaluate(`[...document.querySelectorAll(${JSON.stringify(selector)})].every(i => i.complete)`) === true, ms);
     };
-    return await run({ cdp, sessionId, origin, wait, answered, evaluate, where, until, navigate, resize, capture, quiet, imagesDrawn, openApp, openAppForGame });
+    return await run({ cdp, sessionId, origin, wait, answered, evaluate, where, until, navigate, loadError, resize, capture, quiet, imagesDrawn, openApp, openAppForGame });
   } finally {
     await browser.close().catch(() => undefined);
   }

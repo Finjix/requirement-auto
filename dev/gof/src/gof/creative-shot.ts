@@ -28,7 +28,9 @@ export interface ShotOptions {
 export type ShotResult =
   | { state: 'ok'; file: string; rows: number; total: string | null }
   | { state: 'login_required'; where: string }
-  | { state: 'no_access'; where: string };
+  | { state: 'no_access'; where: string }
+  /** The app did not load at all (the network, a proxy, DNS): nothing is known about the login. */
+  | { state: 'unreachable'; where: string; reason: string };
 
 /** The list's search conditions as the page saves them (DD_CLS_CREATIVES_CONFIRMED_SEARCH_CONDITIONS). */
 const FILTER_KEY = 'DD_CLS_CREATIVES_CONFIRMED_SEARCH_CONDITIONS';
@@ -40,7 +42,11 @@ export async function listScreenshot(options: ShotOptions): Promise<ShotResult> 
   return withShotPage({ profileDir: options.profileDir, origin: options.origin ?? CLS_ORIGIN, exe: options.exe, env: options.env, waitMs: options.waitMs,
     width: 2000, height: Math.max(1000, 420 + 160 * rows) }, async page => {
     const { evaluate, until, where, answered, wait } = page;
-    if (!await page.openAppForGame(options.game)) return { state: 'login_required', where: await where() };
+    const unreachable = async (): Promise<ShotResult | undefined> => {
+      const broken = await page.loadError();
+      return broken ? { state: 'unreachable', where: await where(), reason: broken } : undefined;
+    };
+    if (!await page.openAppForGame(options.game)) return await unreachable() ?? { state: 'login_required', where: await where() };
     const filter = { page: 1, page_size: 50, upload_users: [options.accountId], tags: [], custom_tags: [], sort_field: 'updated_at', sort_order: 'desc', game_id: options.game.id };
     await evaluate(`localStorage.setItem(${JSON.stringify(FILTER_KEY)}, ${JSON.stringify(JSON.stringify(filter))}); true`);
     const listed = answered.get('/api/creatives') ?? 0;
@@ -49,7 +55,7 @@ export async function listScreenshot(options: ShotOptions): Promise<ShotResult> 
     if (!routed) await page.navigate(`${page.origin}/creativities`);
     await until(() => (answered.get('/api/creatives') ?? 0) > listed, wait);
     const here = await where();
-    if (!here.endsWith('/creativities')) return { state: /feishu|larksuite/.test(here) ? 'login_required' : 'no_access', where: here };
+    if (!here.endsWith('/creativities')) return await unreachable() ?? { state: /feishu|larksuite/.test(here) ? 'login_required' : 'no_access', where: here };
     // The rows (or the empty-list text), then their thumbnails.
     await until(async () => await evaluate(`document.querySelectorAll('.el-table__body-wrapper tbody tr').length > 0 || !!document.querySelector('.el-table__empty-text')`) === true, 15_000);
     await page.imagesDrawn('.el-table__body-wrapper img', 10_000);

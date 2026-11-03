@@ -9,9 +9,11 @@ import { prepare, record, report } from '../src/gof/batch.ts';
 import { main } from '../src/gof/cli.ts';
 import type { Online } from '../src/gof/cls-online.ts';
 import { findBrowser } from '../src/gof/chromium.ts';
+import { docScreenshot } from '../src/gof/doc-shot.ts';
 import { draftScreenshot } from '../src/gof/draft-shot.ts';
 import { makePlan } from '../src/gof/plan.ts';
 import { locatedUrl, sheetScreenshot } from '../src/gof/sheet-shot.ts';
+import { notLoaded } from '../src/gof/shot-page.ts';
 import { sheetPicture } from '../src/gof/shots-online.ts';
 import { Snapshot } from '../src/gof/snapshot.ts';
 import { readJson } from '../src/gof/util.ts';
@@ -116,6 +118,23 @@ test('the draft picture opens the draft in the app for GOFCN and never overwrite
     assert.ok(app.seen.includes('/api/workflow/script/5001?game_id=94'), `the draft was asked for in GOFCN: ${app.seen.join(' ')}`);
     await assert.rejects(draftScreenshot({ profileDir: tempDir('draft-profile-'), output, draftId: 5001, game: GAME, origin: app.origin, exe }), /不覆盖/);
   } finally { app.close(); }
+});
+
+test('a page that does not load is told apart from a sign-in page: no picture, and nothing said about the login', needBrowser, async () => {
+  const free = http.createServer();
+  await new Promise<void>(resolve => free.listen(0, '127.0.0.1', resolve));
+  const dead = `http://127.0.0.1:${(free.address() as AddressInfo).port}`;
+  await new Promise<void>(resolve => free.close(() => resolve()));
+  const output = path.join(tempDir('dead-shot-'), 'x.png');
+  const sheet = await sheetScreenshot({ profileDir: tempDir('sheet-profile-'), output, url: `${dead}/wiki/NODE?sheet=abc`, exe, waitMs: 8_000 });
+  assert.equal(sheet.state, 'unreachable', JSON.stringify(sheet));
+  if (sheet.state === 'unreachable') assert.match(sheet.reason, /ERR_CONNECTION_REFUSED/);
+  const doc = await docScreenshot({ profileDir: tempDir('doc-profile-'), output, url: `${dead}/docx/ABC123`, exe, waitMs: 8_000 });
+  assert.equal(doc.state, 'unreachable', JSON.stringify(doc));
+  const draft = await draftScreenshot({ profileDir: tempDir('draft-profile-'), output, draftId: 5001, game: GAME, origin: dead, exe, waitMs: 8_000 });
+  assert.equal(draft.state, 'unreachable', JSON.stringify(draft));
+  assert.equal(fs.existsSync(output), false);
+  assert.match(notLoaded('进度表', 'net::ERR_CONNECTION_REFUSED'), /^进度表打不开（net::ERR_CONNECTION_REFUSED）：.*不是登录失效/);
 });
 
 test('a draft page the app turns away is reported and no picture is written', needBrowser, async () => {

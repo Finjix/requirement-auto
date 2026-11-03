@@ -824,3 +824,115 @@ test('合并变体名称: a row of the file\'s own name wins, two rows it may be
   }
   assert.throws(() => normalizeUploadRequest({ files: ['a'], variants: 'yes' }), /variants 只能是 true\/false/);
 });
+
+test('two files of the same content are one creative: creative files says which, and the plan refuses the second copy', async () => {
+  const fake = await fakeCreative();
+  try {
+    const deps = depsFor();
+    const dir = materials({ '01.mp4': 'same bytes', '01 - 副本.mp4': 'same bytes', '02.mp4': 'other bytes' });
+    const listed = await listFiles([dir], deps);
+    assert.deepEqual(Object.fromEntries(listed.files.map((f: any) => [f.file, f.same_content])), { '01 - 副本.mp4': ['01.mp4'], '01.mp4': ['01 - 副本.mp4'], '02.mp4': undefined });
+    const request = { files: [dir], creator: '张天伟', producers: ['丁杰'] };
+    await assert.rejects(approvedPlan(fake, deps, request), (error: Error) => /内容完全相同/.test(error.message) && error.message.includes('01 - 副本.mp4') && error.message.includes('01.mp4'));
+    const file = await approvedPlan(fake, deps, { ...request, items: [{ file: '01 - 副本.mp4', skip: true }] });
+    const result = await runUpload(online(fake), file, deps);
+    assert.equal(result.status, 'uploaded', JSON.stringify(result));
+    assert.deepEqual(result.uploaded.map((u: any) => u.name).sort(), ['01', '02']);
+  } finally { fake.close(); }
+});
+
+test('a material name that reads like a credential field (Cookie, Secret) is only a name: the run records it and goes on', async () => {
+  for (const mode of ['normal', 'lose-answer'] as const) {
+    const fake = await fakeCreative();
+    try {
+      const deps = depsFor();
+      fake.createMode = mode;
+      const file = await approvedPlan(fake, deps, { files: [materials({ 'GOFCN67680_AI生成_设定3.0_Cookie大作战.mp4': 'c', 'Secret_token_竖版.mp4': 's' })], creator: '张天伟', producers: ['丁杰'] });
+      const result = await runUpload(online(fake), file, deps);
+      assert.equal(result.status, 'uploaded', `${mode}: ${JSON.stringify(result)}`);
+      const steps = uploadEvents(result.batch).map(e => e.step);
+      assert.ok(['signed', 'create_attempt', mode === 'normal' ? 'created' : 'reconciled'].every(s => steps.includes(s)), steps.join());
+    } finally { fake.close(); }
+  }
+});
+
+test('a name the create answer leaves out of both lists is looked for, found and annotated, and nothing is created twice', async () => {
+  const fake = await fakeCreative();
+  try {
+    // CLS makes both creatives, but its answer lists only the first.
+    const trimming = (async (url: string | URL | Request, init?: RequestInit) => {
+      const response = await fetch(url, init);
+      if (!String(url).includes('/api/creative/multiple-upload')) return response;
+      const body = await response.json();
+      body.data.succ = body.data.succ.slice(0, 1);
+      return new Response(JSON.stringify(body), { status: response.status, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+    const base = depsFor();
+    const deps = { ...base, adapter: { ...base.adapter, fetch: trimming } };
+    const file = await approvedPlan(fake, deps, { files: [materials({ 'a.mp4': 'aa', 'b.mp4': 'bb' })], creator: '张天伟', producers: ['丁杰'] });
+    const result = await runUpload(online(fake), file, deps);
+    assert.equal(result.status, 'uploaded', JSON.stringify(result));
+    assert.equal([...fake.creatives.values()].find(c => c.name === 'b')?.user_id, 653, 'annotated');
+    assert.equal(writes(fake, 'multiple-upload'), 1);
+  } finally { fake.close(); }
+});
+
+test('a name CLS already has is found however many creatives contain it, and is in one refusal with everything else unsettled', async () => {
+  // An old creative named exactly 封面, behind more than a page of newer ones whose names contain it.
+  const existing = [{ id: 10, name: '封面', upload_user_id: 653, confirmed: true, materials: [] },
+    ...Array.from({ length: 60 }, (_, i) => ({ id: 1000 + i, name: `GOFCN${60000 + i}_封面_${i}`, upload_user_id: 653, confirmed: true, materials: [] }))];
+  const fake = await fakeCreative({ existing });
+  try {
+    const deps = depsFor();
+    const dir = materials({ '封面.png': 'p', 'b.mp4': 'b' });
+    await assert.rejects(approvedPlan(fake, deps, { files: [dir], creator: '张天伟', producers: ['丁杰'] }), /CLS 已有同名创意.*：封面/);
+    // No 创意人 as well: both in the same refusal, not one after the other.
+    await assert.rejects(approvedPlan(fake, deps, { files: [dir], producers: ['丁杰'] }), (error: Error) => /创意人未定/.test(error.message) && /CLS 已有同名创意/.test(error.message));
+  } finally { fake.close(); }
+});
+
+test('a login that runs out during the uploads is taken again before the create; with CLS out of reach then, nothing is created and a later run does it', async () => {
+  const fake = await fakeCreative();
+  try {
+    const base = depsFor();
+    const file = await approvedPlan(fake, base, { files: [materials({ 'a.mp4': 'aa' })], creator: '张天伟', producers: ['丁杰'] });
+    // The token the run starts with stops being taken once the files are up; the browser has a fresh one by then.
+    fake.tokens.add('Bearer fresh');
+    let asked = 0;
+    const renewing: Online = { session: async () => ({ authorization: asked++ ? 'Bearer fresh' : 'Bearer good', account: ACCOUNT, origin: fake.origin }), capture: async () => ({ state: 'login_required' }) };
+    const expiring = { ...base, adapter: { ...base.adapter, fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'PUT') fake.tokens.delete('Bearer good');
+      return fetch(url, init);
+    }) as typeof fetch } };
+    const result = await runUpload(renewing, file, expiring);
+    assert.equal(result.status, 'uploaded', JSON.stringify(result));
+    assert.equal(asked, 2, 'the browser was asked once more, right before the create');
+    assert.equal(fake.requests.find(r => r.path === '/api/creative/multiple-upload')!.authorization, 'Bearer fresh');
+  } finally { fake.close(); }
+
+  const other = await fakeCreative();
+  try {
+    const base = depsFor();
+    const file = await approvedPlan(other, base, { files: [materials({ 'b.mp4': 'bb' })], creator: '张天伟', producers: ['丁杰'] });
+    let outage = true, put = false;
+    const flaky = { ...base, adapter: { ...base.adapter, fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'PUT') put = true;
+      if (outage && put && String(url).endsWith('/api/userinfo')) throw new TypeError('fetch failed');
+      return fetch(url, init);
+    }) as typeof fetch } };
+    await assert.rejects(runUpload(online(other), file, flaky), /CLS 暂时无法访问，还没有创建任何创意/);
+    assert.deepEqual([writes(other, 'multiple-upload'), uploadStatus(file, flaky).create_sent], [0, false]);
+    outage = false;
+    assert.equal((await runUpload(online(other), file, flaky)).status, 'uploaded');
+    assert.equal(writes(other, 'multiple-upload'), 1);
+  } finally { other.close(); }
+});
+
+test('files a zip names with characters Windows cannot hold are listed under the name they are read by, and said to be renamed', async () => {
+  const { makeZip } = await import('./helpers/zip-writer.ts');
+  const zip = path.join(tempDir('zip-input-'), 'mac.zip');
+  fs.writeFileSync(zip, makeZip([{ name: 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_对抗:竖版.mp4', data: 'v' }, { name: 'ok.mp4', data: 'o' }]));
+  const listed = await listFiles([zip], { tmpDir: tempDir('files-tmp-') });
+  assert.deepEqual(listed.files.map((f: any) => f.file).sort(), ['mac.zip：GOFCNxxxxx_AI玩法优化_搂冰块抢资源_对抗_竖版.mp4', 'mac.zip：ok.mp4']);
+  assert.deepEqual(listed.zip_renamed, [{ file: 'mac.zip：GOFCNxxxxx_AI玩法优化_搂冰块抢资源_对抗:竖版.mp4', as: 'GOFCNxxxxx_AI玩法优化_搂冰块抢资源_对抗_竖版.mp4' }]);
+});

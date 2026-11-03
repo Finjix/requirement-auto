@@ -1,8 +1,10 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { findBrowser, openBrowser, type BrowserHandle, type Cdp } from './chromium.ts';
+import { BROWSER_ENV, findBrowser, openBrowser, type BrowserHandle, type Cdp } from './chromium.ts';
 import { resolveDataPaths } from '../paths.ts';
 import { browserProfileDir } from './feishu-plugin.ts';
-import { Blocked } from './util.ts';
+import { Blocked, need } from './util.ts';
 
 /*
  * The CLS login. CLS sits behind the company's single sign-on and offers no device flow or callback, so the one way to obtain a
@@ -18,6 +20,7 @@ import { Blocked } from './util.ts';
 
 export const CLS_ORIGIN = 'https://creative.centurygames.cn';
 const ENTRY = '/requirements';
+export const NO_BROWSER = `没有找到 Chrome 或 Edge：请安装其一，或用环境变量 ${BROWSER_ENV} 指定浏览器的绝对路径`;
 
 export interface Account { id: number; name: string }
 
@@ -25,8 +28,10 @@ export type Capture =
   | { state: 'ok'; authorization: string; account: Account }
   /** The browser was closed before a logged-in request was seen. */
   | { state: 'closed' }
-  /** Nothing logged in showed up in a browser nobody is sitting at. */
+  /** Nothing logged in showed up in a browser nobody is sitting at, and CLS answered: the login is needed. */
   | { state: 'login_required' }
+  /** CLS (or the way to it) did not answer: whether the login is good cannot be told, so nobody is to be asked to scan for it. */
+  | { state: 'unreachable'; reason: string }
   /** A consent page was waiting that is not the one this tool approves; nothing was clicked. */
   | { state: 'consent_refused'; reason: string };
 
@@ -84,9 +89,12 @@ const CONSENT_PROBE = `(() => {
   return { href: location.href, text: document.body ? document.body.innerText : '', button };
 })()`;
 
-/** The names a company account may be shown under: the whole name, and the parts of "name（alias）". */
+/**
+ * The names a company account may be shown under: the whole name, the parts of "name（alias）", and the name before a suffix CLS adds to
+ * its own account names ("钟丰骏-实习生"): Feishu's consent page shows the Feishu name.
+ */
 export function accountNames(name: string): string[] {
-  const parts = [name, ...name.split(/[（()）]/).map(part => part.trim())];
+  const parts = [name, ...name.split(/[（()）]/).map(part => part.trim()), name.replace(/\s*[-－—][^-－—]*$/, '').trim()];
   return [...new Set(parts.filter(part => part.length >= 2))];
 }
 
@@ -134,6 +142,36 @@ export async function checkToken(origin: string, authorization: string, fetcher:
   } catch { return { unreachable: true }; }
 }
 
+/** Why CLS cannot be asked anything right now (the network, a proxy, a gateway, an outage), or undefined when it answers, whatever it says. */
+async function clsTrouble(origin: string): Promise<string | undefined> {
+  try {
+    const response = await fetch(`${origin}/api/userinfo`, { redirect: 'manual', signal: AbortSignal.timeout(10_000) });
+    await response.arrayBuffer().catch(() => undefined);
+    return response.status >= 500 || response.status === 429 || response.status === 408 ? `HTTP ${response.status}` : undefined;
+  } catch (error) { return (error as Error)?.name === 'TimeoutError' ? '请求超时' : '连接失败'; }
+}
+
+let loopbackPassed = false;
+/**
+ * The hidden browser is driven over http://127.0.0.1 (its DevTools port). Node's own proxy support (NODE_USE_ENV_PROXY=1 or --use-env-proxy)
+ * sends that traffic to HTTP_PROXY as well unless NO_PROXY excludes 127.0.0.1, and then no browser command can connect. Whether it does is
+ * asked the way Node itself reads NO_PROXY (`localhost` does not cover 127.0.0.1, `.0.0.1` does): one request to a server of this process's
+ * own on 127.0.0.1, made only when such a proxy is set. A proxy on this machine that reaches 127.0.0.1 passes.
+ */
+export async function checkLoopbackProxy(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const enabled = env.NODE_USE_ENV_PROXY === '1' || [...process.execArgv, ...(env.NODE_OPTIONS ?? '').split(/\s+/)].includes('--use-env-proxy');
+  if (!enabled || !['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy'].some(name => env[name]?.trim()) || loopbackPassed) return;
+  const server = http.createServer((_request, response) => response.end('ok'));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const through = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`, { signal: AbortSignal.timeout(3_000) })
+      .then(response => response.text().then(() => response.ok), () => false);
+    need(through, '开启了 Node 的代理（NODE_USE_ENV_PROXY），连本机 127.0.0.1 的请求也走了代理，浏览器的调试接口连不上：'
+      + '把 NO_PROXY 设为包含 127.0.0.1,localhost（例如 NO_PROXY=127.0.0.1,localhost）后再运行');
+    loopbackPassed = true;
+  } finally { server.close(); }
+}
+
 const lower = (headers: Record<string, string> | undefined, name: string): string | undefined =>
   headers ? Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1] : undefined;
 
@@ -144,13 +182,14 @@ const lower = (headers: Record<string, string> | undefined, name: string): strin
 export async function captureAuthorization(options: CaptureOptions): Promise<Capture> {
   const origin = options.origin ?? CLS_ORIGIN;
   const exe = options.exe ?? findBrowser(options.env);
-  if (!exe) throw new Blocked('没有找到 Chrome 或 Edge：请安装其一，或用环境变量 REQUIREMENT_AUTO_BROWSER 指定浏览器的绝对路径');
+  if (!exe) throw new Blocked(NO_BROWSER);
+  await checkLoopbackProxy(options.env);
   const browser = await openBrowser({ exe, profileDir: options.profileDir, ...(options.env ? { env: options.env } : {}) });
   try {
     const result = await watch(browser, origin, options);
     // A browser an earlier call left waiting for a scan stays open when this look found no login in it (it may be exactly the login in
     // progress). Anything else has done its job.
-    const keepOpen = !browser.launched && (result.state === 'login_required' || result.state === 'consent_refused');
+    const keepOpen = !browser.launched && (result.state === 'login_required' || result.state === 'consent_refused' || result.state === 'unreachable');
     if (keepOpen) browser.cdp.close();
     else await browser.close();
     return result;
@@ -163,8 +202,13 @@ export async function captureAuthorization(options: CaptureOptions): Promise<Cap
 async function watch(browser: BrowserHandle, origin: string, options: CaptureOptions): Promise<Capture> {
   const { cdp } = browser;
   const tried = new Set<string>();
+  /** Tokens CLS could not be asked about (the network, a gateway, an outage): while one is left, running out of time says nothing about the login. */
+  const unsettled = new Set<string>();
+  /** Why CLS's own page did not load in the browser, as the browser saw it: no lapsed login either. */
+  let trouble: string | undefined;
   const urls = new Map<string, string>();
   const sessions = new Map<string, Promise<string>>();
+  let good: { authorization: string; account: Account } | undefined;
   let accepted: ((value: { authorization: string; account: Account }) => void) | undefined;
   const found = new Promise<{ authorization: string; account: Account }>(resolve => { accepted = resolve; });
   let validating = Promise.resolve();
@@ -175,8 +219,10 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
     // One at a time, so the first token that is good wins and a stale one that the page sent before it noticed it was logged out is only skipped.
     validating = validating.then(async () => {
       const checked = await checkToken(origin, authorization);
-      if ('account' in checked) accepted?.({ authorization, account: checked.account });
-      else if ('unreachable' in checked) tried.delete(authorization); // not the server's no: the next request with this token asks again
+      // Not the server's no: the next request with this token asks again.
+      if ('unreachable' in checked) { unsettled.add(authorization); tried.delete(authorization); return; }
+      unsettled.delete(authorization);
+      if ('account' in checked) { good ??= { authorization, account: checked.account }; accepted?.(good); }
     });
   };
 
@@ -204,6 +250,18 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
   });
   cdp.on('Network.requestWillBeSentExtraInfo', (params) => {
     consider(typeof params.requestId === 'string' ? urls.get(params.requestId) : undefined, lower(params.headers, 'authorization'));
+  });
+  // The last CLS page the browser opened: one that failed to load (network, proxy, DNS) or that a gateway answered with 5xx.
+  const ownPage = (url: unknown): boolean => String(url ?? '').startsWith(`${origin}/`);
+  cdp.on('Network.loadingFailed', params => {
+    if (params.type === 'Document' && !params.canceled && params.errorText !== 'net::ERR_ABORTED' && ownPage(urls.get(String(params.requestId)))) {
+      trouble = String(params.errorText || '页面打不开');
+    }
+  });
+  cdp.on('Network.responseReceived', params => {
+    if (params.type !== 'Document' || !ownPage(params.response?.url)) return;
+    const status = Number(params.response?.status);
+    trouble = status >= 500 ? `HTTP ${status}` : undefined;
   });
 
   // The consent page is looked for on a short interval for as long as the login is awaited. One login is approved once: after the
@@ -243,13 +301,23 @@ async function watch(browser: BrowserHandle, origin: string, options: CaptureOpt
     const blank = pages.find(page => page.url === 'about:blank' || page.url.startsWith('chrome://newtab') || page.url.startsWith('edge://newtab'));
     const entry = `${origin}${ENTRY}`;
     if (open) await attach(open.targetId).then(session => cdp.send('Page.reload', {}, session)).catch(() => undefined);
-    else if (blank) await attach(blank.targetId).then(session => cdp.send('Page.navigate', { url: entry }, session)).catch(() => undefined);
-    else if (!pages.some(page => /sso|login|oauth|auth/i.test(page.url))) await cdp.send('Target.createTarget', { url: entry }).catch(() => undefined);
+    else if (blank) {
+      await attach(blank.targetId).then(session => cdp.send<{ errorText?: string }>('Page.navigate', { url: entry }, session))
+        .then(answer => { if (answer.errorText && answer.errorText !== 'net::ERR_ABORTED') trouble = answer.errorText; }).catch(() => undefined);
+    } else if (!pages.some(page => /sso|login|oauth|auth/i.test(page.url))) await cdp.send('Target.createTarget', { url: entry }).catch(() => undefined);
 
     const timeout = new Promise<'timeout'>(resolve => { timer = setTimeout(() => resolve('timeout'), options.waitMs); });
     const outcome = await Promise.race([found, closed, timeout, refused]);
     if (outcome === 'closed') return { state: 'closed' };
-    if (outcome === 'timeout') return { state: 'login_required' };
+    if (outcome === 'timeout') {
+      clearInterval(looker);
+      // A token still being asked about may be the good one. Otherwise nothing logged in was seen, which is a login to ask for only if CLS
+      // answered: when it could not be asked, nobody is to be sent to scan.
+      await validating;
+      if (good) return { state: 'ok', ...good };
+      const why = unsettled.size ? 'CLS 没有回答登录核对' : trouble ?? (tried.size ? undefined : await clsTrouble(origin));
+      return why ? { state: 'unreachable', reason: why } : { state: 'login_required' };
+    }
     if ('refused' in outcome) return { state: 'consent_refused', reason: outcome.refused };
     return { state: 'ok', authorization: outcome.authorization, account: outcome.account };
   } finally { clearTimeout(timer); clearInterval(looker); }
@@ -285,7 +353,8 @@ const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 export async function captureLoginQr(options: QrOptions): Promise<QrCapture> {
   const origin = options.origin ?? CLS_ORIGIN;
   const exe = options.exe ?? findBrowser(options.env);
-  if (!exe) throw new Blocked('没有找到 Chrome 或 Edge：请安装其一，或用环境变量 REQUIREMENT_AUTO_BROWSER 指定浏览器的绝对路径');
+  if (!exe) throw new Blocked(NO_BROWSER);
+  await checkLoopbackProxy(options.env);
   const isLoginPage = options.isLoginPage ?? feishuLoginPage;
   const browser = await openBrowser({ exe, profileDir: options.profileDir, detach: true, ...(options.env ? { env: options.env } : {}) });
   let leaveRunning = true;
@@ -356,11 +425,15 @@ export function clsAccountFile(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveDataPaths(env).cls, 'account.json');
 }
 
+/** What a command says when CLS could not be asked whether the login is good. */
+export const unreachableReason = (why: string): string => `CLS 暂时无法访问（${why}）：这不说明登录失效，不要让用户扫码，稍后再试`;
+
 /** A session for the commands that talk to CLS: whoever is logged in on this user's profile, or a refusal that says to log in. */
 export async function openSession(options: Partial<CaptureOptions> = {}): Promise<{ authorization: string; account: Account; origin: string }> {
   const origin = options.origin ?? CLS_ORIGIN;
   const result = await captureAuthorization({ profileDir: options.profileDir ?? clsProfileDir(), waitMs: options.waitMs ?? 25_000, ...options });
   if (result.state === 'consent_refused') throw new Blocked(result.reason);
+  if (result.state === 'unreachable') throw new Blocked(unreachableReason(result.reason));
   if (result.state !== 'ok') throw new Blocked('CLS 未登录或登录已过期：先运行 gof.mjs cls login --qr <png文件> 生成登录二维码，交给用户用飞书手机端扫码');
   return { authorization: result.authorization, account: result.account, origin };
 }

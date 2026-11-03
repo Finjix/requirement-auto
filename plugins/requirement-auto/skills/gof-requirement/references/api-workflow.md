@@ -33,4 +33,4 @@ A business response needs `code=0` even with HTTP 200; relay `code` and message 
 
 ## Recovery
 
-Each operation is sent once (`cls_api_attempt` plus a `cls-sent-*.json` marker). An unknown result comes back as `unknown_result:true` with `draft_id` / `operation_id` when known: read back with `cls read-draft --id N` or `cls verify`. If creation timed out with no ID, ask the user for the draft link or ID rather than creating another. A partial import is reported as is.
+Each operation is sent once (`cls_api_attempt` plus a `cls-sent-*.json` marker). An unknown result comes back as `unknown_result:true` with `draft_id` / `operation_id` when known: read back with `cls read-draft --id N` or `cls verify`. If creation timed out with no ID, ask the user for the draft link or ID rather than creating another. A partial import is reported as is. A refusal saying `CLS 暂时无法访问` came before anything was sent: run the same command again later; it is not a lost login.

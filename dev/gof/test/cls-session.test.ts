@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { attachBrowser, findBrowser, openBrowser, browserCandidates, BROWSER_ENV } from '../src/gof/chromium.ts';
-import { captureAuthorization, captureLoginQr, whoAmI, type ConsentOptions } from '../src/gof/cls-session.ts';
+import { accountNames, captureAuthorization, captureLoginQr, NO_BROWSER, openSession, whoAmI, type ConsentOptions } from '../src/gof/cls-session.ts';
 import { tempDir } from './helpers/tmp.ts';
 
 const exe = findBrowser();
@@ -324,5 +324,76 @@ test('a hidden browser does not outlive the command that started it, so nothing 
   const run = await leaveBrowser(profileDir, 'attach');
   assert.deepEqual([run.code, run.out.trim()], [0, 'left']);
   assert.equal(await attachBrowser(profileDir), undefined);
+});
+
+test('the consent page may name the account without the suffix CLS gives its own name, and the browser is named by the shared variable', () => {
+  assert.ok(accountNames('钟丰骏-实习生').includes('钟丰骏'));
+  assert.ok(accountNames('冯彦蓉－实习生').includes('冯彦蓉'));
+  assert.ok(accountNames('张三 — 外包').includes('张三'));
+  assert.deepEqual(accountNames('张三'), ['张三']);
+  assert.ok(NO_BROWSER.includes(BROWSER_ENV), NO_BROWSER);
+});
+
+test('a consent page naming the Feishu name of a pinned "-实习生" account is approved', needBrowser, async () => {
+  const cls = await fakeSessionCls({ scan: true, consent: { app: 'dsc_admin', account: '钟丰骏' } });
+  const profileDir = path.join(tempDir('cls-profile-'), 'browser-profile');
+  try {
+    await scanned(cls, profileDir);
+    const result = await captureAuthorization({ profileDir, waitMs: 20_000, origin: cls.origin, exe, consent: { app: 'dsc_admin', account: '钟丰骏-实习生', isConsentPage } });
+    assert.equal(result.state, 'ok');
+    assert.deepEqual(cls.state.decisions, ['yes']);
+  } finally { cls.close(); }
+});
+
+/** A free port nobody listens on: a site that cannot be reached. */
+async function closedPort(): Promise<number> {
+  const server = http.createServer();
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>(resolve => server.close(() => resolve()));
+  return port;
+}
+
+test('CLS out of reach is no lapsed login: neither a token CLS cannot be asked about nor a page that does not load sends anybody to scan', needBrowser, async () => {
+  // The page is logged in, but the token check from here gets a gateway's 503 (an outage, or a proxy this process does not go through).
+  const server = http.createServer((request, response) => {
+    const url = new URL(request.url ?? '/', 'http://x');
+    if (url.pathname === '/api/userinfo') {
+      if (!/Chrome|Edg/.test(String(request.headers['user-agent']))) { response.writeHead(503); response.end('upstream unavailable'); return; }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ code: 0, data: { id: 7, name: '张三', status: 1 } }));
+      return;
+    }
+    if (url.pathname === '/requirements') { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end('<script>fetch("/api/userinfo", { headers: { Authorization: "Bearer good" } })</script>'); return; }
+    response.writeHead(404); response.end();
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const seen = await captureAuthorization({ profileDir: path.join(tempDir('cls-profile-'), 'p'), waitMs: 4_000, origin, exe });
+    assert.equal(seen.state, 'unreachable', JSON.stringify(seen));
+    await assert.rejects(openSession({ profileDir: path.join(tempDir('cls-profile-'), 'p'), waitMs: 4_000, origin, exe }),
+      (error: Error) => /暂时无法访问/.test(error.message) && /不要让用户扫码/.test(error.message) && !/cls login/.test(error.message));
+  } finally { server.closeAllConnections(); server.close(); }
+  // CLS's page itself does not load.
+  const down = await captureAuthorization({ profileDir: path.join(tempDir('cls-profile-'), 'p'), waitMs: 3_000, origin: `http://127.0.0.1:${await closedPort()}`, exe });
+  assert.equal(down.state, 'unreachable', JSON.stringify(down));
+  if (down.state === 'unreachable') assert.match(down.reason, /ERR_CONNECTION_REFUSED|连接失败/);
+});
+
+test('a proxy that would take the browser\'s own 127.0.0.1 traffic is refused before a browser is started, saying what to set', () => {
+  const module = pathToFileURL(fileURLToPath(new URL('../src/gof/cls-session.ts', import.meta.url))).href;
+  const missing = path.join(tempDir('cls-proxy-'), 'no-such-browser.exe');
+  const profile = path.join(tempDir('cls-proxy-'), 'p');
+  const probe = `import { captureAuthorization } from ${JSON.stringify(module)};
+    captureAuthorization({ profileDir: ${JSON.stringify(profile)}, waitMs: 1, exe: ${JSON.stringify(missing)} }).then(() => console.log('ran'), e => console.log(e.message));`;
+  const clean = { NODE_USE_ENV_PROXY: undefined, NODE_OPTIONS: undefined, HTTP_PROXY: undefined, http_proxy: undefined, HTTPS_PROXY: undefined, https_proxy: undefined, NO_PROXY: undefined, no_proxy: undefined };
+  const run = (env: Record<string, string>) => spawnSync(process.execPath, ['--input-type=module', '-e', probe], { env: { ...process.env, ...clean, ...env }, encoding: 'utf8' }).stdout.trim();
+  const dead = 'http://127.0.0.1:9';
+  assert.match(run({ NODE_USE_ENV_PROXY: '1', HTTP_PROXY: dead }), /NO_PROXY=127\.0\.0\.1,localhost/);
+  // Not refused (the start of the missing browser is tried) when NO_PROXY keeps 127.0.0.1 out of it, or the proxy is for https only.
+  assert.match(run({ NODE_USE_ENV_PROXY: '1', HTTP_PROXY: dead, NO_PROXY: '127.0.0.1,localhost' }), /浏览器没有启动成功/);
+  assert.match(run({ NODE_USE_ENV_PROXY: '1', HTTPS_PROXY: dead }), /浏览器没有启动成功/);
+  assert.match(run({ HTTP_PROXY: dead }), /浏览器没有启动成功/, 'without NODE_USE_ENV_PROXY Node takes no proxy at all');
 });
 

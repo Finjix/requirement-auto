@@ -22,7 +22,9 @@ export interface DocShotOptions {
 export type DocShotResult =
   | { state: 'ok'; file: string; where: string }
   | { state: 'login_required'; where: string }
-  | { state: 'no_access'; where: string };
+  | { state: 'no_access'; where: string }
+  /** The page did not load at all (the network, a proxy, DNS): nothing is known about the login. */
+  | { state: 'unreachable'; where: string; reason: string };
 
 const WIDTH = 1600;
 const HEIGHT = 1100;
@@ -44,6 +46,8 @@ export async function docScreenshot(options: DocShotOptions): Promise<DocShotRes
       return await evaluate(`document.readyState === 'complete' && document.querySelectorAll('[data-block-id]').length > 1`) === true;
     }, wait);
     const here = await where();
+    const broken = await page.loadError();
+    if (broken) return { state: 'unreachable', where: here, reason: broken };
     if (!here.startsWith(home) || signIn(here)) return { state: 'login_required', where: here };
     if (await evaluate(`document.querySelectorAll('[data-block-id]').length`) <= 1) return { state: 'no_access', where: here };
     // Images and the scroll to the block come after the text.

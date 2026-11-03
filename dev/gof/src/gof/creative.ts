@@ -666,7 +666,11 @@ export function registeredRow(material: Material, byNumber: Map<number, Progress
   return { status: 'differs', rows: rows.map(listedRow), ...elsewhere };
 }
 
-export function buildUploadPlan(input: PlanInput): Obj {
+/**
+ * The sealed plan, or a refusal that lists every problem at once. `names` gets the creative name of each file that got as far as one,
+ * problems or not, so that the names CLS already has can be asked for before the refusal is made (see planUpload).
+ */
+export function buildUploadPlan(input: PlanInput, names: string[] = []): Obj {
   const { request, options, materials, existing } = input;
   need(options.can_upload, `CLS 账号“${options.account.name}”在 ${options.game.code} 没有上传创意的权限`);
   const bySheet = request.progress !== false;
@@ -685,10 +689,18 @@ export function buildUploadPlan(input: PlanInput): Obj {
   const defaultDirectory = findDirectory(options.directories, request.directory ?? DEFAULT_DIRECTORY);
   const items: Obj[] = [];
   const named = new Map<string, string>();
+  const byContent = new Map<string, string>();
   for (const material of materials) {
     const item = byFile.get(material.file) ?? { file: material.file_name };
     if (item.skip) { skipped.push({ file: material.file, reason: '按要求不上传' }); continue; }
     const label = material.origin ?? material.file_name;
+    // CLS makes one creative of one content (by its MD5): the second copy would be refused at the create, after its row was registered.
+    const twin = byContent.get(material.md5);
+    if (twin) {
+      problems.push({ reason: `和 ${twin} 内容完全相同（同一个文件的两份）：CLS 一份内容只建一个创意，只上传其中一个，另一个用 items[].skip 不上传`, file: label });
+      continue;
+    }
+    byContent.set(material.md5, label);
     let bound: ReturnType<typeof rowOf> | undefined;
     try { bound = bySheet ? rowOf(material, item, input.progress!, input.named ?? new Map(), request.variants === true) : undefined; } catch (error) {
       if (!(error instanceof Blocked)) throw error;
@@ -708,6 +720,7 @@ export function buildUploadPlan(input: PlanInput): Obj {
     const tail = request.variants && row && !why ? (item.variant !== undefined ? `_${item.variant}` : variantTail(material, row) ?? '') : '';
     // Every name is checked, whatever else is wrong with the file, so that the user hears of all of it at once.
     const name = (row && !why ? row.name! + tail : item.name ?? material.name).replace(BIDI, '');
+    names.push(name);
     const renamed = name !== material.name;
     const key = name.toLowerCase();
     if (named.has(key)) {

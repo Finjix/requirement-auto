@@ -109,12 +109,15 @@ export async function extractEntry(file: string, entry: ZipEntry, target: string
   let crc = 0;
   const count = new Transform({ transform(chunk: Buffer, _encoding, callback) { size += chunk.length; crc = zlib.crc32(chunk, crc); callback(size > entry.usize ? new Blocked(`压缩包条目比记录的大：${entry.name}`) : null, chunk); } });
   const source: Readable = entry.csize === 0 ? Readable.from([]) : fs.createReadStream(file, { start, end: start + entry.csize - 1 });
+  // Only a file this call made is removed on failure: a target that was there already (another entry's) is left alone.
+  let made = false;
   try {
     const out = fs.createWriteStream(target, { flags: 'wx' });
+    out.once('open', () => { made = true; });
     if (entry.method === 8) await pipeline(source, zlib.createInflateRaw(), count, out);
     else await pipeline(source, count, out);
   } catch (error) {
-    fs.rmSync(target, { force: true });
+    if (made) fs.rmSync(target, { force: true });
     if (error instanceof Blocked) throw error;
     throw new Blocked(`压缩包里的文件解压失败：${entry.name}`);
   }
@@ -124,7 +127,8 @@ export async function extractEntry(file: string, entry: ZipEntry, target: string
   }
 }
 
-export interface Unpacked { dir: string; skipped: { file: string; reason: string }[] }
+/** `renamed`: files stored under another name than the zip gives them (characters a Windows file name cannot hold become `_`). */
+export interface Unpacked { dir: string; skipped: { file: string; reason: string }[]; renamed: { file: string; as: string }[] }
 
 const JUNK = /^(\.DS_Store|Thumbs\.db|desktop\.ini)$/i;
 
@@ -145,7 +149,8 @@ export async function unpackZip(file: string, root: string, keep: (name: string)
     // Used again: it is in use, so the retention sweep (which judges each unpacked zip by its newest file) must not take it before the upload runs.
     const now = new Date();
     fs.utimesSync(done, now, now);
-    return { dir, skipped: JSON.parse(fs.readFileSync(done, 'utf8')).skipped };
+    const record = JSON.parse(fs.readFileSync(done, 'utf8'));
+    return { dir, skipped: record.skipped, renamed: record.renamed ?? [] };
   }
   fs.rmSync(base, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
@@ -160,23 +165,34 @@ export async function unpackZip(file: string, root: string, keep: (name: string)
   // A zip of one folder holds everything under that folder's name: that level is the folder itself.
   const top = safe.length > 0 && safe.every(e => parts(e).length > 1 && parts(e)[0] === parts(safe[0]!)[0]) ? 1 : 0;
   const chosen: { entry: ZipEntry; name: string }[] = [];
-  const names = new Set<string>();
+  /** Stored name, lower case (Windows does not tell case apart) → the name the zip gives the file kept under it. */
+  const names = new Map<string, string>();
+  const renamed: Unpacked['renamed'] = [];
   let bytes = 0;
   for (const entry of safe) {
     const rest = parts(entry).slice(top);
     if (rest.length > 1) { skipped.push({ file: label(entry.name), reason: '压缩包里的子文件夹不读取（文件夹不可嵌套）' }); continue; }
-    const name = rest[0]!;
+    // The file is read under the name it is stored by (zips made on a Mac may hold ? * : and the like): that name is checked, kept apart
+    // from the others and reported when it differs.
+    const given = rest[0]!;
+    const name = given.replace(/[<>:"\\|?*\x00-\x1f]/g, '_');
     const refused = keep(name);
     if (refused) { skipped.push({ file: label(entry.name), reason: refused }); continue; }
-    if (names.has(name.toLowerCase())) { skipped.push({ file: label(entry.name), reason: '压缩包里有同名文件，只取第一个' }); continue; }
+    const other = names.get(name.toLowerCase());
+    if (other !== undefined) {
+      skipped.push({ file: label(entry.name), reason: other.toLowerCase() === given.toLowerCase() ? '压缩包里有同名文件，只取第一个'
+        : `和“${other}”换掉 Windows 文件名不能有的字符后同名（${name}），只取第一个` });
+      continue;
+    }
     if (entry.usize > limits.entry) { skipped.push({ file: label(entry.name), reason: '单个文件超过 5 GB' }); continue; }
-    names.add(name.toLowerCase());
+    names.set(name.toLowerCase(), given);
     bytes += entry.usize;
+    if (name !== given) renamed.push({ file: label(entry.name), as: name });
     chosen.push({ entry, name });
   }
   need(chosen.length <= limits.files, `压缩包里的素材超过 ${limits.files} 个，请分批`);
   need(bytes <= limits.bytes, '压缩包解压后超过 20 GB，请分批');
-  for (const { entry, name } of chosen) await extractEntry(file, entry, path.join(dir, name.replace(/[<>:"\\|?*\x00-\x1f]/g, '_')));
-  fs.writeFileSync(done, JSON.stringify({ zip: path.resolve(file), skipped }), 'utf8');
-  return { dir, skipped };
+  for (const { entry, name } of chosen) await extractEntry(file, entry, path.join(dir, name));
+  fs.writeFileSync(done, JSON.stringify({ zip: path.resolve(file), skipped, renamed }), 'utf8');
+  return { dir, skipped, renamed };
 }
